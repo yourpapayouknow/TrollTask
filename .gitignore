@@ -1,0 +1,8 @@
+/refrence/
+/build/
+/.theos/
+.DS_Store
+*.ipa
+*.tipa
+history/
+.codegraph/

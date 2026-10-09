@@ -1,0 +1,73 @@
+SHELL := /bin/zsh
+.DELETE_ON_ERROR:
+
+APP := TrollTask
+BUILD := build
+APP_DIR := $(BUILD)/Payload/$(APP).app
+TIPA := $(BUILD)/TrollTask-0.1.1.tipa
+SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
+CC := xcrun --sdk iphoneos clang
+HOST_CC := xcrun --sdk macosx clang
+ICON_SOURCE := Resources/AppIcon-source.png
+ASSET_FILES := $(shell find Resources/Assets.xcassets -type f)
+
+M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m
+OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES))
+
+CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources
+OBJCFLAGS := $(CFLAGS) -fobjc-arc -fmodules
+LDFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -Wl,-dead_strip -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore
+
+.PHONY: all package test clean inspect icons serve
+
+icons: $(ICON_SOURCE)
+	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
+
+Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png: $(ICON_SOURCE) scripts/generate_icons.py
+	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
+
+all: test package
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+$(BUILD)/%.o: Sources/%.m Sources/LBHead.h | $(BUILD)
+	$(CC) $(OBJCFLAGS) -c $< -o $@
+
+$(APP_DIR)/Assets.car: $(ASSET_FILES)
+	mkdir -p $(APP_DIR)
+	xcrun actool Resources/Assets.xcassets --compile $(APP_DIR) --platform iphoneos --minimum-deployment-target 15.0 --app-icon AppIcon --output-partial-info-plist $(BUILD)/asset-info.plist --target-device iphone --target-device ipad --output-format human-readable-text
+
+$(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist $(APP_DIR)/Assets.car
+	mkdir -p $(APP_DIR)
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	cp Resources/Info.plist $(APP_DIR)/Info.plist
+	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@2x.png $(APP_DIR)/AppIcon60x60@2x.png
+	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png $(APP_DIR)/AppIcon60x60@3x.png
+	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-76@2x.png $(APP_DIR)/AppIcon76x76@2x~ipad.png
+	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png $(APP_DIR)/icon.png
+	/usr/libexec/PlistBuddy -c "Merge $(BUILD)/asset-info.plist" $(APP_DIR)/Info.plist 2>/dev/null || true
+	ldid -SResources/entitlements.plist $@
+
+package: $(APP_DIR)/$(APP)
+	cd $(BUILD) && rm -f $(notdir $(TIPA)) && zip -qry $(notdir $(TIPA)) Payload
+	@print -r -- "Built $(TIPA)"
+
+test: | $(BUILD)
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -framework Foundation Tests/test_shared.m Sources/LBShared.m -o $(BUILD)/test_shared
+	$(BUILD)/test_shared
+	python3 Tests/test_project.py
+
+inspect: package
+	file $(APP_DIR)/$(APP)
+	plutil -lint $(APP_DIR)/Info.plist Resources/entitlements.plist
+	plutil -extract CFBundleIcons xml1 -o - $(APP_DIR)/Info.plist
+	test -f $(APP_DIR)/Assets.car
+	ldid -e $(APP_DIR)/$(APP)
+	unzip -l $(TIPA)
+
+serve: package
+	python3 -B scripts/serve.py
+
+clean:
+	rm -rf $(BUILD)
