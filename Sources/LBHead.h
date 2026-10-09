@@ -1,3 +1,4 @@
+#pragma once
 #import <Foundation/Foundation.h>
 #ifndef LB_HOST_TEST
 #import <UIKit/UIKit.h>
@@ -5,19 +6,24 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <math.h>
 #include <mach-o/dyld.h>
 #include <notify.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
+#include <pwd.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sqlite3.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -109,3 +115,6 @@ int lb_lckhud(void);
 
 // 判断从按钮内按下并在按钮内结束的触摸。
 BOOL lb_btntap(BOOL *active, BOOL inside, BOOL down);
+
+// 集中声明待办存储模块。
+#import "TaskStore.h"

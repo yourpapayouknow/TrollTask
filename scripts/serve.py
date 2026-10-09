@@ -27,7 +27,12 @@ class Hnd(SimpleHTTPRequestHandler):
         super().end_headers()
 
 
-# 在独立临时目录和空闲端口提供浏览器安装入口。
+# 复用固定端口的本服务连接。
+class Srv(TCPServer):
+    allow_reuse_address = True
+
+
+# 在独立临时目录和固定端口提供浏览器安装入口。
 def srvmain():
     cfg = loads((ROOT / "Resources/Info.plist").read_bytes())
     pkg = ROOT / "build" / f"{cfg['CFBundleExecutable']}-{cfg['CFBundleShortVersionString']}.tipa"
@@ -37,7 +42,7 @@ def srvmain():
         copy2(pkg, Path(stage) / pkg.name)
         copy2(assets / "install.mjs", Path(stage) / "install.mjs")
         handler = partial(Hnd, directory=stage)
-        with TCPServer(("0.0.0.0", 0), handler) as server:
+        with Srv(("0.0.0.0", 61265), handler) as server:
             url = f"http://{ip}:{server.server_address[1]}"
             pkgurl = f"{url}/{quote(pkg.name)}"
             insturl = "apple-magnifier://install?" + urlencode({"url": pkgurl})

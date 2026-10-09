@@ -134,19 +134,24 @@
 
 @end
 
-@implementation LBAppDel
+@implementation LBAppDel {
+    TaskStore *_store;
+}
 
 // 创建设置窗口并恢复已启用的HUD服务。
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options {
     (void)application;
     (void)options;
+    NSError *error = nil;
+    _store = [TaskStore shrd:&error];
+    if (!_store) NSLog(@"TaskStore初始化失败：%@", error);
     LBSetCtl *settings = [[LBSetCtl alloc] init];
     UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:settings];
     navigation.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
     self.window.rootViewController = navigation;
     [self.window makeKeyAndVisible];
-    if ([lb_ldcfg()[@"enabled"] boolValue]) lb_spawn();
+    if (_store && [lb_ldcfg()[@"enabled"] boolValue]) lb_spawn();
     return YES;
 }
 

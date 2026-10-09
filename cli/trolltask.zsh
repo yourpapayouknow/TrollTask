@@ -13,8 +13,16 @@ case "${1:-}" in
         fi
         exec "$TROLLTASK_BIN" "--$1"
         ;;
+    store)
+        shift
+        if [[ -n "${TROLLTASK_BIN:-}" ]]; then
+            exec "$TROLLTASK_BIN" --store "$@"
+        fi
+        make -s -C "$project_dir" store >&2
+        exec "$project_dir/build/taskstore" "$@"
+        ;;
     *)
-        print -r -- '用法：cli/trolltask.zsh test|package|inspect|clean|icons|serve|start|hud|stop|preview'
+        print -r -- '用法：cli/trolltask.zsh test|package|inspect|clean|icons|serve|start|hud|stop|preview|store'
         exit 2
         ;;
 esac

@@ -260,6 +260,7 @@ static void (*lb_fn0(const char *name))(void) {
 
 static int lb_lockfd = -1;
 static dispatch_source_t lb_exesrc;
+static TaskStore *lb_store;
 
 // 在 App 可执行文件被删除时退出 HUD。
 static void lb_monexe(void) {
@@ -281,6 +282,14 @@ static void lb_monexe(void) {
 int lb_hudmain(void) {
     lb_lockfd = lb_lckhud();
     if (lb_lockfd < 0) return EXIT_FAILURE;
+    NSError *error = nil;
+    lb_store = [TaskStore shrd:&error];
+    if (!lb_store) {
+        NSLog(@"TaskStore初始化失败：%@", error);
+        close(lb_lockfd);
+        lb_lockfd = -1;
+        return EXIT_FAILURE;
+    }
     lb_monexe();
 
     int stopToken = 0;

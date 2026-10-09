@@ -4,21 +4,21 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.1.1.tipa
+TIPA := $(BUILD)/TrollTask-0.2.0.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
 ICON_SOURCE := Resources/AppIcon-source.png
 ASSET_FILES := $(shell find Resources/Assets.xcassets -type f)
 
-M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m
-OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES))
+M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m
+OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(BUILD)/storecli.o
 
 CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources
 OBJCFLAGS := $(CFLAGS) -fobjc-arc -fmodules
-LDFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -Wl,-dead_strip -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore
+LDFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -Wl,-dead_strip -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3
 
-.PHONY: all package test clean inspect icons serve
+.PHONY: all package test clean inspect icons serve store
 
 icons: $(ICON_SOURCE)
 	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
@@ -31,7 +31,10 @@ all: test package
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/%.o: Sources/%.m Sources/LBHead.h | $(BUILD)
+$(BUILD)/%.o: Sources/%.m Sources/LBHead.h Sources/TaskStore.h | $(BUILD)
+	$(CC) $(OBJCFLAGS) -c $< -o $@
+
+$(BUILD)/storecli.o: cli/storecli.m Sources/LBHead.h Sources/TaskStore.h | $(BUILD)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
 $(APP_DIR)/Assets.car: $(ASSET_FILES)
@@ -57,6 +60,15 @@ test: | $(BUILD)
 	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -framework Foundation Tests/test_shared.m Sources/LBShared.m -o $(BUILD)/test_shared
 	$(BUILD)/test_shared
 	python3 Tests/test_project.py
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -framework Foundation -lsqlite3 Tests/test_store.m Sources/TaskStore.m -o $(BUILD)/test_store
+	$(BUILD)/test_store
+	$(MAKE) store
+	PYTHONPATH=scripts python3 -B Tests/test_cli.py
+
+store: $(BUILD)/taskstore
+
+$(BUILD)/taskstore: cli/storecli.m Sources/TaskStore.m Sources/LBHead.h Sources/TaskStore.h | $(BUILD)
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DTT_STORE_CLI -ISources -framework Foundation -lsqlite3 cli/storecli.m Sources/TaskStore.m -o $@
 
 inspect: package
 	file $(APP_DIR)/$(APP)
