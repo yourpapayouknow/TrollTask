@@ -2,11 +2,14 @@
 
 #define TS_DB_PATH @"/var/mobile/Library/Application Support/com.iwmei.taskforiwmei/tasks.sqlite3"
 #define TS_DFLT_LST @"00000000-0000-4000-8000-000000000001"
-#define TS_SCH_VER 2
+#define TS_SCH_VER 3
+#define TS_DATA_NOTE "com.iwmei.taskforiwmei.data"
 
 // 提供主App与HUD共用的SQLite数据模型。
 @interface TaskStore : NSObject
 @property(nonatomic, readonly, copy) NSString *path;
+@property(nonatomic, readonly, copy) NSString *changeNote;
+@property(nonatomic, readonly, strong) NSError *syncError;
 // 打开当前进程的共享存储。
 + (instancetype)shrd:(NSError **)error;
 // 在指定绝对路径创建或迁移数据库。
@@ -23,12 +26,34 @@
 - (NSArray *)lsLsts:(NSError **)error;
 // 创建稳定UUID的任务。
 - (NSDictionary *)crtTsk:(NSDictionary *)fields error:(NSError **)error;
+// 导入指定UUID，冲突时拒绝覆盖。
+- (NSDictionary *)crtTsk:(NSDictionary *)fields uuid:(NSString *)uuid error:(NSError **)error;
 // 修改任务字段并保留原身份。
 - (BOOL)updTsk:(NSString *)taskID fields:(NSDictionary *)fields error:(NSError **)error;
 // 读取单个任务，缺失时返回错误。
 - (NSDictionary *)rdTsk:(NSString *)taskID error:(NSError **)error;
 // 读取包括软删除记录在内的任务。
 - (NSArray *)lsTsks:(NSError **)error;
+// 软删除指定任务及所有后代。
+- (BOOL)delTsk:(NSString *)taskID error:(NSError **)error;
+// 完成指定任务并停止该任务的整个提醒系列。
+- (BOOL)cmplTsk:(NSString *)taskID error:(NSError **)error;
+// 恢复已完成任务并重新建立提醒计划。
+- (BOOL)rstrTsk:(NSString *)taskID error:(NSError **)error;
+// 按实际下一次提醒时间读取所有未完成且未删除任务。
+- (NSArray *)lsPnd:(NSError **)error;
+// 独立读取未删除的已完成任务。
+- (NSArray *)lsCmpl:(NSError **)error;
+// 读取持久化数据修订号。
+- (long long)revision:(NSError **)error;
+// 取得同一数据库快照中的任务和提醒处理记录。
+- (NSDictionary *)snapshot:(NSError **)error;
+// 从同一快照建立实际提醒时间升序的计划。
+- (NSDictionary *)planAt:(NSTimeInterval)stamp error:(NSError **)error;
+// 在核对最新修订号与任务版本后认领到期提醒。
+- (NSDictionary *)claim:(NSDictionary *)alert revision:(long long)revision at:(NSTimeInterval)stamp error:(NSError **)error;
+// 原子处理当前提醒，延后不修改原截止日期。
+- (BOOL)actOcc:(NSString *)occID action:(NSString *)action until:(NSNumber *)until error:(NSError **)error;
 // 幂等记录某任务某个计划时刻的一次提醒。
 - (NSDictionary *)crtOcc:(NSString *)taskID at:(NSNumber *)stamp error:(NSError **)error;
 // 更新单次提醒的触发及处理记录。
@@ -39,3 +64,5 @@
 
 // 解析命令行参数并调用存储模块。
 int ts_cli(int argc, char *argv[], NSString *path);
+// 统一检查有限数值，布尔值不能作为时间或分档。
+BOOL ts_num(id value);

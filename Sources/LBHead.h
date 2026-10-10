@@ -12,6 +12,7 @@
 #include <math.h>
 #include <mach-o/dyld.h>
 #include <notify.h>
+#include "ical.h"
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <pwd.h>
@@ -118,3 +119,5 @@ BOOL lb_btntap(BOOL *active, BOOL inside, BOOL down);
 
 // 集中声明待办存储模块。
 #import "TaskStore.h"
+#import "TaskRule.h"
+#import "TaskSched.h"

@@ -9,13 +9,14 @@ def tstcmd(path, *args, success=True):
     if success:
         return jld(result.stdout)
     assert not result.stdout and result.stderr
+    return jld(result.stderr)
 
 
 # 检查命令解析不会提交无效或部分数据。
 def tstcli():
     with TemporaryDirectory(prefix='trolltask-cli-') as root:
         path = Path(root) / 'tasks.sqlite3'
-        assert tstcmd(path, 'schema')['schema_version'] == 2
+        assert tstcmd(path, 'schema')['schema_version'] == 3
         assert tstcmd(path, 'lists')[0]['title'] == '我的任务'
         task = tstcmd(path, 'create', jdmp({'title': '两天完成', 'planned_duration': 172800, 'deadline_at': 1800000000}))
         task_id = task['task_id']
@@ -40,7 +41,33 @@ def tstcli():
             assert db.execute('pragma integrity_check').fetchone() == ('ok',)
             assert db.execute('pragma foreign_key_check').fetchall() == []
         assert tstcmd(path, 'tasks')[0]['task_id'] == task_id
-    print('TaskStore CLI: JSON arguments, durable reopening, idempotence and atomic batch rollback passed')
+        tstcmd(path, 'restore', task_id)
+        assert tstcmd(path, 'completed') == []
+        assert tstcmd(path, 'pending')[0]['remind_at'] == 1800000000
+        tstcmd(path, 'complete', task_id)
+        assert tstcmd(path, 'completed')[0]['task_id'] == task_id
+        imported = tstcmd(path, 'import', '22222222-2222-4222-8222-222222222222', jdmp({'title': '导入', 'due_at': 100}))
+        assert tstcmd(path, 'import', imported['task_id'].upper(), jdmp({'title': '冲突'}), success=False)['kind'] == 'duplicate_uuid'
+        assert tstcmd(path, 'create', jdmp({'due_at': True}), success=False)['kind'] == 'invalid_fields'
+        assert tstcmd(path, 'get', '99999999-9999-4999-8999-999999999999', success=False)['kind'] == 'not_found'
+        plan = tstcmd(path, 'plan', '101')
+        assert tstcmd(path, 'claim', jdmp(plan['alerts'][0]), '0.5', '101', success=False)['kind'] == 'invalid_fields'
+        alert = tstcmd(path, 'claim', jdmp(plan['alerts'][0]), str(plan['revision']), '101')
+        assert alert['task_id'] == imported['task_id']
+        assert tstcmd(path, 'action', alert['occurrence_id'], 'snooze', 'false', success=False)['kind'] == 'invalid_fields'
+        tstcmd(path, 'action', alert['occurrence_id'], 'dismiss')
+        assert tstcmd(path, 'plan', '101')['alerts'] == []
+        tstcmd(path, 'delete', imported['task_id'])
+        assert tstcmd(path, 'pending') == []
+        bad = Path(root) / 'broken.sqlite3'
+        bad.write_bytes(b'not sqlite')
+        assert tstcmd(bad, 'schema', success=False)['kind'] == 'database_failure'
+        with connect(path) as lock:
+            lock.execute('begin immediate')
+            assert tstcmd(path, 'update', task_id, jdmp({'notes': '锁等待失败'}), success=False)['kind'] == 'database_busy'
+            lock.rollback()
+        assert tstcmd(path, 'get', task_id)['notes'] == before['notes']
+    print('TaskStore CLI: JSON, durable CRUD/import/order, explicit errors, claims/actions and atomic batch rollback passed')
 
 
 # 执行独立CLI验收。

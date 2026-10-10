@@ -25,9 +25,21 @@
 @interface LBHudCtl ()
 @property(nonatomic, assign) BOOL touchActive;
 @property(nonatomic, strong) UIButton *closeButton;
+@property(nonatomic, strong) UIButton *completeButton;
+@property(nonatomic, strong) UIButton *snoozeButton;
+@property(nonatomic, weak) UIButton *touchButton;
+@property(nonatomic, strong) UILabel *titleLabel;
+@property(nonatomic, strong) UILabel *kindLabel;
+@property(nonatomic, strong) UILabel *timeLabel;
+@property(nonatomic, strong) UIStackView *actions;
+@property(nonatomic, strong) UIStackView *snoozes;
+@property(nonatomic, strong) TaskSched *scheduler;
+@property(nonatomic, strong) NSDictionary *alert;
+@property(nonatomic, assign) BOOL acting;
 - (void)onTchDn:(CGPoint)point;
 - (void)onTchUp:(CGPoint)point;
 - (void)onTchCn;
+- (void)dspAlrt:(NSDictionary *)alert error:(NSError *)error;
 @end
 
 static __weak LBHudCtl *s_lbhudctl = nil;
@@ -103,9 +115,32 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     title.textAlignment = NSTextAlignmentCenter;
     title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
     title.textColor = [UIColor colorWithWhite:0.96 alpha:1.0];
+    title.adjustsFontForContentSizeCategory = YES;
+    self.titleLabel = title;
+    UILabel *kind = [[UILabel alloc] init];
+    kind.textAlignment = NSTextAlignmentCenter;
+    kind.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    kind.textColor = title.textColor; kind.adjustsFontForContentSizeCategory = YES;
+    kind.hidden = YES; self.kindLabel = kind;
+    UILabel *time = [[UILabel alloc] init];
+    time.textAlignment = NSTextAlignmentCenter;
+    time.font = kind.font; time.textColor = title.textColor; time.adjustsFontForContentSizeCategory = YES;
+    time.hidden = YES; self.timeLabel = time;
     UIButton *button = lb_mkbtn(@"收起预览", self, @selector(hdeprvw));
     self.closeButton = button;
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[icon, title, button]];
+    self.completeButton = lb_mkbtn(@"完成任务", self, @selector(cmpTask));
+    self.snoozeButton = lb_mkbtn(@"延后提醒", self, @selector(snzMenu));
+    self.completeButton.hidden = YES; self.snoozeButton.hidden = YES;
+    self.actions = [[UIStackView alloc] initWithArrangedSubviews:@[self.completeButton, self.snoozeButton, button]];
+    self.actions.axis = UILayoutConstraintAxisVertical; self.actions.spacing = 4.0;
+    self.snoozes = [[UIStackView alloc] init];
+    self.snoozes.axis = UILayoutConstraintAxisVertical; self.snoozes.spacing = 4.0; self.snoozes.hidden = YES;
+    for (NSNumber *minutes in @[@5, @10, @30, @60]) {
+        UIButton *choice = lb_mkbtn([NSString stringWithFormat:@"%@分钟", minutes], self, @selector(snzPick:));
+        choice.tag = minutes.integerValue; [self.snoozes addArrangedSubview:choice];
+    }
+    [self.snoozes addArrangedSubview:lb_mkbtn(@"返回", self, @selector(hdesnz))];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[icon, kind, title, time, self.actions, self.snoozes]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 4.0;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -129,28 +164,35 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
 // 收起手动预览。
 - (void)hdeprvw {
     self.touchActive = NO;
+    self.touchButton = nil;
+    if (self.alert) { [self wrkAct:@"dismiss" until:nil]; return; }
     self.hudWindow.hidden = YES;
 }
 
 // 按真实按钮及其子视图判断触摸命中。
-- (BOOL)btntst:(CGPoint)point {
+- (UIButton *)btntst:(CGPoint)point {
     UIView *hit = [self.hudWindow hitTest:point withEvent:nil];
-    return hit && (hit == self.closeButton || [hit isDescendantOfView:self.closeButton]);
+    while (hit && ![hit isKindOfClass:UIButton.class]) hit = hit.superview;
+    UIButton *button = (UIButton *)hit;
+    return button.enabled && !button.hidden ? button : nil;
 }
 
 // 只记录按钮内开始的触摸。
 - (void)onTchDn:(CGPoint)point {
     BOOL active = self.touchActive;
-    lb_btntap(&active, [self btntst:point], YES);
+    self.touchButton = [self btntst:point];
+    lb_btntap(&active, self.touchButton != nil, YES);
     self.touchActive = active;
 }
 
 // 仅在按钮内结束有效触摸时触发按钮动作。
 - (void)onTchUp:(CGPoint)point {
     BOOL active = self.touchActive;
-    BOOL fire = lb_btntap(&active, [self btntst:point], NO);
+    UIButton *button = self.touchButton;
+    BOOL fire = lb_btntap(&active, button && [self btntst:point] == button, NO);
     self.touchActive = active;
-    if (fire) [self.closeButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+    self.touchButton = nil;
+    if (fire) [button sendActionsForControlEvents:UIControlEventTouchUpInside];
 }
 
 // 取消触摸并清除按钮按下状态。
@@ -158,11 +200,67 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     BOOL active = self.touchActive;
     lb_btntap(&active, NO, NO);
     self.touchActive = active;
+    self.touchButton = nil;
+}
+
+// 显示数据库核对后的真实提醒并限制标题长度。
+- (void)dspAlrt:(NSDictionary *)alert error:(NSError *)error {
+    self.acting = NO;
+    for (UIButton *button in self.actions.arrangedSubviews) { [button cancelTrackingWithEvent:nil]; button.enabled = YES; }
+    for (UIButton *button in self.snoozes.arrangedSubviews) { [button cancelTrackingWithEvent:nil]; button.enabled = YES; }
+    self.touchActive = NO; self.touchButton = nil; self.alert = alert;
+    self.actions.hidden = NO; self.snoozes.hidden = YES;
+    self.completeButton.hidden = !alert; self.snoozeButton.hidden = !alert;
+    self.kindLabel.hidden = !alert; self.timeLabel.hidden = !alert;
+    [self.closeButton setTitle:alert ? @"关闭提醒" : @"收起预览" forState:UIControlStateNormal];
+    if (error) NSLog(@"提醒调度失败：%@", error);
+    if (!alert) { self.titleLabel.text = @"待办提醒"; self.hudWindow.hidden = YES; return; }
+    NSString *text = alert[@"task"][@"title"];
+    __block NSUInteger length = 0, count = 0;
+    [text enumerateSubstringsInRange:NSMakeRange(0, text.length) options:NSStringEnumerationByComposedCharacterSequences
+        usingBlock:^(__unused NSString *value, NSRange range, __unused NSRange enclosing, BOOL *stop) {
+            if (++count > 13) { *stop = YES; return; } length = NSMaxRange(range);
+        }];
+    self.titleLabel.text = [text substringToIndex:length];
+    self.kindLabel.text = [alert[@"kind"] isEqual:@"plan"] ? @"计划提醒" : ([alert[@"kind"] isEqual:@"deadline"] ? @"截止提醒" : @"合并提醒");
+    NSDateFormatter *formatter = [NSDateFormatter new]; formatter.dateFormat = @"MM-dd HH:mm"; formatter.timeZone = NSTimeZone.localTimeZone;
+    self.timeLabel.text = [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:[alert[@"remind_at"] doubleValue]]];
+    [self.completeButton setTitle:[alert[@"task"][@"recurrence"] count] ? @"完成本次" : @"完成任务" forState:UIControlStateNormal];
+    if (error) [self.closeButton setTitle:@"操作失败" forState:UIControlStateNormal];
+    self.hudWindow.hidden = NO;
+}
+
+// 完成当前普通任务或重复轮次。
+- (void)cmpTask { [self wrkAct:@"complete" until:nil]; }
+
+// 在原卡片内选择延后时长。
+- (void)snzMenu { if (self.alert) { self.actions.hidden = YES; self.snoozes.hidden = NO; } }
+
+// 返回当前提醒操作。
+- (void)hdesnz { self.actions.hidden = NO; self.snoozes.hidden = YES; }
+
+// 延后当前一次提醒并保留原截止日期。
+- (void)snzPick:(UIButton *)button {
+    [self wrkAct:@"snooze" until:@(NSDate.date.timeIntervalSince1970 + button.tag * 60)];
+}
+
+// 固定操作目标并阻止重复触摸误处理下一条提醒。
+- (void)wrkAct:(NSString *)action until:(NSNumber *)until {
+    if (!self.alert || self.acting) return;
+    self.acting = YES;
+    for (UIButton *button in self.actions.arrangedSubviews) button.enabled = NO;
+    for (UIButton *button in self.snoozes.arrangedSubviews) button.enabled = NO;
+    [self.scheduler act:action until:until occID:self.alert[@"occurrence_id"]];
 }
 
 // 监听共享配置与预览事件。
 - (void)startMon {
     __weak typeof(self) weakSelf = self;
+    NSError *error = nil;
+    self.scheduler = [[TaskSched alloc] initStore:[TaskStore shrd:&error] handler:^(NSDictionary *alert, NSError *failure) {
+        [weakSelf dspAlrt:alert error:failure];
+    }];
+    if (error || ![self.scheduler start:&error]) { NSLog(@"调度器启动失败：%@", error); self.scheduler = nil; }
     if (notify_register_dispatch(LB_CFG_NOTE, &_configToken, dispatch_get_main_queue(), ^(__unused int token) {
         [weakSelf loadCfg];
     }) != NOTIFY_STATUS_OK) exit(EXIT_FAILURE);
@@ -181,6 +279,8 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
 // 显示手动预览并确认就绪。
 - (void)forceTest {
     if (![lb_ldcfg()[@"enabled"] boolValue]) return;
+    if (self.alert) { notify_post(LB_READY_NOTE); return; }
+    [self dspAlrt:nil error:nil];
     if (self.hudWindow.hidden) self.touchActive = NO;
     self.hudWindow.hidden = NO;
     notify_post(LB_READY_NOTE);

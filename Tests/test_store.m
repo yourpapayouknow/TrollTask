@@ -161,13 +161,31 @@ static void tstmgrt(NSString *root) {
     NSString *path = [root stringByAppendingPathComponent:@"migration.sqlite3"];
     tstsql(path, fixture);
     TaskStore *store = tstopn(path);
-    assert(([store schver:nil] == 2));
+    assert(([store schver:nil] == TS_SCH_VER));
     NSDictionary *task = [store rdTsk:@"11111111-1111-4111-8111-111111111111" error:nil];
     assert(([task[@"title"] isEqual:@"跨天报告"] && [task[@"notes"] isEqual:@"必须保留"]));
     assert(([task[@"due_at"] doubleValue] == 1700000000.125 && [task[@"urgency"] intValue] == 0));
     assert(([task[@"planned_duration"] intValue] == 172800 && [store lsOcc:task[@"task_id"] error:nil].count == 1));
     store = nil;
     assert(([tstopn(path) lsTsks:nil].count == 1));
+    NSString *v2 = [fixture stringByAppendingString:@"ALTER TABLE tasks ADD COLUMN urgency INTEGER NOT NULL DEFAULT 0;"
+        "ALTER TABLE tasks ADD COLUMN difficulty INTEGER NOT NULL DEFAULT 0;"
+        "CREATE INDEX occurrences_due ON reminder_occurrences(status,scheduled_at);"
+        "UPDATE tasks SET urgency=3,difficulty=2;UPDATE store_meta SET schema_version=2;"];
+    NSString *upgrade = [root stringByAppendingPathComponent:@"version2.sqlite3"];
+    tstsql(upgrade, v2); store = tstopn(upgrade);
+    task = [store rdTsk:@"11111111-1111-4111-8111-111111111111" error:nil];
+    NSDictionary *occ = [store lsOcc:task[@"task_id"] error:nil].firstObject;
+    assert(([store schver:nil] == 3 && [task[@"urgency"] intValue] == 3 && [task[@"difficulty"] intValue] == 2));
+    assert(([occ[@"occurrence_id"] isEqual:@"22222222-2222-4222-8222-222222222222"] && [occ[@"cycle_at"] isEqual:task[@"due_at"]]));
+    assert(([occ[@"generation"] intValue] == 1 && [task[@"reminder_version"] intValue] == 1));
+    assert(([tstval(upgrade, "PRAGMA integrity_check") isEqual:@"ok"]));
+    NSString *v2failed = [root stringByAppendingPathComponent:@"version2-failed.sqlite3"];
+    tstsql(v2failed, [v2 stringByAppendingString:@"ALTER TABLE tasks ADD COLUMN reminder_version INTEGER;"]);
+    assert((![[TaskStore alloc] initAt:v2failed error:nil]));
+    assert(([tstval(v2failed, "SELECT schema_version FROM store_meta") intValue] == 2));
+    assert(([tstval(v2failed, "SELECT count(*) FROM pragma_table_info('store_meta') WHERE name='data_revision'") intValue] == 0));
+    assert(([tstval(v2failed, "SELECT occurrence_id FROM reminder_occurrences") isEqual:@"22222222-2222-4222-8222-222222222222"]));
     NSString *failed = [root stringByAppendingPathComponent:@"failed.sqlite3"];
     tstsql(failed, [fixture stringByAppendingString:@"ALTER TABLE tasks ADD COLUMN difficulty INTEGER;"]);
     NSError *error = nil;
@@ -261,7 +279,7 @@ static void tstfirst(NSString *path) {
     NSTask *first = tstproc(@[@"--init", path]);
     NSTask *second = tstproc(@[@"--init", path]);
     for (NSTask *process in @[first, second]) { [process waitUntilExit]; assert((process.terminationStatus == 0)); }
-    assert(([tstval(path, "SELECT schema_version FROM store_meta") intValue] == 2));
+    assert(([tstval(path, "SELECT schema_version FROM store_meta") intValue] == TS_SCH_VER));
     assert(([tstval(path, "SELECT count(*) FROM task_lists") intValue] == 1));
 }
 
@@ -270,7 +288,7 @@ int main(void) {
     @autoreleasepool {
         NSArray *arguments = NSProcessInfo.processInfo.arguments;
         if (arguments.count > 1) {
-            if ([arguments[1] isEqual:@"--init"]) return [tstopn(arguments[2]) schver:nil] == 2 ? 0 : 1;
+            if ([arguments[1] isEqual:@"--init"]) return [tstopn(arguments[2]) schver:nil] == TS_SCH_VER ? 0 : 1;
             return tstchild(arguments);
         }
         char directory[] = "/tmp/trolltask-store.XXXXXX";

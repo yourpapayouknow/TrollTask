@@ -4,19 +4,26 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.2.0.tipa
+TIPA := $(BUILD)/TrollTask-0.3.0.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
 ICON_SOURCE := Resources/AppIcon-source.png
 ASSET_FILES := $(shell find Resources/Assets.xcassets -type f)
 
-M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m
+M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m
 OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(BUILD)/storecli.o
 
-CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources
+CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources -IVendor/libical
 OBJCFLAGS := $(CFLAGS) -fobjc-arc -fmodules
-LDFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -Wl,-dead_strip -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3
+LDFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -Wl,-dead_strip -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-ios.a
+ICAL_SRCS := $(wildcard Vendor/libical/*.c)
+ICAL_DEFS := -DHAVE_CONFIG_H -DLIBICAL_ICAL_STATIC_DEFINE -DPACKAGE_DATA_DIR=\".\"
+ICAL_IOS := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-ios/%.o,$(ICAL_SRCS))
+ICAL_HOST := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-host/%.o,$(ICAL_SRCS))
+HEADERS := $(wildcard Sources/*.h)
+ICAL_HEADERS := $(wildcard Vendor/libical/*.h)
+ICAL_FILES := $(wildcard Vendor/libical/* Vendor/libical/LICENSES/*)
 
 .PHONY: all package test clean inspect icons serve store
 
@@ -31,17 +38,25 @@ all: test package
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/%.o: Sources/%.m Sources/LBHead.h Sources/TaskStore.h | $(BUILD)
+$(BUILD)/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) | $(BUILD)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
-$(BUILD)/storecli.o: cli/storecli.m Sources/LBHead.h Sources/TaskStore.h | $(BUILD)
+$(BUILD)/storecli.o: cli/storecli.m $(HEADERS) $(ICAL_HEADERS) | $(BUILD)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
 $(APP_DIR)/Assets.car: $(ASSET_FILES)
 	mkdir -p $(APP_DIR)
 	xcrun actool Resources/Assets.xcassets --compile $(APP_DIR) --platform iphoneos --minimum-deployment-target 15.0 --app-icon AppIcon --output-partial-info-plist $(BUILD)/asset-info.plist --target-device iphone --target-device ipad --output-format human-readable-text
 
-$(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist $(APP_DIR)/Assets.car
+$(BUILD)/libical-source.zip: $(ICAL_FILES) Vendor/LIBICAL.md | $(BUILD)
+	cd Vendor && zip -qry ../$(BUILD)/libical-source.zip libical LIBICAL.md
+
+$(APP_DIR)/ThirdParty/libical-source.zip: $(BUILD)/libical-source.zip Vendor/LIBICAL.md
+	mkdir -p $(dir $@)
+	cp $< $@
+	cp Vendor/LIBICAL.md $(APP_DIR)/ThirdParty/NOTICE.md
+
+$(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
 	mkdir -p $(APP_DIR)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	cp Resources/Info.plist $(APP_DIR)/Info.plist
@@ -57,18 +72,35 @@ package: $(APP_DIR)/$(APP)
 	@print -r -- "Built $(TIPA)"
 
 test: | $(BUILD)
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -framework Foundation Tests/test_shared.m Sources/LBShared.m -o $(BUILD)/test_shared
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation Tests/test_shared.m Sources/LBShared.m -o $(BUILD)/test_shared
 	$(BUILD)/test_shared
 	python3 Tests/test_project.py
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -framework Foundation -lsqlite3 Tests/test_store.m Sources/TaskStore.m -o $(BUILD)/test_store
+	$(MAKE) $(BUILD)/ical-host.a
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation -lsqlite3 Tests/test_store.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-host.a -o $(BUILD)/test_store
 	$(BUILD)/test_store
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation -lsqlite3 Tests/test_sync.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-host.a -o $(BUILD)/test_sync
+	$(BUILD)/test_sync
 	$(MAKE) store
 	PYTHONPATH=scripts python3 -B Tests/test_cli.py
 
 store: $(BUILD)/taskstore
 
-$(BUILD)/taskstore: cli/storecli.m Sources/TaskStore.m Sources/LBHead.h Sources/TaskStore.h | $(BUILD)
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DTT_STORE_CLI -ISources -framework Foundation -lsqlite3 cli/storecli.m Sources/TaskStore.m -o $@
+$(BUILD)/taskstore: cli/storecli.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(HEADERS) $(BUILD)/ical-host.a | $(BUILD)
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DTT_STORE_CLI -ISources -IVendor/libical -framework Foundation -lsqlite3 cli/storecli.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-host.a -o $@
+
+$(BUILD)/ical-ios/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
+	mkdir -p $(dir $@)
+	$(CC) -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -IVendor/libical $(ICAL_DEFS) -c $< -o $@
+
+$(BUILD)/ical-host/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
+	mkdir -p $(dir $@)
+	$(HOST_CC) -O2 -IVendor/libical $(ICAL_DEFS) -c $< -o $@
+
+$(BUILD)/ical-ios.a: $(ICAL_IOS)
+	xcrun ar rcs $@ $^
+
+$(BUILD)/ical-host.a: $(ICAL_HOST)
+	xcrun ar rcs $@ $^
 
 inspect: package
 	file $(APP_DIR)/$(APP)
