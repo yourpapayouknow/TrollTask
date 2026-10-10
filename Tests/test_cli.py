@@ -16,7 +16,7 @@ def tstcmd(path, *args, success=True):
 def tstcli():
     with TemporaryDirectory(prefix='trolltask-cli-') as root:
         path = Path(root) / 'tasks.sqlite3'
-        assert tstcmd(path, 'schema')['schema_version'] == 3
+        assert tstcmd(path, 'schema')['schema_version'] == 4
         assert tstcmd(path, 'lists')[0]['title'] == '我的任务'
         task = tstcmd(path, 'create', jdmp({'title': '两天完成', 'planned_duration': 172800, 'deadline_at': 1800000000}))
         task_id = task['task_id']
@@ -59,6 +59,15 @@ def tstcli():
         assert tstcmd(path, 'plan', '101')['alerts'] == []
         tstcmd(path, 'delete', imported['task_id'])
         assert tstcmd(path, 'pending') == []
+        listing = tstcmd(path, 'new-list', '测试清单')['list_id']
+        extra = tstcmd(path, 'create', jdmp({'title': '清单任务', 'list_id': listing}))['task_id']
+        tstcmd(path, 'complete-next', extra)
+        tstcmd(path, 'clear-completed', listing)
+        assert tstcmd(path, 'get', extra)['deleted'] == 1
+        tstcmd(path, 'delete-list', listing)
+        assert len(tstcmd(path, 'lists')) == 1
+        assert tstcmd(path, 'clear-completed', listing, success=False)['kind'] == 'not_found'
+        assert tstcmd(path, 'delete-list', tstcmd(path, 'lists')[0]['list_id'], success=False)['kind'] == 'invalid_fields'
         bad = Path(root) / 'broken.sqlite3'
         bad.write_bytes(b'not sqlite')
         assert tstcmd(bad, 'schema', success=False)['kind'] == 'database_failure'

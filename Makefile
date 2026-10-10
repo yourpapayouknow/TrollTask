@@ -4,14 +4,15 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.3.0.tipa
+TIPA := $(BUILD)/TrollTask-0.4.2.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
 ICON_SOURCE := Resources/AppIcon-source.png
 ASSET_FILES := $(shell find Resources/Assets.xcassets -type f)
+MING_FILES := $(shell find Resources/MingCute -type f)
 
-M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m
+M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m Sources/TaskUI.m Sources/TaskPanel.m
 OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(BUILD)/storecli.o
 
 CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources -IVendor/libical
@@ -21,11 +22,14 @@ ICAL_SRCS := $(wildcard Vendor/libical/*.c)
 ICAL_DEFS := -DHAVE_CONFIG_H -DLIBICAL_ICAL_STATIC_DEFINE -DPACKAGE_DATA_DIR=\".\"
 ICAL_IOS := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-ios/%.o,$(ICAL_SRCS))
 ICAL_HOST := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-host/%.o,$(ICAL_SRCS))
+ICAL_SIM := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-sim/%.o,$(ICAL_SRCS))
+SIM_CC := xcrun --sdk iphonesimulator clang
+SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -IVendor/libical
 HEADERS := $(wildcard Sources/*.h)
 ICAL_HEADERS := $(wildcard Vendor/libical/*.h)
 ICAL_FILES := $(wildcard Vendor/libical/* Vendor/libical/LICENSES/*)
 
-.PHONY: all package test clean inspect icons serve store
+.PHONY: all package test test-ui clean inspect icons serve store
 
 icons: $(ICON_SOURCE)
 	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
@@ -56,10 +60,11 @@ $(APP_DIR)/ThirdParty/libical-source.zip: $(BUILD)/libical-source.zip Vendor/LIB
 	cp $< $@
 	cp Vendor/LIBICAL.md $(APP_DIR)/ThirdParty/NOTICE.md
 
-$(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
+$(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist $(MING_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
 	mkdir -p $(APP_DIR)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	cp Resources/Info.plist $(APP_DIR)/Info.plist
+	cp -R Resources/MingCute $(APP_DIR)/
 	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@2x.png $(APP_DIR)/AppIcon60x60@2x.png
 	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png $(APP_DIR)/AppIcon60x60@3x.png
 	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-76@2x.png $(APP_DIR)/AppIcon76x76@2x~ipad.png
@@ -101,6 +106,23 @@ $(BUILD)/ical-ios.a: $(ICAL_IOS)
 
 $(BUILD)/ical-host.a: $(ICAL_HOST)
 	xcrun ar rcs $@ $^
+
+$(BUILD)/ical-sim/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
+	mkdir -p $(dir $@)
+	$(SIM_CC) $(SIM_FLAGS) $(ICAL_DEFS) -c $< -o $@
+
+$(BUILD)/ical-sim.a: $(ICAL_SIM)
+	xcrun ar rcs $@ $^
+
+$(BUILD)/MobileUI.app/UItest: Tests/test_ui.m Tests/UIInfo.plist Sources/TaskUI.m Sources/TaskPanel.m Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(HEADERS) $(MING_FILES) $(BUILD)/ical-sim.a
+	mkdir -p $(dir $@)
+	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 Tests/test_ui.m Sources/TaskUI.m Sources/TaskPanel.m Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-sim.a -o $@
+	cp Tests/UIInfo.plist $(dir $@)/Info.plist
+	cp -R Resources/MingCute $(dir $@)/
+	codesign --force --sign - $(dir $@)
+
+test-ui: $(BUILD)/MobileUI.app/UItest
+	/bin/zsh Tests/ui_test.zsh $(UI_DEVICE)
 
 inspect: package
 	file $(APP_DIR)/$(APP)

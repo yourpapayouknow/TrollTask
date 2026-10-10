@@ -249,6 +249,11 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             "SELECT occurrence_id,task_id,scheduled_at,triggered_at,handled_at,status,action,snooze_until,created_at,updated_at,scheduled_at FROM old_occurrences;"
             "DROP TABLE old_occurrences;CREATE INDEX occurrences_due ON reminder_occurrences(status,scheduled_at);"
             "UPDATE store_meta SET schema_version=3 WHERE singleton=1;" error:failure]) return NO;
+        if (version <= 3 && ![self exec:
+            "ALTER TABLE tasks ADD COLUMN starred_at REAL;"
+            "UPDATE tasks SET starred_at=updated_at WHERE starred=1;"
+            "ALTER TABLE task_lists ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1));"
+            "UPDATE store_meta SET schema_version=4 WHERE singleton=1;" error:failure]) return NO;
         return YES;
     } error:error];
 }
@@ -373,16 +378,19 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     }
     if (![self vldTsk:result error:error]) return nil;
     result[@"list_id"] = [result[@"list_id"] lowercaseString];
+    NSArray *lists = [self qry:"SELECT list_id FROM task_lists WHERE list_id=? AND deleted=0" values:@[result[@"list_id"]] error:error];
+    if (!lists || !lists.count) { if (lists) [self dbErr:SQLITE_NOTFOUND message:@"清单已删除或不存在" error:error]; return nil; }
     if (result[@"parent_id"] != NSNull.null) result[@"parent_id"] = [result[@"parent_id"] lowercaseString];
     if (result[@"parent_id"] != NSNull.null) {
         NSArray *ancestors = [self qry:"WITH RECURSIVE ancestors(task_id,parent_id) AS ("
             "SELECT task_id,parent_id FROM tasks WHERE task_id=? UNION SELECT t.task_id,t.parent_id FROM tasks t JOIN ancestors a ON t.task_id=a.parent_id)"
-            "SELECT task_id,list_id,recurrence_type FROM tasks WHERE task_id IN (SELECT task_id FROM ancestors)" values:@[result[@"parent_id"]] error:error];
+            "SELECT task_id,list_id,recurrence_type,deleted FROM tasks WHERE task_id IN (SELECT task_id FROM ancestors)" values:@[result[@"parent_id"]] error:error];
         if (!ancestors) return nil;
         if (!ancestors.count) {
             [self dbErr:SQLITE_CONSTRAINT message:@"父任务不存在或不在同一清单" error:error]; return nil;
         }
         for (NSDictionary *ancestor in ancestors) {
+            if ([ancestor[@"deleted"] boolValue] && ![result[@"deleted"] boolValue]) { [self dbErr:SQLITE_NOTFOUND message:@"父任务已删除" error:error]; return nil; }
             if (![ancestor[@"recurrence_type"] isEqual:@"none"]) {
                 [self dbErr:SQLITE_CONSTRAINT message:@"重复任务不能添加子任务" error:error]; return nil;
             }
@@ -395,6 +403,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         }
     }
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    if (![task[@"starred"] isEqual:result[@"starred"]]) result[@"starred_at"] = [result[@"starred"] boolValue] ? @(now) : NSNull.null;
     result[@"updated_at"] = @(fmax(now, [task[@"updated_at"] doubleValue]));
     result[@"completed_at"] = [result[@"status"] isEqual:@"completed"]
         ? (task[@"completed_at"] != NSNull.null ? task[@"completed_at"] : @(now)) : NSNull.null;
@@ -451,7 +460,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         NSDictionary *task = @{@"task_id": uuid.lowercaseString, @"title": @"", @"notes": @"",
             @"due_at": NSNull.null, @"timezone_id": NSTimeZone.localTimeZone.name, @"recurrence_type": @"none", @"recurrence_interval": @1,
             @"status": @"needsAction", @"snooze_until": NSNull.null, @"created_at": now, @"updated_at": now,
-            @"list_id": TS_DFLT_LST, @"parent_id": NSNull.null, @"position": @0, @"starred": @0,
+            @"list_id": TS_DFLT_LST, @"parent_id": NSNull.null, @"position": @0, @"starred": @0, @"starred_at": NSNull.null,
             @"schedule_kind": @"none", @"planned_duration": NSNull.null, @"deadline_at": NSNull.null, @"deadline_kind": @"none",
             @"recurrence": @[], @"completed_at": NSNull.null, @"deleted": @0, @"urgency": @0, @"difficulty": @0, @"reminder_version": @1};
         result = [self mrg:fields into:task error:failure];
@@ -570,7 +579,10 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         if ([task[@"deleted"] boolValue] || ![task[@"status"] isEqual:@"needsAction"]) continue;
         NSMutableDictionary *item = [task mutableCopy];
         item[@"remind_at"] = NSNull.null;
-        for (NSDictionary *alert in snapshot[@"alerts"]) if ([alert[@"task_id"] isEqual:task[@"task_id"]]) { item[@"remind_at"] = alert[@"remind_at"]; break; }
+        item[@"next_cycle_at"] = NSNull.null;
+        for (NSDictionary *alert in snapshot[@"alerts"]) if ([alert[@"task_id"] isEqual:task[@"task_id"]]) {
+            item[@"remind_at"] = alert[@"remind_at"]; item[@"next_cycle_at"] = alert[@"cycle_at"]; break;
+        }
         [result addObject:item];
     }
     return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
@@ -659,7 +671,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     BOOL success = [self wrTxn:^BOOL(NSError **failure) {
         if (!ts_txt(title, 1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"清单名称无效" error:failure];
         NSNumber *now = @(NSDate.date.timeIntervalSince1970);
-        row = @{@"list_id": NSUUID.UUID.UUIDString.lowercaseString, @"title": title, @"created_at": now, @"updated_at": now};
+        row = @{@"list_id": NSUUID.UUID.UUIDString.lowercaseString, @"title": title, @"created_at": now, @"updated_at": now, @"deleted": @0};
         return [self wrt:row table:@"task_lists" key:@"list_id" insert:YES error:failure];
     } error:error];
     return success ? row : nil;
@@ -669,7 +681,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 - (BOOL)updLst:(NSString *)listID title:(NSString *)title error:(NSError **)error {
     return [self wrTxn:^BOOL(NSError **failure) {
         if (!ts_uuid(listID) || !ts_txt(title, 1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"清单标识或名称无效" error:failure];
-        if (![self qry:"UPDATE task_lists SET title=?,updated_at=? WHERE list_id=?"
+        if (![self qry:"UPDATE task_lists SET title=?,updated_at=? WHERE list_id=? AND deleted=0"
             values:@[title, @(NSDate.date.timeIntervalSince1970), listID.lowercaseString] error:failure]) return NO;
         return sqlite3_changes(self->_db) == 1 || [self dbErr:SQLITE_NOTFOUND message:@"清单不存在" error:failure];
     } error:error];
@@ -677,7 +689,68 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 
 // 读取全部清单。
 - (NSArray *)lsLsts:(NSError **)error {
-    @synchronized(self) { return [self qry:"SELECT * FROM task_lists ORDER BY created_at,list_id" values:@[] error:error]; }
+    @synchronized(self) { return [self qry:"SELECT * FROM task_lists WHERE deleted=0 ORDER BY created_at,list_id" values:@[] error:error]; }
+}
+
+// 原子删除清单和任务并使全部旧提醒失效。
+- (BOOL)delLst:(NSString *)listID error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        if (!ts_uuid(listID) || [listID.lowercaseString isEqual:TS_DFLT_LST])
+            return [self dbErr:SQLITE_CONSTRAINT message:@"默认清单不能删除" error:failure];
+        NSArray *lists = [self qry:"SELECT list_id FROM task_lists WHERE list_id=? AND deleted=0" values:@[listID.lowercaseString] error:failure];
+        if (!lists) return NO;
+        if (!lists.count) return [self dbErr:SQLITE_NOTFOUND message:@"清单不存在" error:failure];
+        NSArray *tasks = [self qry:"SELECT task_id FROM tasks WHERE list_id=? AND deleted=0" values:@[listID.lowercaseString] error:failure];
+        if (!tasks) return NO;
+        for (NSDictionary *task in tasks) {
+            NSDictionary *current = [self rdTsk:task[@"task_id"] error:failure];
+            if (!current || (![current[@"deleted"] boolValue] && ![self delTsk:current[@"task_id"] error:failure])) return NO;
+        }
+        return [self qry:"UPDATE task_lists SET deleted=1,updated_at=? WHERE list_id=?"
+            values:@[@(NSDate.date.timeIntervalSince1970), listID.lowercaseString] error:failure] != nil;
+    } error:error];
+}
+
+// 在一个事务中清理指定清单的完成子树。
+- (BOOL)clrCmpl:(NSString *)listID error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        if (!ts_uuid(listID)) return [self dbErr:SQLITE_MISMATCH message:@"清单标识无效" error:failure];
+        NSArray *lists = [self qry:"SELECT list_id FROM task_lists WHERE list_id=? AND deleted=0" values:@[listID.lowercaseString] error:failure];
+        if (!lists) return NO;
+        if (!lists.count) return [self dbErr:SQLITE_NOTFOUND message:@"清单不存在" error:failure];
+        NSArray *rows = [self qry:"SELECT task_id FROM tasks WHERE list_id=? AND status='completed' AND deleted=0" values:@[listID.lowercaseString] error:failure];
+        if (!rows) return NO;
+        for (NSDictionary *row in rows) if (![self delTsk:row[@"task_id"] error:failure]) return NO;
+        return YES;
+    } error:error];
+}
+
+// 从最新提醒计划选取一轮并原子记录完成。
+- (BOOL)cmplNxt:(NSString *)taskID error:(NSError **)error {
+    return [self cmplNxt:taskID cycle:nil generation:nil error:error];
+}
+
+// 在事务内核对用户看到的轮次和提醒版本。
+- (BOOL)cmplNxt:(NSString *)taskID cycle:(NSNumber *)cycle generation:(NSNumber *)generation error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        if ((cycle || generation) && (!ts_num(cycle) || !ts_num(generation) || generation.longLongValue < 1 || generation.doubleValue != generation.longLongValue))
+            return [self dbErr:SQLITE_MISMATCH message:@"提醒轮次或版本无效" error:failure];
+        NSDictionary *task = [self rdTsk:taskID error:failure]; if (!task) return NO;
+        if ([task[@"deleted"] boolValue]) return [self dbErr:SQLITE_NOTFOUND message:@"任务已删除" error:failure];
+        if (![task[@"status"] isEqual:@"needsAction"]) return YES;
+        if (![task[@"recurrence"] count]) return [self cmplTsk:taskID error:failure];
+        NSArray *history = [self lsOcc:taskID error:failure]; if (!history) return NO;
+        NSArray *alerts = [TaskRule alerts:task history:history at:NSDate.date.timeIntervalSince1970 error:failure];
+        if (!alerts) return NO;
+        if (cycle && (![task[@"reminder_version"] isEqual:generation] || ![alerts.firstObject[@"cycle_at"] isEqual:cycle])) return YES;
+        if (!alerts.count) return [self cmplTsk:taskID error:failure];
+        NSDictionary *alert = alerts.firstObject; NSNumber *now = @(NSDate.date.timeIntervalSince1970);
+        return [self qry:"INSERT INTO reminder_occurrences(occurrence_id,task_id,scheduled_at,cycle_at,generation,kind,status,handled_at,action,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,'handled',?,'complete',?,?) ON CONFLICT(task_id,generation,kind,cycle_at) "
+            "DO UPDATE SET status='handled',handled_at=excluded.handled_at,action='complete',snooze_until=NULL,updated_at=excluded.updated_at"
+            values:@[NSUUID.UUID.UUIDString.lowercaseString, taskID.lowercaseString, alert[@"scheduled_at"], alert[@"cycle_at"],
+                task[@"reminder_version"], alert[@"kind"], now, now, now] error:failure] != nil;
+    } error:error];
 }
 
 // 幂等创建单次提醒，重复请求返回同一UUID。

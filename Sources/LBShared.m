@@ -48,6 +48,16 @@ BOOL lb_btntap(BOOL *active, BOOL inside, BOOL down) {
     return fire;
 }
 
+// 截取界面中允许显示的13个完整字形。
+NSString *lb_shrt(NSString *text) {
+    __block NSUInteger length = 0, count = 0;
+    [text enumerateSubstringsInRange:NSMakeRange(0, text.length) options:NSStringEnumerationByComposedCharacterSequences
+        usingBlock:^(__unused NSString *value, NSRange range, __unused NSRange enclosing, BOOL *stop) {
+            if (++count > 13) { *stop = YES; return; } length = NSMaxRange(range);
+        }];
+    return [text substringToIndex:length];
+}
+
 #ifndef LB_HOST_TEST
 // 返回当前可执行文件路径。
 static const char *lb_exepath(void) {
@@ -83,15 +93,23 @@ BOOL lb_spawn(void) {
     }
     return result == 0;
 }
+#endif
 
+#if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
+// 返回统一青绿强调色。
+UIColor *lb_acnt(void) { return [UIColor colorWithRed:28.0/255 green:209.0/255 blue:194.0/255 alpha:1]; }
+// 使用UIKit加载同库的多倍率模板图标。
+UIImage *lb_icon(NSString *name) {
+    return [[UIImage imageNamed:[@"MingCute/" stringByAppendingString:name]] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
 // 创建统一外观的功能按钮。
 UIButton *lb_mkbtn(NSString *title, id target, SEL action) {
     UIButtonConfiguration *config = [UIButtonConfiguration filledButtonConfiguration];
     config.title = title;
-    config.baseBackgroundColor = UIColor.systemRedColor;
-    config.baseForegroundColor = [UIColor colorWithWhite:0.03 alpha:1.0];
+    config.baseBackgroundColor = lb_acnt();
+    config.baseForegroundColor = UIColor.blackColor;
     config.cornerStyle = UIButtonConfigurationCornerStyleFixed;
-    config.background.cornerRadius = 4.0;
+    config.background.cornerRadius = 16.0;
     config.contentInsets = NSDirectionalEdgeInsetsMake(4.0, 4.0, 4.0, 4.0);
     UIButton *button = [UIButton buttonWithConfiguration:config primaryAction:nil];
     button.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];

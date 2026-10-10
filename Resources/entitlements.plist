@@ -4,6 +4,11 @@
 <dict>
 	<key>application-identifier</key>
 	<string>com.iwmei.taskforiwmei</string>
+    <key>com.apple.security.exception.iokit-user-client-class</key>
+    <array>
+        <string>AGXDeviceUserClient</string>
+        <string>IOSurfaceRootUserClient</string>
+    </array>
     <key>com.apple.QuartzCore.displayable-context</key>
     <true/>
     <key>com.apple.QuartzCore.secure-mode</key>

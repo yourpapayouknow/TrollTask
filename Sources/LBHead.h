@@ -1,6 +1,6 @@
 #pragma once
 #import <Foundation/Foundation.h>
-#ifndef LB_HOST_TEST
+#if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
 #import <UIKit/UIKit.h>
 #endif
 
@@ -101,8 +101,15 @@ BOOL lb_spawn(void);
 // 运行全局 HUD 进程。
 int lb_hudmain(void);
 
+#endif
+
+#if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
 // 创建统一外观的功能按钮。
 UIButton *lb_mkbtn(NSString *title, id target, SEL action);
+// 读取统一OLED强调色和MingCute模板图标。
+UIColor *lb_acnt(void);
+UIImage *lb_icon(NSString *name);
+#import "TaskUI.h"
 #endif
 
 // 读取共享配置文件。
@@ -116,6 +123,9 @@ int lb_lckhud(void);
 
 // 判断从按钮内按下并在按钮内结束的触摸。
 BOOL lb_btntap(BOOL *active, BOOL inside, BOOL down);
+
+// 截取界面中允许显示的13个完整字形。
+NSString *lb_shrt(NSString *text);
 
 // 集中声明待办存储模块。
 #import "TaskStore.h"

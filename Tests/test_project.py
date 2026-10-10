@@ -22,6 +22,10 @@ def tstns():
                 "com.apple.QuartzCore.secure-mode", "com.apple.private.persona-mgmt",
                 "com.apple.private.security.no-sandbox"]:
         assert entitlements[key] is True
+    # 检查平台应用的系统图像渲染权限。
+    clients = entitlements.get("com.apple.security.exception.iokit-user-client-class", [])
+    assert isinstance(clients, list) and {"AGXDeviceUserClient", "IOSurfaceRootUserClient"} <= set(clients), \
+        "Missing GPU access for CoreImage template rendering"
     return root
 
 

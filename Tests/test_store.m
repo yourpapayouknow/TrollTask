@@ -176,7 +176,7 @@ static void tstmgrt(NSString *root) {
     tstsql(upgrade, v2); store = tstopn(upgrade);
     task = [store rdTsk:@"11111111-1111-4111-8111-111111111111" error:nil];
     NSDictionary *occ = [store lsOcc:task[@"task_id"] error:nil].firstObject;
-    assert(([store schver:nil] == 3 && [task[@"urgency"] intValue] == 3 && [task[@"difficulty"] intValue] == 2));
+    assert(([store schver:nil] == TS_SCH_VER && [task[@"urgency"] intValue] == 3 && [task[@"difficulty"] intValue] == 2));
     assert(([occ[@"occurrence_id"] isEqual:@"22222222-2222-4222-8222-222222222222"] && [occ[@"cycle_at"] isEqual:task[@"due_at"]]));
     assert(([occ[@"generation"] intValue] == 1 && [task[@"reminder_version"] intValue] == 1));
     assert(([tstval(upgrade, "PRAGMA integrity_check") isEqual:@"ok"]));
@@ -283,6 +283,74 @@ static void tstfirst(NSString *path) {
     assert(([tstval(path, "SELECT count(*) FROM task_lists") intValue] == 1));
 }
 
+// 验证加星时间、清单清理、单次完成和过时意图。
+static void tstlst(NSString *path) {
+    TaskStore *store = tstopn(path); NSError *error = nil;
+    NSDictionary *list = [store crtLst:@"扩展清单" error:nil]; NSString *listID = list[@"list_id"];
+    NSDictionary *parent = [store crtTsk:@{@"title":@"父任务",@"list_id":listID,@"starred":@1} error:nil];
+    NSString *uuid = parent[@"task_id"]; NSNumber *star = parent[@"starred_at"];
+    assert((ts_num(star) && [store updTsk:uuid fields:@{@"title":@"修改标题"} error:nil]));
+    assert(([[store rdTsk:uuid error:nil][@"starred_at"] isEqual:star]));
+    assert(([store updTsk:uuid fields:@{@"starred":@0} error:nil] && [store rdTsk:uuid error:nil][@"starred_at"] == NSNull.null));
+    assert(([store updTsk:uuid fields:@{@"starred":@1} error:nil] && ts_num([store rdTsk:uuid error:nil][@"starred_at"])));
+    assert((![store updTsk:uuid fields:@{@"starred_at":@0} error:&error] && [error.userInfo[@"kind"] isEqual:@"invalid_fields"]));
+    NSDictionary *child = [store crtTsk:@{@"title":@"子任务",@"list_id":listID,@"parent_id":uuid} error:nil];
+    NSDictionary *keep = [store crtTsk:@{@"title":@"保留任务",@"list_id":listID} error:nil];
+    NSDictionary *other = [store crtTsk:@{@"title":@"其他清单"} error:nil];
+    assert(([store cmplTsk:uuid error:nil] && [store cmplTsk:child[@"task_id"] error:nil] && [store cmplTsk:other[@"task_id"] error:nil]));
+    long long revision = [store revision:nil];
+    assert((![store wrTxn:^BOOL(NSError **failure) { return [store clrCmpl:listID error:failure] && [store updTsk:keep[@"task_id"] fields:@{@"urgency":@9} error:failure]; } error:nil]));
+    assert(([store revision:nil] == revision && ![[store rdTsk:uuid error:nil][@"deleted"] boolValue]));
+    assert(([store clrCmpl:listID error:nil]));
+    assert(([[store rdTsk:uuid error:nil][@"deleted"] boolValue] && [[store rdTsk:child[@"task_id"] error:nil][@"deleted"] boolValue]));
+    assert((![[store rdTsk:keep[@"task_id"] error:nil][@"deleted"] boolValue] && ![[store rdTsk:other[@"task_id"] error:nil][@"deleted"] boolValue]));
+    assert((![store delLst:TS_DFLT_LST error:&error] && [error.userInfo[@"kind"] isEqual:@"invalid_fields"]));
+    NSDictionary *occ = [store crtOcc:keep[@"task_id"] at:@1 error:nil];
+    assert(([store delLst:listID error:nil] && [store lsLsts:nil].count == 1));
+    assert(([[store rdTsk:keep[@"task_id"] error:nil][@"deleted"] boolValue] && [[[store lsOcc:keep[@"task_id"] error:nil] firstObject][@"action"] isEqual:@"invalidated"]));
+    assert((occ && ![store crtTsk:@{@"title":@"失效清单",@"list_id":listID} error:&error] && [error.userInfo[@"kind"] isEqual:@"not_found"]));
+    assert((![store clrCmpl:listID error:&error] && [error.userInfo[@"kind"] isEqual:@"not_found"]));
+    assert((![store updLst:listID title:@"已删除" error:&error] && [error.userInfo[@"kind"] isEqual:@"not_found"]));
+    NSNumber *due = @(NSDate.date.timeIntervalSince1970 + 3600);
+    NSDictionary *repeat = [store crtTsk:@{@"title":@"重复",@"due_at":due,@"timezone_id":@"UTC",@"recurrence_type":@"daily"} error:nil];
+    NSString *repeatID = repeat[@"task_id"]; NSDictionary *display = [store lsPnd:nil].firstObject;
+    assert(([display[@"task_id"] isEqual:repeatID] && [display[@"next_cycle_at"] isEqual:due]));
+    assert(([store cmplNxt:repeatID cycle:due generation:repeat[@"reminder_version"] error:nil]));
+    assert(([[store rdTsk:repeatID error:nil][@"status"] isEqual:@"needsAction"] && [store lsOcc:repeatID error:nil].count == 1));
+    NSNumber *next = [store lsPnd:nil].firstObject[@"next_cycle_at"]; assert((next.doubleValue > due.doubleValue));
+    revision = [store revision:nil];
+    assert(([store cmplNxt:repeatID cycle:due generation:repeat[@"reminder_version"] error:nil] && [store revision:nil] == revision));
+    assert(([store lsOcc:repeatID error:nil].count == 1));
+    assert(([store updTsk:repeatID fields:@{@"due_at":@(due.doubleValue+7200)} error:nil]));
+    assert(([store cmplNxt:repeatID cycle:next generation:repeat[@"reminder_version"] error:nil] && [store lsOcc:repeatID error:nil].count == 1));
+    assert((![store cmplNxt:repeatID cycle:due generation:@1.5 error:&error] && [error.userInfo[@"kind"] isEqual:@"invalid_fields"]));
+    assert(([store cmplNxt:repeatID error:nil] && [store lsOcc:repeatID error:nil].count == 2));
+    assert(([store cmplTsk:repeatID error:nil] && [store rstrTsk:repeatID error:nil]));
+    assert(([tstval(path,"PRAGMA integrity_check") isEqual:@"ok"]));
+}
+
+// 验证第三版数据升级及失败时完整回滚。
+static void tstv3(NSString *root) {
+    for (NSNumber *fail in @[@NO,@YES]) {
+        NSString *path = [root stringByAppendingPathComponent:fail.boolValue ? @"v3-failed.sqlite3" : @"v3.sqlite3"];
+        __block NSString *uuid; __block NSNumber *updated;
+        @autoreleasepool { TaskStore *store = tstopn(path); NSDictionary *task = [store crtTsk:@{@"title":@"第三版数据",@"starred":@1} error:nil]; uuid = task[@"task_id"]; updated = task[@"updated_at"]; }
+        tstsql(path,@"ALTER TABLE tasks DROP COLUMN starred_at; ALTER TABLE task_lists DROP COLUMN deleted; UPDATE store_meta SET schema_version=3;");
+        if (fail.boolValue) tstsql(path,@"CREATE TRIGGER migrate_fail BEFORE UPDATE ON store_meta BEGIN SELECT RAISE(ABORT,'blocked'); END;");
+        NSError *error = nil; TaskStore *store = [[TaskStore alloc] initAt:path error:&error];
+        if (fail.boolValue) {
+            assert((!store && error));
+            assert(([tstval(path,"SELECT schema_version FROM store_meta") intValue] == 3));
+            assert(([tstval(path,"SELECT count(*) FROM pragma_table_info('tasks') WHERE name='starred_at'") intValue] == 0));
+            assert(([tstval(path,"SELECT count(*) FROM pragma_table_info('task_lists') WHERE name='deleted'") intValue] == 0));
+            tstsql(path,@"DROP TRIGGER migrate_fail;"); store = tstopn(path);
+        }
+        assert(([store schver:nil] == TS_SCH_VER && [store lsLsts:nil].count == 1));
+        NSDictionary *task = [store rdTsk:uuid error:nil];
+        assert(([task[@"title"] isEqual:@"第三版数据"] && [task[@"starred_at"] isEqual:updated]));
+    }
+}
+
 // 执行真实原生SQLite存储验收。
 int main(void) {
     @autoreleasepool {
@@ -298,6 +366,8 @@ int main(void) {
         tstdates([root stringByAppendingPathComponent:@"dates.sqlite3"]);
         tstedges([root stringByAppendingPathComponent:@"edges.sqlite3"]);
         tstmgrt(root);
+        tstv3(root);
+        tstlst([root stringByAppendingPathComponent:@"lists.sqlite3"]);
         tstprocs([root stringByAppendingPathComponent:@"parallel.sqlite3"]);
         tstfirst([root stringByAppendingPathComponent:@"first.sqlite3"]);
         assert(([NSFileManager.defaultManager removeItemAtPath:root error:nil]));

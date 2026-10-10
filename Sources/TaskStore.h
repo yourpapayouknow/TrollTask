@@ -2,7 +2,7 @@
 
 #define TS_DB_PATH @"/var/mobile/Library/Application Support/com.iwmei.taskforiwmei/tasks.sqlite3"
 #define TS_DFLT_LST @"00000000-0000-4000-8000-000000000001"
-#define TS_SCH_VER 3
+#define TS_SCH_VER 4
 #define TS_DATA_NOTE "com.iwmei.taskforiwmei.data"
 
 // 提供主App与HUD共用的SQLite数据模型。
@@ -22,6 +22,10 @@
 - (NSDictionary *)crtLst:(NSString *)title error:(NSError **)error;
 // 修改清单名称。
 - (BOOL)updLst:(NSString *)listID title:(NSString *)title error:(NSError **)error;
+// 软删除非默认清单及其中全部任务。
+- (BOOL)delLst:(NSString *)listID error:(NSError **)error;
+// 清理指定清单中的已完成任务及其子树。
+- (BOOL)clrCmpl:(NSString *)listID error:(NSError **)error;
 // 读取全部清单。
 - (NSArray *)lsLsts:(NSError **)error;
 // 创建稳定UUID的任务。
@@ -38,6 +42,10 @@
 - (BOOL)delTsk:(NSString *)taskID error:(NSError **)error;
 // 完成指定任务并停止该任务的整个提醒系列。
 - (BOOL)cmplTsk:(NSString *)taskID error:(NSError **)error;
+// 完成当前重复轮次并保留后续系列。
+- (BOOL)cmplNxt:(NSString *)taskID error:(NSError **)error;
+// 按展示的轮次和版本完成，过时意图不推进下一轮。
+- (BOOL)cmplNxt:(NSString *)taskID cycle:(NSNumber *)cycle generation:(NSNumber *)generation error:(NSError **)error;
 // 恢复已完成任务并重新建立提醒计划。
 - (BOOL)rstrTsk:(NSString *)taskID error:(NSError **)error;
 // 按实际下一次提醒时间读取所有未完成且未删除任务。

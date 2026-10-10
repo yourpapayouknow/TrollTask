@@ -99,22 +99,22 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     _testToken = -1;
     self.view.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.88];
     UIVisualEffectView *card = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterialDark]];
-    card.layer.cornerRadius = 4.0;
+    card.layer.cornerRadius = 16.0;
     card.layer.masksToBounds = YES;
     card.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
     card.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.12].CGColor;
     card.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:card];
 
-    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checklist"]];
+    UIImageView *icon = [[UIImageView alloc] initWithImage:lb_icon(@"list")];
     icon.contentMode = UIViewContentModeScaleAspectFit;
-    icon.tintColor = UIColor.systemRedColor;
+    icon.tintColor = lb_acnt();
     [icon.heightAnchor constraintEqualToConstant:44.0].active = YES;
     UILabel *title = [[UILabel alloc] init];
     title.text = @"待办提醒";
     title.textAlignment = NSTextAlignmentCenter;
     title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
-    title.textColor = [UIColor colorWithWhite:0.96 alpha:1.0];
+    title.textColor = [UIColor colorWithWhite:244.0/255 alpha:1.0];
     title.adjustsFontForContentSizeCategory = YES;
     self.titleLabel = title;
     UILabel *kind = [[UILabel alloc] init];
@@ -216,12 +216,7 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     if (error) NSLog(@"提醒调度失败：%@", error);
     if (!alert) { self.titleLabel.text = @"待办提醒"; self.hudWindow.hidden = YES; return; }
     NSString *text = alert[@"task"][@"title"];
-    __block NSUInteger length = 0, count = 0;
-    [text enumerateSubstringsInRange:NSMakeRange(0, text.length) options:NSStringEnumerationByComposedCharacterSequences
-        usingBlock:^(__unused NSString *value, NSRange range, __unused NSRange enclosing, BOOL *stop) {
-            if (++count > 13) { *stop = YES; return; } length = NSMaxRange(range);
-        }];
-    self.titleLabel.text = [text substringToIndex:length];
+    self.titleLabel.text = lb_shrt(text);
     self.kindLabel.text = [alert[@"kind"] isEqual:@"plan"] ? @"计划提醒" : ([alert[@"kind"] isEqual:@"deadline"] ? @"截止提醒" : @"合并提醒");
     NSDateFormatter *formatter = [NSDateFormatter new]; formatter.dateFormat = @"MM-dd HH:mm"; formatter.timeZone = NSTimeZone.localTimeZone;
     self.timeLabel.text = [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:[alert[@"remind_at"] doubleValue]]];

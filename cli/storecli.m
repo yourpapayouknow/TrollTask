@@ -27,6 +27,9 @@ static id ts_cmd(TaskStore *store, NSArray *args, NSError **error) {
     if ([command isEqual:@"new-list"] && args.count == 2) return [store crtLst:args[1] error:error];
     if ([command isEqual:@"rename-list"] && args.count == 3)
         return [store updLst:args[1] title:args[2] error:error] ? @{@"updated": @YES} : nil;
+    if ([command isEqual:@"delete-list"] && args.count == 2) return [store delLst:args[1] error:error] ? @{@"deleted":@YES} : nil;
+    if ([command isEqual:@"clear-completed"] && args.count == 2) return [store clrCmpl:args[1] error:error] ? @{@"deleted":@YES} : nil;
+    if ([command isEqual:@"complete-next"] && args.count == 2) return [store cmplNxt:args[1] error:error] ? @{@"completed":@YES} : nil;
     if ([command isEqual:@"tasks"] && args.count == 1) return [store lsTsks:error];
     if ([command isEqual:@"pending"] && args.count == 1) return [store lsPnd:error];
     if ([command isEqual:@"completed"] && args.count == 1) return [store lsCmpl:error];

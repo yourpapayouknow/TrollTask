@@ -29,17 +29,17 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"TrollTask";
-    self.view.backgroundColor = [UIColor colorWithWhite:0.03 alpha:1.0];
+    self.view.backgroundColor = UIColor.blackColor;
     self.readyToken = -1;
 
     UILabel *label = [[UILabel alloc] init];
     label.text = @"后台服务";
     label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    label.textColor = [UIColor colorWithWhite:0.96 alpha:1.0];
+    label.textColor = [UIColor colorWithWhite:244.0/255 alpha:1.0];
     [label setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
 
     self.monitorSwitch = [[UISwitch alloc] init];
-    self.monitorSwitch.onTintColor = UIColor.systemRedColor;
+    self.monitorSwitch.onTintColor = lb_acnt();
     self.monitorSwitch.on = [lb_ldcfg()[@"enabled"] boolValue];
     [self.monitorSwitch setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     [self.monitorSwitch addTarget:self action:@selector(monChanged:) forControlEvents:UIControlEventValueChanged];
@@ -138,15 +138,17 @@
     TaskStore *_store;
 }
 
-// 创建设置窗口并恢复已启用的HUD服务。
+// 创建待办首页并恢复已启用的HUD服务。
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options {
     (void)application;
     (void)options;
     NSError *error = nil;
     _store = [TaskStore shrd:&error];
     if (!_store) NSLog(@"TaskStore初始化失败：%@", error);
-    LBSetCtl *settings = [[LBSetCtl alloc] init];
-    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:settings];
+    TaskHome *home = [[TaskHome alloc] initWithStore:_store settings:^(UINavigationController *nav) {
+        [nav pushViewController:[LBSetCtl new] animated:YES];
+    }];
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:home];
     navigation.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
     self.window.rootViewController = navigation;
