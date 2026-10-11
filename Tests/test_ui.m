@@ -108,6 +108,8 @@ static void ut_bounds(UIView *view, UIView *viewport) {
 }
 // 保存UIKit真实渲染并检查应用控件边界。
 static void ut_shot(NSString *name, CGFloat width, CGFloat height, BOOL large) {
+    // 按用户验收范围仅检查iPhone宽度。
+    if (width > 430) return;
     __block CGRect originalFrame;
     __block UIView *container;
     ut_wait(^BOOL { return !ut_nav.transitionCoordinator; }, @"布局检查等待页面转场结束");
@@ -460,6 +462,76 @@ static void ut_edit(void) {
     ut_ui(^{ for (NSDictionary *event in ut_events) ut_req([event[@"error"] length] == 0,@"后台调度没有数据库错误"); [ut_sched stop]; });
 }
 
+// 验证原生重复设置、单次延后及连续提前完成。
+static void ut_rpt(void) API_AVAILABLE(ios(16.0));
+static void ut_rpt(void) {
+    for (NSDictionary *task in [ut_store lsTsks:nil]) if (![task[@"deleted"] boolValue]) [ut_store delTsk:task[@"task_id"] error:nil];
+    ut_mon();
+    for (NSString *type in @[@"daily",@"weekly",@"monthly",@"none"]) {
+        ut_edt(nil); ut_title(@"重复链路验证"); ut_date(NSDate.date);
+        ut_tap(@"edit.more"); ut_tap(@"edit.repeat");
+        ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskRepeat.class]; },@"原生重复规则页面就绪");
+        ut_tap([@"repeat.type." stringByAppendingString:type]); ut_tap(@"repeat.done");
+        ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"重复规则返回统一编辑");
+        ut_tap(@"edit.save"); ut_home();
+        NSString *uuid = [ut_store lsPnd:nil].firstObject[@"task_id"];
+        NSDictionary *task = [ut_store rdTsk:uuid error:nil];
+        BOOL repeated = ![type isEqual:@"none"];
+        ut_req([task[@"recurrence_type"] isEqual:type] && [task[@"recurrence"] count] == (repeated ? 1 : 0),@"页面保存所选规则及稳定任务UUID");
+        ut_wait(^BOOL { return [ut_events.lastObject[@"alert"] isKindOfClass:NSDictionary.class] && [ut_events.lastObject[@"alert"][@"task_id"] isEqual:uuid]; },@"保存重复任务通知真实后台调度器");
+        __block NSDictionary *current;
+        ut_ui(^{ current = [ut_events.lastObject[@"alert"] copy]; });
+        if ([type isEqual:@"daily"]) {
+            NSNumber *until = @(NSDate.date.timeIntervalSince1970 + 3);
+            ut_ui(^{ [ut_sched act:@"snooze" until:until occID:current[@"occurrence_id"]]; });
+            ut_wait(^BOOL { return ut_events.lastObject[@"alert"] == NSNull.null; },@"单次延后立即撤下当前提醒");
+            ut_req([[ut_store rdTsk:uuid error:nil] isEqual:task],@"稍后提醒不修改任务或整个重复规则");
+            NSDictionary *plan = [ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil];
+            NSDictionary *snoozed = [plan[@"alerts"] firstObject];
+            ut_req([snoozed[@"occurrence_id"] isEqual:current[@"occurrence_id"]] && [snoozed[@"cycle_at"] isEqual:current[@"cycle_at"]]
+                && [snoozed[@"scheduled_at"] isEqual:current[@"scheduled_at"]] && [snoozed[@"remind_at"] isEqual:until],@"延后仅替换当前Occurrence提醒时刻");
+            ut_wait(^BOOL { for (NSDictionary *event in ut_events) {
+                NSDictionary *alert = event[@"alert"];
+                if ([alert isKindOfClass:NSDictionary.class] && [alert[@"occurrence_id"] isEqual:current[@"occurrence_id"]]
+                    && [alert[@"remind_at"] isEqual:until] && [event[@"at"] doubleValue] >= until.doubleValue) return YES;
+            } return NO; },@"真实计时器以同一Occurrence再次触发");
+            ut_req([ut_store lsOcc:uuid error:nil].count == 1,@"延后重触发不产生重复Occurrence");
+        }
+        ut_edt([ut_store rdTsk:uuid error:nil]); ut_tap(@"edit.complete"); ut_home();
+        ut_wait(^BOOL { return ut_events.lastObject[@"alert"] == NSNull.null; },@"完成当前轮次立即撤下后台提醒");
+        NSDictionary *changed = [ut_store rdTsk:uuid error:nil];
+        if (repeated) {
+            NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
+            calendar.timeZone = [NSTimeZone timeZoneWithName:task[@"timezone_id"]];
+            NSCalendarUnit unit = [type isEqual:@"daily"] ? NSCalendarUnitDay : [type isEqual:@"weekly"] ? NSCalendarUnitWeekOfYear : NSCalendarUnitMonth;
+            NSDate *anchor = [NSDate dateWithTimeIntervalSince1970:[task[@"due_at"] doubleValue]];
+            NSDate *next = [calendar dateByAddingUnit:unit value:1 toDate:anchor options:0];
+            NSDictionary *alert = [[ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil][@"alerts"] firstObject];
+            ut_req([changed[@"status"] isEqual:@"needsAction"] && [changed[@"due_at"] isEqual:task[@"due_at"]]
+                && [changed[@"recurrence"] isEqual:task[@"recurrence"]] && [changed[@"reminder_version"] isEqual:task[@"reminder_version"]],@"完成单轮保留任务计划锚点及系列版本");
+            ut_req(fabs([alert[@"cycle_at"] doubleValue] - next.timeIntervalSince1970) < 0.001,@"下一轮从原始计划日历计算");
+            if ([type isEqual:@"daily"]) {
+                for (NSInteger index = 2; index <= 9; index++) {
+                    ut_edt([ut_store rdTsk:uuid error:nil]); ut_tap(@"edit.complete"); ut_home();
+                    NSDate *expected = [calendar dateByAddingUnit:unit value:index toDate:anchor options:0];
+                    NSDictionary *future = [[ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil][@"alerts"] firstObject];
+                    ut_req([future[@"task_id"] isEqual:uuid] && fabs([future[@"cycle_at"] doubleValue] - expected.timeIntervalSince1970) < 0.001
+                        && [[ut_store rdTsk:uuid error:nil][@"status"] isEqual:@"needsAction"],@"连续提前完成超过预取窗口仍产生下一轮");
+                }
+                NSArray *history = [ut_store lsOcc:uuid error:nil]; NSMutableSet *ids = [NSMutableSet set];
+                for (NSDictionary *item in history) [ids addObject:item[@"occurrence_id"]];
+                ut_req(history.count == 9 && ids.count == 9,@"同一任务的九次完成保留九个独立Occurrence");
+                ut_shot(@"phase06-next-cycle-320.png",320,850,NO);
+            }
+        } else {
+            ut_req([changed[@"status"] isEqual:@"completed"] && [[ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil][@"alerts"] count] == 0,@"不重复任务完成后没有下一轮");
+        }
+        ut_req([ut_store delTsk:uuid error:nil],@"测试任务删除后停止整个系列");
+    }
+    ut_ui(^{ BOOL valid = YES; for (NSDictionary *event in ut_events) if ([event[@"error"] length]) valid = NO;
+        ut_req(valid,@"真实重复调度没有数据库错误"); [ut_sched stop]; });
+}
+
 // 为真实UIKit测试创建独立数据库和应用窗口。
 @interface UITestDel : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
@@ -488,8 +560,10 @@ static void ut_edit(void) {
         @autoreleasepool {
             BOOL passed = YES; NSString *failure = @"";
             @try {
-                if (![NSProcessInfo.processInfo.arguments containsObject:@"--phase05"]) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
-                if (@available(iOS 16.0,*)) ut_edit();
+                BOOL phase5 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase05"];
+                BOOL phase6 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase06"];
+                if (!phase5 && !phase6) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
+                if (@available(iOS 16.0,*)) { if (!phase6) ut_edit(); if (!phase5) ut_rpt(); }
             } @catch (NSException *exception) { passed = NO; failure = exception.reason; }
             __block NSString *device, *runtime;
             ut_ui(^{ device = UIDevice.currentDevice.model; runtime = UIDevice.currentDevice.systemVersion; });

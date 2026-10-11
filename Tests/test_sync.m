@@ -169,6 +169,55 @@ static void tstalerts(NSString *path) {
     assert(([[TaskRule ddl:dateTask cycle:tststamp(@"2026-11-01 09:00:00", @"America/New_York")] isEqual:tststamp(@"2026-11-02 09:00:00", @"America/New_York")]));
 }
 
+// 验证系列和单次处理的持久化隔离。
+static void tstcycles(NSString *path) {
+    TaskStore *store = tstopen(path), *reader = tstopen(path);
+    NSNumber *base = tststamp(@"2026-12-30 08:15:30",@"UTC");
+    for (NSString *type in @[@"daily",@"weekly",@"monthly"]) {
+        NSDictionary *task = [store crtTsk:@{@"title":@"提前完成系列",@"due_at":base,@"timezone_id":@"UTC",@"recurrence_type":type} error:nil];
+        assert(task);
+        NSArray *cycles = [TaskRule cycles:task at:base.doubleValue limit:16 error:nil];
+        for (NSUInteger index=0; index<12; index++) {
+            assert(([store cmplNxt:task[@"task_id"] cycle:cycles[index] generation:task[@"reminder_version"] error:nil]));
+            NSDictionary *next = [reader planAt:NSDate.date.timeIntervalSince1970 error:nil][@"alerts"][0];
+            assert(([next[@"cycle_at"] isEqual:cycles[index+1]]));
+            NSDictionary *same = [reader rdTsk:task[@"task_id"] error:nil];
+            assert(([same[@"due_at"] isEqual:base] && [same[@"recurrence"] isEqual:task[@"recurrence"]]
+                && [same[@"status"] isEqual:@"needsAction"] && [same[@"reminder_version"] isEqual:task[@"reminder_version"]]));
+            long long revision = [reader revision:nil];
+            assert(([store cmplNxt:task[@"task_id"] cycle:cycles[index] generation:task[@"reminder_version"] error:nil]));
+            assert(([reader revision:nil] == revision));
+        }
+        NSArray *history = [reader lsOcc:task[@"task_id"] error:nil]; NSMutableSet *ids = [NSMutableSet set];
+        for (NSDictionary *occ in history) { [ids addObject:occ[@"occurrence_id"]]; assert(([occ[@"task_id"] isEqual:task[@"task_id"]] && [occ[@"action"] isEqual:@"complete"])); }
+        assert(history.count==12 && ids.count==12);
+        TaskStore *reopened = tstopen(path);
+        assert(([[reopened planAt:NSDate.date.timeIntervalSince1970 error:nil][@"alerts"][0][@"cycle_at"] isEqual:cycles[12]]));
+        assert(([store delTsk:task[@"task_id"] error:nil]));
+    }
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    NSDictionary *task = [store crtTsk:@{@"title":@"单轮稍后",@"due_at":@(floor(now)-60.125),@"timezone_id":@"UTC",@"recurrence_type":@"daily"} error:nil];
+    NSDictionary *plan = [reader planAt:now error:nil];
+    NSDictionary *first = [reader claim:plan[@"alerts"][0] revision:[plan[@"revision"] longLongValue] at:now error:nil]; assert(first);
+    assert(([store actOcc:first[@"occurrence_id"] action:@"snooze" until:@(now+300) error:nil]));
+    assert(([[reader rdTsk:task[@"task_id"] error:nil] isEqual:task]));
+    plan = [reader planAt:now error:nil];
+    NSDictionary *delayed = plan[@"alerts"][0];
+    assert(([delayed[@"occurrence_id"] isEqual:first[@"occurrence_id"]] && [delayed[@"scheduled_at"] isEqual:task[@"due_at"]]
+        && [delayed[@"remind_at"] isEqual:@(now+300)]));
+    NSError *error = nil; long long revision = [reader revision:nil];
+    assert((![store actOcc:first[@"occurrence_id"] action:@"snooze" until:@(now-1) error:&error] && [error.userInfo[@"kind"] isEqual:@"invalid_fields"]));
+    assert(([reader revision:nil]==revision));
+    NSDictionary *again = [reader claim:delayed revision:revision at:now+301 error:nil];
+    assert(([again[@"occurrence_id"] isEqual:first[@"occurrence_id"]] && [reader lsOcc:task[@"task_id"] error:nil].count==1));
+    assert(([store actOcc:again[@"occurrence_id"] action:@"complete" until:nil error:nil]));
+    NSDictionary *next = [reader planAt:now+301 error:nil][@"alerts"][0];
+    assert(([next[@"cycle_at"] doubleValue]==[task[@"due_at"] doubleValue]+86400));
+    assert(([[reader rdTsk:task[@"task_id"] error:nil] isEqual:task]));
+    assert(([store delTsk:task[@"task_id"] error:nil]));
+    puts("Occurrence persistence: anchored daily/weekly/monthly, 12 early completions, stable IDs, reopen, isolated snooze and stale action checks passed");
+}
+
 // 在独立接收进程实际运行HUD使用的调度器。
 static int tstmonitor(NSString *path) {
     TaskSched *scheduler = [[TaskSched alloc] initStore:tstopen(path) handler:^(NSDictionary *alert, NSError *error) {
@@ -212,6 +261,7 @@ int main(void) {
         NSString *root = @(folder);
         tstcrud([root stringByAppendingPathComponent:@"crud.sqlite3"]); tstrecur();
         tstalerts([root stringByAppendingPathComponent:@"alerts.sqlite3"]); tstsched([root stringByAppendingPathComponent:@"scheduler.sqlite3"]);
+        tstcycles([root stringByAppendingPathComponent:@"cycles.sqlite3"]);
         assert(([NSFileManager.defaultManager removeItemAtPath:root error:nil]));
         puts("Task sync: commit-only Darwin, rollback, UUID conflict, CRUD/order, full recurrence/DST, stale claims, snooze and real cross-process scheduling passed");
         return 0;

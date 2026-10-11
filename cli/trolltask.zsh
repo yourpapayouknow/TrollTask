@@ -3,7 +3,7 @@
 set -eu
 project_dir=${0:A:h:h}
 case "${1:-}" in
-    test|package|inspect|clean|icons|serve)
+    test|test-rule|package|inspect|clean|icons|serve)
         exec make -C "$project_dir" "$1"
         ;;
     start|hud|stop|preview)
@@ -22,7 +22,7 @@ case "${1:-}" in
         exec "$project_dir/build/taskstore" "$@"
         ;;
     *)
-        print -r -- '用法：cli/trolltask.zsh test|package|inspect|clean|icons|serve|start|hud|stop|preview|store'
+        print -r -- '用法：cli/trolltask.zsh test|test-rule|package|inspect|clean|icons|serve|start|hud|stop|preview|store'
         exit 2
         ;;
 esac

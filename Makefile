@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.6.0.tipa
+TIPA := $(BUILD)/TrollTask-0.7.0.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
@@ -30,7 +30,7 @@ HEADERS := $(wildcard Sources/*.h)
 ICAL_HEADERS := $(wildcard Vendor/libical/*.h)
 ICAL_FILES := $(wildcard Vendor/libical/* Vendor/libical/LICENSES/*)
 
-.PHONY: all package test test-ui clean inspect icons serve store
+.PHONY: all package test test-rule test-ui clean inspect icons serve store
 
 icons: $(ICON_SOURCE)
 	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
@@ -85,12 +85,19 @@ test: | $(BUILD)
 	$(BUILD)/test_shared
 	python3 Tests/test_project.py
 	$(MAKE) $(BUILD)/ical-host.a
+	$(MAKE) test-rule
 	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation -lsqlite3 Tests/test_store.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-host.a -o $(BUILD)/test_store
 	$(BUILD)/test_store
 	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation -lsqlite3 Tests/test_sync.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-host.a -o $(BUILD)/test_sync
 	$(BUILD)/test_sync
 	$(MAKE) store
 	PYTHONPATH=scripts python3 -B Tests/test_cli.py
+
+test-rule: $(BUILD)/test_rule
+	$(BUILD)/test_rule
+
+$(BUILD)/test_rule: Tests/test_rule.m Sources/TaskRule.m $(HEADERS) $(BUILD)/ical-host.a | $(BUILD)
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation Tests/test_rule.m Sources/TaskRule.m $(BUILD)/ical-host.a -o $@
 
 store: $(BUILD)/taskstore
 

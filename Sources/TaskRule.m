@@ -238,6 +238,12 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
         }
         if ([row[@"action"] isEqual:@"snooze"] || [row[@"status"] isEqual:@"triggered"]) [set addObject:row[@"cycle_at"]];
     }
+    // 提前完成超出预取窗口后，从已完成轮次继续展开原始规则。
+    if (repeats && completedFloor && completedFloor.doubleValue >= stamp) {
+        NSArray *future = [self cycles:task at:nextafter(completedFloor.doubleValue, INFINITY) limit:4 error:error];
+        if (!future) return nil;
+        [set addObjectsFromArray:future];
+    }
     NSMutableArray *result = [NSMutableArray array];
     NSMutableDictionary *latest = [NSMutableDictionary dictionary];
     for (NSNumber *cycle in set) {
