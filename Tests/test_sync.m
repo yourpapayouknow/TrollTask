@@ -23,6 +23,14 @@ static void tstcrud(NSString *path) {
     TaskStore *store = tstopen(path), *reader = tstopen(path);
     int token = -1; assert((notify_register_check(store.changeNote.UTF8String, &token) == NOTIFY_STATUS_OK));
     (void)tstnote(token);
+    NSError *textError = nil;
+    assert(([TaskStore vldTxt:@"合法标题" notes:@"第一行\n第二行" error:&textError] && !textError));
+    assert((![TaskStore vldTxt:@" \n " notes:@"" error:&textError] && [textError.userInfo[@"kind"] isEqual:@"invalid_fields"]));
+    assert((![TaskStore vldTxt:[@"a" stringByPaddingToLength:1025 withString:@"a" startingAtIndex:0] notes:@"" error:nil]));
+    assert((![TaskStore vldTxt:@"标题" notes:[@"a" stringByPaddingToLength:8193 withString:@"a" startingAtIndex:0] error:nil]));
+    assert(([TaskStore vldTxt:[@"a" stringByPaddingToLength:1024 withString:@"a" startingAtIndex:0]
+        notes:[@"a" stringByPaddingToLength:8192 withString:@"a" startingAtIndex:0] error:nil]));
+    assert(([store revision:nil] == 0 && !tstnote(token)));
     __block NSDictionary *task = nil;
     assert(([store wrTxn:^BOOL(NSError **error) {
         task = [store crtTsk:@{@"title": @"计划", @"due_at": @200, @"deadline_at": @100, @"snooze_until": @300} error:error];

@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.4.2.tipa
+TIPA := $(BUILD)/TrollTask-0.6.0.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
@@ -12,12 +12,13 @@ ICON_SOURCE := Resources/AppIcon-source.png
 ASSET_FILES := $(shell find Resources/Assets.xcassets -type f)
 MING_FILES := $(shell find Resources/MingCute -type f)
 
-M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m Sources/TaskUI.m Sources/TaskPanel.m
-OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(BUILD)/storecli.o
+SWIFT_SOURCES := $(wildcard Sources/*.swift)
+SWIFT_FLAGS := -swift-version 5 -module-name TrollTask -parse-as-library -whole-module-optimization -warnings-as-errors -ISources -IVendor/libical -import-objc-header Sources/SwiftHead.h
+M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m
+OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(BUILD)/storecli.o $(BUILD)/TaskSwift.o
 
 CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources -IVendor/libical
 OBJCFLAGS := $(CFLAGS) -fobjc-arc -fmodules
-LDFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -Wl,-dead_strip -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-ios.a
 ICAL_SRCS := $(wildcard Vendor/libical/*.c)
 ICAL_DEFS := -DHAVE_CONFIG_H -DLIBICAL_ICAL_STATIC_DEFINE -DPACKAGE_DATA_DIR=\".\"
 ICAL_IOS := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-ios/%.o,$(ICAL_SRCS))
@@ -42,10 +43,13 @@ all: test package
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) | $(BUILD)
+$(BUILD)/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) Makefile | $(BUILD)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
-$(BUILD)/storecli.o: cli/storecli.m $(HEADERS) $(ICAL_HEADERS) | $(BUILD)
+$(BUILD)/TaskSwift.o: $(SWIFT_SOURCES) $(HEADERS) $(ICAL_HEADERS) Makefile | $(BUILD)
+	xcrun --sdk iphoneos swiftc $(SWIFT_FLAGS) -target arm64-apple-ios15.0 -sdk $(SDK) -O -emit-object $(SWIFT_SOURCES) -o $@
+
+$(BUILD)/storecli.o: cli/storecli.m $(HEADERS) $(ICAL_HEADERS) Makefile | $(BUILD)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
 $(APP_DIR)/Assets.car: $(ASSET_FILES)
@@ -62,7 +66,7 @@ $(APP_DIR)/ThirdParty/libical-source.zip: $(BUILD)/libical-source.zip Vendor/LIB
 
 $(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist $(MING_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
 	mkdir -p $(APP_DIR)
-	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	xcrun --sdk iphoneos swiftc -target arm64-apple-ios15.0 -sdk $(SDK) $(OBJECTS) -Xlinker -dead_strip -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-ios.a -o $@
 	cp Resources/Info.plist $(APP_DIR)/Info.plist
 	cp -R Resources/MingCute $(APP_DIR)/
 	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@2x.png $(APP_DIR)/AppIcon60x60@2x.png
@@ -114,9 +118,25 @@ $(BUILD)/ical-sim/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
 $(BUILD)/ical-sim.a: $(ICAL_SIM)
 	xcrun ar rcs $@ $^
 
-$(BUILD)/MobileUI.app/UItest: Tests/test_ui.m Tests/UIInfo.plist Sources/TaskUI.m Sources/TaskPanel.m Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(HEADERS) $(MING_FILES) $(BUILD)/ical-sim.a
+UI_M_SOURCES := Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m
+UI_OBJECTS := $(patsubst Sources/%.m,$(BUILD)/ui/%.o,$(UI_M_SOURCES)) $(BUILD)/ui/test_ui.o $(BUILD)/ui/TaskSwift.o
+SIM_SDK := $(shell xcrun --sdk iphonesimulator --show-sdk-path)
+
+$(BUILD)/ui/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) Makefile
 	mkdir -p $(dir $@)
-	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 Tests/test_ui.m Sources/TaskUI.m Sources/TaskPanel.m Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-sim.a -o $@
+	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
+
+$(BUILD)/ui/test_ui.o: Tests/test_ui.m $(HEADERS) Makefile
+	mkdir -p $(dir $@)
+	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
+
+$(BUILD)/ui/TaskSwift.o: $(SWIFT_SOURCES) $(HEADERS) $(ICAL_HEADERS) Makefile
+	mkdir -p $(dir $@)
+	xcrun --sdk iphonesimulator swiftc $(SWIFT_FLAGS) -target arm64-apple-ios15.0-simulator -sdk $(SIM_SDK) -D LB_UI_TEST -Xcc -DLB_HOST_TEST -Xcc -DLB_UI_TEST -O -emit-object $(SWIFT_SOURCES) -o $@
+
+$(BUILD)/MobileUI.app/UItest: $(UI_OBJECTS) Tests/UIInfo.plist $(MING_FILES) $(BUILD)/ical-sim.a
+	mkdir -p $(dir $@)
+	xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios15.0-simulator -sdk $(SIM_SDK) $(UI_OBJECTS) -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-sim.a -o $@
 	cp Tests/UIInfo.plist $(dir $@)/Info.plist
 	cp -R Resources/MingCute $(dir $@)/
 	codesign --force --sign - $(dir $@)

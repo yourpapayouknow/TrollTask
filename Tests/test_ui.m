@@ -7,6 +7,12 @@ static UINavigationController *ut_nav;
 static TaskStore *ut_store;
 static NSString *ut_docs;
 static NSMutableArray *ut_checks;
+static BOOL ut_spawn = YES;
+static TaskSched *ut_sched;
+static NSMutableArray *ut_events;
+
+// 仅在独立模拟器测试中替代设备root启动。
+BOOL lb_spawn(void) { return ut_spawn; }
 
 // 在主线程执行全部UIKit访问。
 static void ut_ui(void (^work)(void)) {
@@ -213,6 +219,23 @@ static void ut_refs(void) {
 // 运行真实首页、编辑和事务刷新验收。
 static void ut_run(void) {
     ut_wait(^BOOL { return ut_find(ut_window, @"home.empty") != nil && [(UIButton *)ut_find(ut_window, @"home.empty") isEnabled]; }, @"空状态可新建");
+    // 验证原生渐变覆盖页面、生命周期停止以及恢复动画。
+    ut_ui(^{
+        UIView *background = ut_find(ut_top().view, @"theme.gradient");
+        ut_req([background.layer isKindOfClass:CAGradientLayer.class] && !background.userInteractionEnabled, @"原生渐变不拦截触摸");
+        CAGradientLayer *gradient = (CAGradientLayer *)background.layer;
+        ut_req(gradient.colors.count == 3 && CGRectEqualToRect(background.frame, ut_top().view.bounds), @"压暗青橙覆盖页面边界");
+        [NSNotificationCenter.defaultCenter postNotificationName:UIApplicationDidBecomeActiveNotification object:nil];
+        BOOL reduced = UIAccessibilityIsReduceMotionEnabled();
+        ut_req(([[gradient animationKeys] containsObject:@"teal-orange"]) == !reduced, @"缓动遵循系统减少动态效果");
+        [NSNotificationCenter.defaultCenter postNotificationName:UIApplicationWillResignActiveNotification object:nil];
+        ut_req(![gradient animationForKey:@"teal-orange"], @"退入后台停止渐变动画");
+        [NSNotificationCenter.defaultCenter postNotificationName:UIApplicationDidBecomeActiveNotification object:nil];
+        ut_req(([[gradient animationKeys] containsObject:@"teal-orange"]) == !reduced, @"返回前台恢复合规动画");
+        [background removeFromSuperview];
+        ut_req(![gradient animationForKey:@"teal-orange"], @"离开窗口停止渐变动画");
+        [ut_top().view insertSubview:background atIndex:0];
+    });
     ut_shot(@"empty-320.png", 320, 568, NO); ut_tap(@"home.empty");
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class]; }, @"空态进入编辑");
     ut_tap(@"edit.cancel"); ut_home(); ut_req([ut_store lsTsks:nil].count == 0, @"取消不创建数据");
@@ -304,6 +327,139 @@ static void ut_run(void) {
     ut_req([deleted[@"deleted"] boolValue] && [deleted[@"title"] isEqual:changed[@"title"]], @"失败未复活任务或覆盖标题");
 }
 
+// 验证Swift设置页的原生配置、失败回滚和Darwin预览通信。
+static void ut_sttng(void) {
+    ut_ui(^{
+        UIViewController *controller = [NSClassFromString(@"LBSetCtl") new];
+        ut_req(controller != nil, @"Swift后台设置运行类型存在");
+        [ut_nav pushViewController:controller animated:NO];
+        UISwitch *monitor = (UISwitch *)ut_find(controller.view, @"settings.enabled");
+        UIButton *preview = (UIButton *)ut_find(controller.view, @"settings.preview");
+        monitor.on = NO; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
+        ut_req(![lb_ldcfg()[@"enabled"] boolValue] && !preview.enabled, @"关闭服务保存并禁用预览");
+        ut_spawn = NO; monitor.on = YES; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
+        ut_req(!monitor.on && ![lb_ldcfg()[@"enabled"] boolValue], @"启动失败恢复关闭状态");
+        ut_spawn = YES; monitor.on = YES; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
+        ut_req(monitor.on && [lb_ldcfg()[@"enabled"] boolValue] && preview.enabled, @"开启服务保存并启用预览");
+        [preview sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req(!preview.enabled, @"等待HUD就绪禁用重复预览");
+        notify_post(LB_READY_NOTE);
+    });
+    ut_wait(^BOOL { return [(UIButton *)ut_find(ut_top().view, @"settings.preview") isEnabled]; }, @"Darwin就绪恢复预览入口");
+    ut_shot(@"settings-large-320.png", 320, 850, YES);
+    ut_ui(^{ [ut_nav popViewControllerAnimated:NO]; });
+}
+
+// 用独立数据库连接运行生产调度器并记录真实回调。
+static void ut_mon(void) {
+    ut_ui(^{
+        ut_events = [NSMutableArray array];
+        TaskStore *reader = [[TaskStore alloc] initAt:ut_store.path error:nil];
+        ut_sched = [[TaskSched alloc] initStore:reader handler:^(NSDictionary *alert, NSError *error) {
+            [ut_events addObject:@{@"alert":alert ?: (id)NSNull.null,@"error":error.localizedDescription ?: @"",@"at":@(NSDate.date.timeIntervalSince1970)}];
+            NSData *data = [NSJSONSerialization dataWithJSONObject:ut_events options:NSJSONWritingPrettyPrinted error:nil];
+            [data writeToFile:[ut_docs stringByAppendingPathComponent:@"SchedulerEvents.json"] atomically:YES];
+        }];
+        ut_req([ut_sched start:nil],@"独立连接启动真实后台调度");
+    });
+}
+// 通过原生导航打开统一新建或已有详情。
+static void ut_edt(NSDictionary *task) {
+    ut_ui(^{ [ut_nav pushViewController:[[TaskEdit alloc] initWithStore:ut_store task:task saved:nil] animated:NO]; });
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && ut_find(ut_top().view,@"edit.title"); },@"统一编辑页面就绪");
+}
+// 从系统月历和时刻控件修改草稿。
+static void ut_date(NSDate *date) API_AVAILABLE(ios(16.0));
+static void ut_date(NSDate *date) {
+    ut_tap(@"edit.date");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskCalendar.class] && !ut_top().isBeingPresented; },@"编辑使用系统日期时间页面");
+    ut_ui(^{
+        UICalendarView *calendar = (UICalendarView *)ut_find(ut_top().view,@"calendar.month");
+        UIDatePicker *picker = (UIDatePicker *)ut_find(ut_top().view,@"calendar.time");
+        ut_req(calendar && picker,@"月历与时刻均为原生UIKit控件");
+        NSDateComponents *parts = [calendar.calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay fromDate:date];
+        UICalendarSelectionSingleDate *selection = (UICalendarSelectionSingleDate *)calendar.selectionBehavior;
+        [selection setSelectedDate:parts animated:NO]; [(TaskCalendar *)ut_top() dateSelection:selection didSelectDate:parts];
+        UISwitch *toggle = (UISwitch *)ut_find(ut_top().view,@"calendar.timed"); toggle.on = YES; [toggle sendActionsForControlEvents:UIControlEventValueChanged];
+        picker.date = date;
+    });
+    ut_tap(@"calendar.done");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"日期选择回到同一草稿");
+}
+// 验证统一编辑校验、完整回填和真实计时失效链路。
+static void ut_edit(void) API_AVAILABLE(ios(16.0));
+static void ut_edit(void) {
+    for (NSDictionary *task in [ut_store lsTsks:nil]) if (![task[@"deleted"] boolValue]) [ut_store delTsk:task[@"task_id"] error:nil];
+    ut_mon(); ut_edt(nil);
+    ut_ui(^{ ut_req(![(UIButton *)ut_find(ut_top().view,@"edit.save") isEnabled],@"完整新建空标题禁用保存"); });
+    ut_title(@"   \n ");
+    ut_ui(^{ ut_req(![(UIButton *)ut_find(ut_top().view,@"edit.save") isEnabled],@"统一编辑纯空白标题不可保存"); });
+    ut_title([@"a" stringByPaddingToLength:1025 withString:@"a" startingAtIndex:0]);
+    long long revision = [ut_store revision:nil]; ut_tap(@"edit.save");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:UIAlertController.class]; },@"标题过长在保存前报错");
+    ut_req([ut_store revision:nil] == revision && [ut_store lsPnd:nil].count == 0,@"文本校验失败不提交或产生提醒");
+    ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil]; });
+    ut_title(@"统一页面保存"); ut_tap(@"edit.details");
+    ut_ui(^{ UITextView *notes = (UITextView *)ut_find(ut_top().view,@"edit.notes"); notes.text = [@"a" stringByPaddingToLength:8193 withString:@"a" startingAtIndex:0]; [notes.delegate textViewDidChange:notes]; });
+    ut_tap(@"edit.save"); ut_wait(^BOOL { return [ut_top() isKindOfClass:UIAlertController.class]; },@"说明超限保存前校验");
+    ut_req([ut_store revision:nil] == revision,@"说明校验失败没有提交修订");
+    ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil]; });
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"错误弹窗关闭后继续原草稿");
+    ut_ui(^{ UITextView *notes = (UITextView *)ut_find(ut_top().view,@"edit.notes"); notes.text = @"第一行\n第二行"; [notes.delegate textViewDidChange:notes]; });
+    NSDate *now = NSDate.date; ut_date(now); ut_tap(@"edit.save"); ut_home();
+    NSDictionary *task = [ut_store lsPnd:nil].firstObject; NSString *uuid = task[@"task_id"];
+    ut_req([task[@"title"] isEqual:@"统一页面保存"] && [task[@"notes"] isEqual:@"第一行\n第二行"] && [task[@"schedule_kind"] isEqual:@"timed"],@"标题说明及具体时刻一次写入");
+    ut_wait(^BOOL { return [ut_events.lastObject[@"alert"] isKindOfClass:NSDictionary.class] && [ut_events.lastObject[@"alert"][@"task_id"] isEqual:uuid]; },@"页面保存立即通知真实调度器触发");
+    ut_edt([ut_store rdTsk:uuid error:nil]);
+    ut_ui(^{ ut_req([[(UITextView *)ut_find(ut_top().view,@"edit.title") text] isEqual:task[@"title"]]
+        && [[(UITextView *)ut_find(ut_top().view,@"edit.notes") text] isEqual:task[@"notes"]],@"已有任务标题说明完整回填"); });
+    ut_title(@" \n "); ut_ui(^{ ut_req(![(UIButton *)ut_find(ut_top().view,@"edit.save") isEnabled],@"已有任务清空标题也禁用保存"); }); ut_title(task[@"title"]);
+    ut_date([NSDate dateWithTimeIntervalSinceNow:3600]); ut_tap(@"edit.save"); ut_home();
+    ut_wait(^BOOL { return ut_events.lastObject[@"alert"] == NSNull.null; },@"改为未来时刻立即撤下旧提醒");
+    NSDictionary *history = [ut_store lsOcc:uuid error:nil].firstObject;
+    ut_req([history[@"action"] isEqual:@"invalidated"] && [history[@"status"] isEqual:@"handled"],@"旧提醒处理记录永久失效");
+    NSDictionary *future = [ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil];
+    ut_req([future[@"alerts"] count] == 1 && [future[@"alerts"][0][@"remind_at"] doubleValue] > NSDate.date.timeIntervalSince1970 + 3500,@"后台计划仅保留新时刻");
+    // 旧候选已经进入展示队列时，提交后也不能显示。
+    __block NSDictionary *oldTask;
+    ut_ui(^{
+        oldTask = [ut_store crtTsk:@{@"title":@"队列旧时间",@"due_at":@(NSDate.date.timeIntervalSince1970-1)} error:nil];
+        [NSThread sleepForTimeInterval:1.2];
+        ut_req([ut_store updTsk:oldTask[@"task_id"] fields:@{@"due_at":@(NSDate.date.timeIntervalSince1970+3600)} error:nil],@"主线程排队期间提交新提醒时间");
+    });
+    NSString *oldID = oldTask[@"task_id"];
+    usleep(1200000);
+    ut_ui(^{ BOOL stale = NO; for (NSDictionary *event in ut_events) if ([event[@"alert"] isKindOfClass:NSDictionary.class] && [event[@"alert"][@"task_id"] isEqual:oldID]) stale = YES;
+        ut_req(!stale,@"排队旧提醒被展示前数据库核对拦截"); });
+    [ut_store delTsk:oldID error:nil];
+    // 实际跨过旧计时时刻，独立连接不得认领旧提醒。
+    NSTimeInterval oldTime = NSDate.date.timeIntervalSince1970 + 10;
+    NSDictionary *pending = [ut_store crtTsk:@{@"title":@"待修改计时",@"due_at":@(oldTime),@"deadline_at":@(oldTime+7200),@"urgency":@3,@"difficulty":@2,@"starred":@1,@"planned_duration":@90000,@"timezone_id":@"UTC"} error:nil];
+    NSString *pendingID = pending[@"task_id"]; ut_edt(pending); ut_tap(@"edit.more");
+    ut_ui(^{
+        ut_req([[(UITextField *)ut_find(ut_top().view,@"edit.duration") text] isEqual:@"1500"] && [[(UITextField *)ut_find(ut_top().view,@"edit.timezone") text] isEqual:@"UTC"],@"时区和预计投入回填");
+        ut_req([[(UIButton *)ut_find(ut_top().view,@"edit.urgency") configuration].title isEqual:@"紧急程度：高"] && [[(UIButton *)ut_find(ut_top().view,@"edit.difficulty") configuration].title isEqual:@"难易程度：一般"],@"紧急难度回填");
+        ut_req([(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"plan.timed") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.timed") isOn],@"计划和独立截止开关回填");
+        UIDatePicker *plan = (UIDatePicker *)ut_find(ut_top().view,@"plan.time"), *ddl = (UIDatePicker *)ut_find(ut_top().view,@"deadline.time");
+        ut_req(fabs(plan.date.timeIntervalSince1970-oldTime)<1 && fabs(ddl.date.timeIntervalSince1970-oldTime-7200)<1,@"计划截止保留原始绝对时刻精度");
+    });
+    ut_date([NSDate dateWithTimeIntervalSinceNow:3600]); ut_tap(@"edit.save"); ut_home();
+    ut_req(NSDate.date.timeIntervalSince1970 < oldTime,@"修改在旧计时到期之前提交");
+    while (NSDate.date.timeIntervalSince1970 < oldTime + 1) usleep(20000);
+    ut_req([ut_store lsOcc:pendingID error:nil].count == 0,@"修改后跨过旧时间仍无触发记录");
+    NSDictionary *changed = [ut_store rdTsk:pendingID error:nil];
+    ut_req([changed[@"urgency"] isEqual:@3] && [changed[@"difficulty"] isEqual:@2] && [changed[@"planned_duration"] isEqual:@90000],@"改时间保留全部未修改扩展字段");
+    ut_edt(changed); ut_title(@"取消不提交"); ut_tap(@"edit.cancel"); ut_home();
+    ut_req([[ut_store rdTsk:pendingID error:nil][@"title"] isEqual:@"待修改计时"],@"放弃草稿不改变任务或调度");
+    ut_edt(changed); ut_tap(@"edit.delete");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:UIAlertController.class]; },@"删除使用系统原生确认");
+    ut_req(![[ut_store rdTsk:pendingID error:nil][@"deleted"] boolValue],@"未确认删除前任务及计划保留");
+    ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil]; }); ut_tap(@"edit.cancel"); ut_home();
+    ut_req([ut_store delTsk:pendingID error:nil] && [ut_store delTsk:uuid error:nil],@"删除未来任务提交成功");
+    ut_wait(^BOOL { return [[ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil][@"alerts"] count] == 0; },@"删除后全部未来提醒失效");
+    ut_ui(^{ for (NSDictionary *event in ut_events) ut_req([event[@"error"] length] == 0,@"后台调度没有数据库错误"); [ut_sched stop]; });
+}
+
 // 为真实UIKit测试创建独立数据库和应用窗口。
 @interface UITestDel : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
@@ -324,10 +480,17 @@ static void ut_run(void) {
     [host addChildViewController:ut_nav]; ut_nav.view.frame = host.view.bounds;
     [host.view addSubview:ut_nav.view]; [ut_nav didMoveToParentViewController:host];
     [self.window makeKeyAndVisible]; ut_nav.view.frame = self.window.bounds;
+    if ([NSProcessInfo.processInfo.arguments containsObject:@"--inspect"]) {
+        [ut_store.path writeToFile:[ut_docs stringByAppendingPathComponent:@"InspectStore.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{ ut_mon(); }); return YES;
+    }
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @autoreleasepool {
             BOOL passed = YES; NSString *failure = @"";
-            @try { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); } @catch (NSException *exception) { passed = NO; failure = exception.reason; }
+            @try {
+                if (![NSProcessInfo.processInfo.arguments containsObject:@"--phase05"]) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
+                if (@available(iOS 16.0,*)) ut_edit();
+            } @catch (NSException *exception) { passed = NO; failure = exception.reason; }
             __block NSString *device, *runtime;
             ut_ui(^{ device = UIDevice.currentDevice.model; runtime = UIDevice.currentDevice.systemVersion; });
             NSDictionary *report = @{@"passed": @(passed), @"failure": failure, @"checks": ut_checks,

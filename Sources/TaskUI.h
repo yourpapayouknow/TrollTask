@@ -1,14 +1,7 @@
 #pragma once
 @class TaskStore;
 
-// 共用原生表单、主题按钮及面板布局。
-UILabel *tu_lbl(NSString *text);
-UIStackView *tu_stk(NSArray<UIView *> *views);
-UIStackView *tu_row(NSString *title, UIView *control);
-UIButton *tu_btn(NSString *title, NSString *icon, id target, SEL action);
-UIScrollView *tu_form(UIViewController *parent, UIStackView *fields, NSString *identifier);
-void tu_sheet(UIViewController *parent, UIViewController *content);
-void tu_err(UIViewController *view, NSError *error);
+// 为原生Objective-C验收入口声明Swift界面类型。
 
 // 编辑完整重复属性，保留未修改的例外和日期集合。
 @interface TaskRepeat : UIViewController <UITextViewDelegate>

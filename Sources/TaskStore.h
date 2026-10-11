@@ -12,12 +12,14 @@
 @property(nonatomic, readonly, strong) NSError *syncError;
 // 打开当前进程的共享存储。
 + (instancetype)shrd:(NSError **)error;
+// 在提交前复用存储层的标题与说明校验。
++ (BOOL)vldTxt:(NSString *)title notes:(NSString *)notes error:(NSError **)error;
 // 在指定绝对路径创建或迁移数据库。
 - (instancetype)initAt:(NSString *)path error:(NSError **)error;
 // 读取应用数据模型版本。
 - (NSInteger)schver:(NSError **)error;
 // 将多个存储操作作为同一事务提交。
-- (BOOL)wrTxn:(BOOL (^)(NSError **))work error:(NSError **)error;
+- (BOOL)wrTxn:(BOOL (NS_NOESCAPE ^)(NSError **))work error:(NSError **)error;
 // 创建稳定UUID的任务清单。
 - (NSDictionary *)crtLst:(NSString *)title error:(NSError **)error;
 // 修改清单名称。

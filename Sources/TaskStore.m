@@ -79,6 +79,13 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 
 @implementation TaskStore
 
+// 共用标题与说明规则，不开启事务或修改数据库。
++ (BOOL)vldTxt:(NSString *)title notes:(NSString *)notes error:(NSError **)error {
+    if (!ts_txt(title, 1024)) return ts_err(error, SQLITE_CONSTRAINT, @"任务标题无效");
+    if (![notes isKindOfClass:NSString.class] || notes.length > 8192) return ts_err(error, SQLITE_CONSTRAINT, @"详细说明过长或无效");
+    return YES;
+}
+
 // 打开当前进程的共享存储，失败后允许重试。
 + (instancetype)shrd:(NSError **)error {
     static TaskStore *store;
@@ -143,7 +150,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 }
 
 // 串行化连接使用并原子提交多步操作。
-- (BOOL)wrTxn:(BOOL (^)(NSError **))work error:(NSError **)error {
+- (BOOL)wrTxn:(BOOL (NS_NOESCAPE ^)(NSError **))work error:(NSError **)error {
     @synchronized(self) {
         if (!work) return [self dbErr:SQLITE_MISUSE message:@"缺少事务操作" error:error];
         if (_inTxn) {
@@ -297,8 +304,10 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 
 // 校验任务字段及跨字段关系。
 - (BOOL)vldTsk:(NSDictionary *)task error:(NSError **)error {
-    if (!ts_txt(task[@"title"], 1024) || ![task[@"notes"] isKindOfClass:NSString.class] || [task[@"notes"] length] > 8192
-        || ![task[@"timezone_id"] isKindOfClass:NSString.class] || ![NSTimeZone timeZoneWithName:task[@"timezone_id"]]
+    NSError *textError = nil;
+    if (![TaskStore vldTxt:task[@"title"] notes:task[@"notes"] error:&textError])
+        return [self dbErr:textError.code message:textError.localizedDescription error:error];
+    if (![task[@"timezone_id"] isKindOfClass:NSString.class] || ![NSTimeZone timeZoneWithName:task[@"timezone_id"]]
         || ![@[@"needsAction", @"completed"] containsObject:task[@"status"]]
         || ![@[@"none", @"daily", @"weekly", @"monthly", @"yearly", @"custom"] containsObject:task[@"recurrence_type"]])
         return [self dbErr:SQLITE_CONSTRAINT message:@"任务文本、时区或类型无效" error:error];

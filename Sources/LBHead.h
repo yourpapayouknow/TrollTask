@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #endif
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -64,12 +65,14 @@ extern char **environ;
 @interface LBApp : UIApplication
 @end
 
+#ifndef TT_SWIFT_BRIDGE
 @interface LBAppDel : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
 @end
 
 @interface LBSetCtl : UIViewController
 @end
+#endif
 
 @interface LBHudApp : UIApplication
 @end
@@ -104,12 +107,18 @@ int lb_hudmain(void);
 #endif
 
 #if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
+#ifdef LB_UI_TEST
+// 由独立验收入口替代设备HUD启动。
+BOOL lb_spawn(void);
+#endif
 // 创建统一外观的功能按钮。
 UIButton *lb_mkbtn(NSString *title, id target, SEL action);
 // 读取统一OLED强调色和MingCute模板图标。
 UIColor *lb_acnt(void);
 UIImage *lb_icon(NSString *name);
+#ifndef TT_SWIFT_BRIDGE
 #import "TaskUI.h"
+#endif
 #endif
 
 // 读取共享配置文件。
