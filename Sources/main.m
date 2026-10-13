@@ -1,6 +1,6 @@
 #import "LBHead.h"
 
-// 根据启动参数选择配置 App 或全局 HUD 模式。
+// 根据启动参数选择主App或独立TaskReminder服务。
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         if (argc > 1 && strcmp(argv[1], "--store") == 0) return ts_cli(argc - 2, argv + 2, TS_DB_PATH);

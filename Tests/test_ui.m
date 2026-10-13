@@ -8,7 +8,7 @@ static TaskStore *ut_store;
 static NSString *ut_docs;
 static NSMutableArray *ut_checks;
 static BOOL ut_spawn = YES;
-static TaskSched *ut_sched;
+static TaskReminder *ut_sched;
 static NSMutableArray *ut_events;
 
 // 仅在独立模拟器测试中替代设备root启动。
@@ -356,12 +356,11 @@ static void ut_sttng(void) {
 static void ut_mon(void) {
     ut_ui(^{
         ut_events = [NSMutableArray array];
-        TaskStore *reader = [[TaskStore alloc] initAt:ut_store.path error:nil];
-        ut_sched = [[TaskSched alloc] initStore:reader handler:^(NSDictionary *alert, NSError *error) {
+        ut_sched = [[TaskReminder alloc] initAt:ut_store.path handler:^(NSDictionary *alert, NSError *error) {
             [ut_events addObject:@{@"alert":alert ?: (id)NSNull.null,@"error":error.localizedDescription ?: @"",@"at":@(NSDate.date.timeIntervalSince1970)}];
             NSData *data = [NSJSONSerialization dataWithJSONObject:ut_events options:NSJSONWritingPrettyPrinted error:nil];
             [data writeToFile:[ut_docs stringByAppendingPathComponent:@"SchedulerEvents.json"] atomically:YES];
-        }];
+        } cleanup:^{} finish:^(__unused BOOL r){}];
         ut_req([ut_sched start:nil],@"独立连接启动真实后台调度");
     });
 }
@@ -532,6 +531,70 @@ static void ut_rpt(void) {
         ut_req(valid,@"真实重复调度没有数据库错误"); [ut_sched stop]; });
 }
 
+// 验证iPhone原生调度对全部到期轮次、处理推进和修改打断。
+static void ut_schd(void) {
+    for (NSDictionary *task in [ut_store lsTsks:nil]) if (![task[@"deleted"] boolValue]) [ut_store delTsk:task[@"task_id"] error:nil];
+    ut_mon(); NSMutableArray *tasks = [NSMutableArray array]; NSTimeInterval base = NSDate.date.timeIntervalSince1970 + 0.6;
+    for (NSInteger index = 0; index < 3; index++) {
+        NSDictionary *task = [ut_store crtTsk:@{@"title":@"绝对调度验收",@"due_at":@(base+index*0.3),@"timezone_id":@"UTC"} error:nil];
+        ut_req(task != nil,@"独立连接写入绝对时刻"); [tasks addObject:task];
+    }
+    ut_wait(^BOOL { for (NSDictionary *task in tasks) if ([ut_store lsOcc:task[@"task_id"] error:nil].count != 1) return NO; return YES; },@"未处理首条时其他到期轮次仍按时持久化");
+    NSMutableArray *occurrences = [NSMutableArray array];
+    for (NSDictionary *task in tasks) {
+        NSDictionary *occ = [ut_store lsOcc:task[@"task_id"] error:nil].firstObject; [occurrences addObject:occ];
+        NSTimeInterval delay = [occ[@"triggered_at"] doubleValue] - [task[@"due_at"] doubleValue];
+        ut_req(delay >= 0 && delay < 2 && [occ[@"status"] isEqual:@"triggered"],@"iPhone到期误差小于两秒且不提前触发");
+    }
+    for (NSUInteger index = 0; index < tasks.count; index++) {
+        ut_wait(^BOOL { return [ut_events.lastObject[@"alert"] isKindOfClass:NSDictionary.class] && [ut_events.lastObject[@"alert"][@"task_id"] isEqual:tasks[index][@"task_id"]]; },@"到期队列按提醒顺序展示");
+        NSTimeInterval handled = NSDate.date.timeIntervalSince1970;
+        ut_ui(^{ [ut_sched act:@"complete" until:nil occID:ut_events.lastObject[@"alert"][@"occurrence_id"]]; });
+        ut_wait(^BOOL { id alert = ut_events.lastObject[@"alert"]; return index+1 == tasks.count ? alert == NSNull.null
+            : [alert isKindOfClass:NSDictionary.class] && [alert[@"task_id"] isEqual:tasks[index+1][@"task_id"]]; },@"处理后立即展示下一条或进入空闲");
+        ut_req(NSDate.date.timeIntervalSince1970 - handled < 0.8,@"处理推进无需等待周期轮询");
+    }
+    NSDictionary *future = [ut_store crtTsk:@{@"title":@"未来调度验收",@"due_at":@(NSDate.date.timeIntervalSince1970+60)} error:nil];
+    ut_req(future != nil,@"创建未来调度任务");
+    ut_wait(^BOOL { return fabs(ut_sched.nextFireAt.timeIntervalSince1970-[future[@"due_at"] doubleValue])<0.001; },@"新建立即唤醒并设置nextFireAt");
+    NSTimeInterval updated = NSDate.date.timeIntervalSince1970+120;
+    ut_req([ut_store updTsk:future[@"task_id"] fields:@{@"due_at":@(updated)} error:nil],@"修改未来绝对时刻");
+    ut_wait(^BOOL { return fabs(ut_sched.nextFireAt.timeIntervalSince1970-updated)<0.001; },@"修改取消旧计时并重排最近任务");
+    ut_req([ut_store delTsk:future[@"task_id"] error:nil],@"删除未来调度任务");
+    ut_wait(^BOOL { return ut_sched.nextFireAt == nil; },@"删除立即解除最后一个计时");
+    NSData *data = [NSJSONSerialization dataWithJSONObject:occurrences options:NSJSONWritingPrettyPrinted error:nil];
+    ut_req([data writeToFile:[ut_docs stringByAppendingPathComponent:@"SchedulerTiming.json"] atomically:YES],@"保留原生Occurrence触发时刻证据");
+    ut_ui(^{ for (NSDictionary *event in ut_events) ut_req([event[@"error"] length] == 0,@"原生绝对调度没有数据库错误"); [ut_sched stop]; });
+}
+
+// 验证服务在原生iPhone进程中持锁、同步和显式窗口释放。
+static void ut_svc(void) {
+    NSString *path=[ut_docs stringByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingString:@".sqlite3"]];
+    TaskStore *writer=[[TaskStore alloc] initAt:path error:nil];
+    __block UIWindow *fixture; __block __weak UIWindow *released; __block __weak UIViewController *controller;
+    __block NSUInteger cleaned=0,finished=0; __block BOOL held=NO; __block TaskReminder *service;
+    ut_ui(^{ fixture=[[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]; fixture.rootViewController=[UIViewController new]; released=fixture; controller=fixture.rootViewController; });
+    ut_ui(^{
+        service=[[TaskReminder alloc] initAt:path handler:^(__unused NSDictionary *a,__unused NSError *e){} cleanup:^{
+            held=lb_svcup(); cleaned++; fixture.hidden=YES; fixture.rootViewController=nil; fixture=nil;
+        } finish:^(__unused BOOL r){ finished++; }];
+        ut_req([service open:nil] && !service.running && lb_svcup(),@"原生服务先持锁并加载数据库");
+        ut_req([service start:nil] && [service start:nil] && service.running,@"原生重复启动同一服务幂等");
+        NSError *error=nil;
+        TaskReminder *duplicate=[[TaskReminder alloc] initAt:path handler:^(__unused NSDictionary *a,__unused NSError *e){} cleanup:^{} finish:^(__unused BOOL r){}];
+        ut_req(![duplicate start:&error] && error.code==EWOULDBLOCK && service.running,@"原生第二服务受flock拒绝");
+    });
+    NSTimeInterval due=NSDate.date.timeIntervalSince1970+60;
+    ut_req([writer crtTsk:@{@"title":@"原生服务资源",@"due_at":@(due)} error:nil]!=nil,@"原生服务独立连接写入任务");
+    ut_wait(^BOOL { return fabs(service.nextFireAt.timeIntervalSince1970-due)<0.001; },@"原生Darwin通知立即同步服务计划");
+    notify_post(LB_STOP_NOTE);
+    ut_wait(^BOOL { return !service.running && finished==1 && released==nil && controller==nil; },@"服务停止释放原生窗口及控制器");
+    ut_ui(^{
+        ut_req(held && !lb_svcup() && cleaned==1 && service.nextFireAt==nil,@"窗口清理先于锁释放且计时解除");
+        [service stop]; ut_req(cleaned==1 && finished==1,@"重复停止没有重复清理或退出");
+    });
+}
+
 // 为真实UIKit测试创建独立数据库和应用窗口。
 @interface UITestDel : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
@@ -562,8 +625,12 @@ static void ut_rpt(void) {
             @try {
                 BOOL phase5 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase05"];
                 BOOL phase6 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase06"];
-                if (!phase5 && !phase6) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
-                if (@available(iOS 16.0,*)) { if (!phase6) ut_edit(); if (!phase5) ut_rpt(); }
+                BOOL phase7 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase07"];
+                BOOL phase8 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase08"];
+                if (!phase5 && !phase6 && !phase7 && !phase8) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
+                if (@available(iOS 16.0,*)) { if (!phase6 && !phase7 && !phase8) ut_edit(); if (!phase5 && !phase7 && !phase8) ut_rpt(); }
+                if (!phase5 && !phase6 && !phase8) ut_schd();
+                if (!phase5 && !phase6 && !phase7) ut_svc();
             } @catch (NSException *exception) { passed = NO; failure = exception.reason; }
             __block NSString *device, *runtime;
             ut_ui(^{ device = UIDevice.currentDevice.model; runtime = UIDevice.currentDevice.systemVersion; });

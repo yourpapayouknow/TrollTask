@@ -33,17 +33,25 @@
 @property(nonatomic, strong) UILabel *timeLabel;
 @property(nonatomic, strong) UIStackView *actions;
 @property(nonatomic, strong) UIStackView *snoozes;
-@property(nonatomic, strong) TaskSched *scheduler;
 @property(nonatomic, strong) NSDictionary *alert;
 @property(nonatomic, assign) BOOL acting;
 - (void)onTchDn:(CGPoint)point;
 - (void)onTchUp:(CGPoint)point;
 - (void)onTchCn;
 - (void)dspAlrt:(NSDictionary *)alert error:(NSError *)error;
+- (void)stpMon;
 @end
 
 static __weak LBHudCtl *s_lbhudctl = nil;
 static Class s_lbaxcls = nil;
+static TaskReminder *lb_reminder;
+static LBHudDel *lb_delegate;
+static dispatch_source_t lb_exesrc;
+static int lb_exefd = -1, lb_sbtok = -1;
+static void lb_hudclr(void);
+
+// 在释放服务资源后结束独立进程。
+static void lb_hudend(int code) { [lb_reminder stop]; lb_reminder = nil; exit(code); }
 
 // 动态加载无障碍底层事件解析类。
 static void lb_ldax(void) {
@@ -87,7 +95,6 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
 
 
 @implementation LBHudCtl {
-    int _configToken;
     int _testToken;
 }
 
@@ -95,7 +102,6 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
 - (void)viewDidLoad {
     [super viewDidLoad];
     s_lbhudctl = self;
-    _configToken = -1;
     _testToken = -1;
     self.view.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.88];
     UIVisualEffectView *card = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterialDark]];
@@ -245,30 +251,24 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     self.acting = YES;
     for (UIButton *button in self.actions.arrangedSubviews) button.enabled = NO;
     for (UIButton *button in self.snoozes.arrangedSubviews) button.enabled = NO;
-    [self.scheduler act:action until:until occID:self.alert[@"occurrence_id"]];
+    [lb_reminder act:action until:until occID:self.alert[@"occurrence_id"]];
 }
 
-// 监听共享配置与预览事件。
+// 窗口就绪后接入统一提醒服务并监听预览。
 - (void)startMon {
     __weak typeof(self) weakSelf = self;
     NSError *error = nil;
-    self.scheduler = [[TaskSched alloc] initStore:[TaskStore shrd:&error] handler:^(NSDictionary *alert, NSError *failure) {
-        [weakSelf dspAlrt:alert error:failure];
-    }];
-    if (error || ![self.scheduler start:&error]) { NSLog(@"调度器启动失败：%@", error); self.scheduler = nil; }
-    if (notify_register_dispatch(LB_CFG_NOTE, &_configToken, dispatch_get_main_queue(), ^(__unused int token) {
-        [weakSelf loadCfg];
-    }) != NOTIFY_STATUS_OK) exit(EXIT_FAILURE);
     if (notify_register_dispatch(LB_TEST_NOTE, &_testToken, dispatch_get_main_queue(), ^(__unused int token) {
         [weakSelf forceTest];
-    }) != NOTIFY_STATUS_OK) exit(EXIT_FAILURE);
-    [self loadCfg];
-    notify_post(LB_READY_NOTE);
+    }) != NOTIFY_STATUS_OK) lb_hudend(EXIT_FAILURE);
+    if (![lb_reminder start:&error]) { NSLog(@"TaskReminder启动失败：%@", error); lb_hudend(EXIT_FAILURE); }
 }
 
-// 同步服务停用配置。
-- (void)loadCfg {
-    if (![lb_ldcfg()[@"enabled"] boolValue]) notify_post(LB_STOP_NOTE);
+// 清除预览通知、触摸与当前显示。
+- (void)stpMon {
+    if (_testToken >= 0) { notify_cancel(_testToken); _testToken = -1; }
+    [self onTchCn]; [self dspAlrt:nil error:nil];
+    if (s_lbhudctl == self) s_lbhudctl = nil;
 }
 
 // 显示手动预览并确认就绪。
@@ -283,7 +283,6 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
 
 // 注销共享通知。
 - (void)dealloc {
-    if (_configToken >= 0) notify_cancel(_configToken);
     if (_testToken >= 0) notify_cancel(_testToken);
     if (s_lbhudctl == self) s_lbhudctl = nil;
 }
@@ -311,10 +310,10 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     [[window _boundContext] setSecure:YES];
 
     Class hostClass = objc_getClass("SBSAccessibilityWindowHostingController");
-    if (!hostClass) return NO;
+    if (!hostClass) { lb_hudend(EXIT_FAILURE); return NO; }
     _hostingController = [[hostClass alloc] init];
     SEL registerSelector = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
-    if (![_hostingController respondsToSelector:registerSelector]) return NO;
+    if (![_hostingController respondsToSelector:registerSelector]) { lb_hudend(EXIT_FAILURE); return NO; }
     unsigned int contextId = [window _contextId];
     double level = window.windowLevel;
     NSMethodSignature *signature = [NSMethodSignature signatureWithObjCTypes:"v@:Id"];
@@ -331,6 +330,12 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     _controller.hudWindow = window;
     [_controller startMon];
     return YES;
+}
+
+// 先隐藏系统窗口，再解除视图和托管控制器持有。
+- (void)stp {
+    [_controller stpMon]; self.window.hidden = YES; self.window.rootViewController = nil;
+    self.window = nil; _hostingController = nil; _controller = nil;
 }
 
 @end
@@ -353,59 +358,56 @@ static void (*lb_fn0(const char *name))(void) {
     return (void (*)(void))dlsym(RTLD_DEFAULT, name);
 }
 
-static int lb_lockfd = -1;
-static dispatch_source_t lb_exesrc;
-static TaskStore *lb_store;
+// 清除进程观察者和已有私有HUD窗口。
+static void lb_hudclr(void) {
+    if (lb_sbtok >= 0) { notify_cancel(lb_sbtok); lb_sbtok = -1; }
+    if (lb_exesrc) { dispatch_source_cancel(lb_exesrc); lb_exesrc = nil; }
+    if (lb_exefd >= 0) { close(lb_exefd); lb_exefd = -1; }
+    [lb_delegate stp];
+    if (lb_delegate) UIApplication.sharedApplication.delegate = nil;
+    lb_delegate = nil; s_lbhudctl = nil;
+}
 
 // 在 App 可执行文件被删除时退出 HUD。
 static void lb_monexe(void) {
     char path[PATH_MAX];
     uint32_t size = sizeof(path);
     if (_NSGetExecutablePath(path, &size) != 0) return;
-    int handle = open(path, O_EVTONLY);
-    if (handle < 0) return;
+    lb_exefd = open(path, O_EVTONLY | O_CLOEXEC);
+    if (lb_exefd < 0) return;
 
-    lb_exesrc = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, handle, DISPATCH_VNODE_DELETE, dispatch_get_main_queue());
+    lb_exesrc = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, lb_exefd, DISPATCH_VNODE_DELETE, dispatch_get_main_queue());
     dispatch_source_set_event_handler(lb_exesrc, ^{
-        close(handle);
-        exit(EXIT_SUCCESS);
+        lb_hudend(EXIT_SUCCESS);
     });
     dispatch_resume(lb_exesrc);
 }
 
-// 运行全局 HUD 进程。
+// 运行长期TaskReminder服务，主App只负责启动和提交数据。
 int lb_hudmain(void) {
-    lb_lockfd = lb_lckhud();
-    if (lb_lockfd < 0) return EXIT_FAILURE;
     NSError *error = nil;
-    lb_store = [TaskStore shrd:&error];
-    if (!lb_store) {
-        NSLog(@"TaskStore初始化失败：%@", error);
-        close(lb_lockfd);
-        lb_lockfd = -1;
-        return EXIT_FAILURE;
+    lb_reminder = [[TaskReminder alloc] initAt:TS_DB_PATH handler:^(NSDictionary *alert, NSError *failure) {
+        [s_lbhudctl dspAlrt:alert error:failure];
+    } cleanup:^{ lb_hudclr(); } finish:^(BOOL restart) { if (restart) lb_spawn(); lb_hudend(EXIT_SUCCESS); }];
+    if (![lb_reminder open:&error]) {
+        lb_reminder = nil;
+        if ([error.domain isEqual:NSPOSIXErrorDomain] && (error.code == EWOULDBLOCK || error.code == ECANCELED)) return EXIT_SUCCESS;
+        NSLog(@"TaskReminder初始化失败：%@", error); return EXIT_FAILURE;
     }
     lb_monexe();
 
-    int stopToken = 0;
-    notify_register_dispatch(LB_STOP_NOTE, &stopToken, dispatch_get_main_queue(), ^(__unused int token) {
+    if (notify_register_dispatch("SBSpringBoardDidLaunchNotification", &lb_sbtok, dispatch_get_main_queue(), ^(__unused int token) {
+        [lb_reminder stop]; lb_reminder = nil;
+        if ([lb_ldcfg()[@"enabled"] boolValue]) lb_spawn();
         exit(EXIT_SUCCESS);
-    });
-    int springBoardToken = 0;
-    notify_register_dispatch("SBSpringBoardDidLaunchNotification", &springBoardToken, dispatch_get_main_queue(), ^(__unused int token) {
-        flock(lb_lockfd, LOCK_UN);
-        close(lb_lockfd);
-        lb_lockfd = -1;
-        lb_spawn();
-        exit(EXIT_SUCCESS);
-    });
+    }) != NOTIFY_STATUS_OK) lb_hudend(EXIT_FAILURE);
 
-    if (!lb_ldfw()) return EXIT_FAILURE;
+    if (!lb_ldfw()) lb_hudend(EXIT_FAILURE);
     void (*gsInit)(void) = lb_fn0("GSInitialize");
     void (*bksStart)(void) = lb_fn0("BKSDisplayServicesStart");
     void (*uiInit)(void) = lb_fn0("UIApplicationInitialize");
     void (*uiSingle)(Class) = (void (*)(Class))dlsym(RTLD_DEFAULT, "UIApplicationInstantiateSingleton");
-    if (!gsInit || !bksStart || !uiInit || !uiSingle) return EXIT_FAILURE;
+    if (!gsInit || !bksStart || !uiInit || !uiSingle) lb_hudend(EXIT_FAILURE);
 
     [UIScreen initialize];
     CFRunLoopGetCurrent();
@@ -414,9 +416,9 @@ int lb_hudmain(void) {
     uiInit();
     uiSingle([LBHudApp class]);
 
-    LBHudDel *delegate = [[LBHudDel alloc] init];
+    lb_delegate = [[LBHudDel alloc] init];
     UIApplication *app = UIApplication.sharedApplication;
-    app.delegate = delegate;
+    app.delegate = lb_delegate;
     [app _accessibilityInit];
 
     // 预加载无障碍事件解析类（必须在回调注册前就绪）。
@@ -438,5 +440,6 @@ int lb_hudmain(void) {
 
     [app __completeAndRunAsPlugin];
     CFRunLoopRun();
+    [lb_reminder stop]; lb_reminder = nil;
     return EXIT_SUCCESS;
 }

@@ -1,6 +1,3 @@
-// 集中复用原生桥接中的UIKit、Foundation与QuartzCore类型。
-typealias TaskFields = [String: Any]
-
 // 定义压暗青橙渐变及统一文字颜色。
 enum TaskTheme {
     static let teal = UIColor(red: 8/255, green: 43/255, blue: 40/255, alpha: 1)

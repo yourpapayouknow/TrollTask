@@ -1,0 +1,15 @@
+#pragma once
+// 为HUD、CLI和宿主验收声明同一Swift绝对时间调度器。
+@interface TaskScheduler : NSObject
+@property(nonatomic, readonly, copy) NSDate *nextFireAt;
+// 注入共享存储与主线程展示回调。
+- (instancetype)initStore:(TaskStore *)store handler:(void (^)(NSDictionary *, NSError *))handler;
+// 注册变化通知并读取最近的绝对时刻。
+- (BOOL)start:(NSError **)error;
+// 撤销计时和观察者。
+- (void)stop;
+// 打断原计划并合并重读请求。
+- (void)refresh;
+// 原子处理当前展示轮次并立即调度下一条。
+- (void)act:(NSString *)action until:(NSNumber *)until occID:(NSString *)occID;
+@end

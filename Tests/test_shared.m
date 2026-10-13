@@ -74,6 +74,7 @@ static void tstipc(void) {
 static void tstlock(void) {
     int handle = lb_lckhud();
     assert(handle >= 0);
+    assert(lb_svcup() && (fcntl(handle, F_GETFD) & FD_CLOEXEC));
     assert(lb_lckhud() == -1);
     char text[64] = {0};
     assert(pread(handle, text, sizeof(text) - 1, 0) > 0);
@@ -88,6 +89,7 @@ static void tstlock(void) {
     assert(waitpid(child, &status, 0) == child);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS);
     close(handle);
+    assert(!lb_svcup());
     handle = lb_lckhud();
     assert(handle >= 0);
     close(handle);

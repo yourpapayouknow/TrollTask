@@ -79,6 +79,7 @@ extern char **environ;
 
 @interface LBHudDel : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
+- (void)stp;
 @end
 
 @interface LBHudWin : UIWindow
@@ -98,19 +99,12 @@ extern char **environ;
 + (instancetype)representationWithHIDEvent:(void *)event hidStreamIdentifier:(NSString *)identifier;
 @end
 
-// 启动独立系统HUD进程。
-BOOL lb_spawn(void);
-
-// 运行全局 HUD 进程。
+// 运行TaskReminder独立进程及其系统HUD。
 int lb_hudmain(void);
 
 #endif
 
 #if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
-#ifdef LB_UI_TEST
-// 由独立验收入口替代设备HUD启动。
-BOOL lb_spawn(void);
-#endif
 // 创建统一外观的功能按钮。
 UIButton *lb_mkbtn(NSString *title, id target, SEL action);
 // 读取统一OLED强调色和MingCute模板图标。
@@ -130,6 +124,11 @@ BOOL lb_svcfg(NSDictionary *config);
 // 获取HUD单实例锁。
 int lb_lckhud(void);
 
+// 检查既有提醒服务的真实锁状态。
+BOOL lb_svcup(void);
+// 使用现有persona方式幂等启动提醒服务。
+BOOL lb_spawn(void);
+
 // 判断从按钮内按下并在按钮内结束的触摸。
 BOOL lb_btntap(BOOL *active, BOOL inside, BOOL down);
 
@@ -139,4 +138,7 @@ NSString *lb_shrt(NSString *text);
 // 集中声明待办存储模块。
 #import "TaskStore.h"
 #import "TaskRule.h"
-#import "TaskSched.h"
+#ifndef TT_SWIFT_BRIDGE
+#import "TaskScheduler.h"
+#import "TaskReminder.h"
+#endif

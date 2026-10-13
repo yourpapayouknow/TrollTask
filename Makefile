@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.7.0.tipa
+TIPA := $(BUILD)/TrollTask-0.9.0.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
@@ -14,7 +14,7 @@ MING_FILES := $(shell find Resources/MingCute -type f)
 
 SWIFT_SOURCES := $(wildcard Sources/*.swift)
 SWIFT_FLAGS := -swift-version 5 -module-name TrollTask -parse-as-library -whole-module-optimization -warnings-as-errors -ISources -IVendor/libical -import-objc-header Sources/SwiftHead.h
-M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m
+M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m
 OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(BUILD)/storecli.o $(BUILD)/TaskSwift.o
 
 CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources -IVendor/libical
@@ -27,10 +27,13 @@ ICAL_SIM := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-sim/%.o,$(ICAL_SRCS))
 SIM_CC := xcrun --sdk iphonesimulator clang
 SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -IVendor/libical
 HEADERS := $(wildcard Sources/*.h)
+CORE_SWIFT := Sources/SwiftHead.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift
+HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical
+HOST_OBJECTS := $(BUILD)/host/TaskStore.o $(BUILD)/host/TaskRule.o $(BUILD)/host/LBShared.o $(BUILD)/host/TaskScheduler.o
 ICAL_HEADERS := $(wildcard Vendor/libical/*.h)
 ICAL_FILES := $(wildcard Vendor/libical/* Vendor/libical/LICENSES/*)
 
-.PHONY: all package test test-rule test-ui clean inspect icons serve store
+.PHONY: all package test test-rule test-sched test-reminder test-ui clean inspect icons serve store
 
 icons: $(ICON_SOURCE)
 	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
@@ -86,10 +89,11 @@ test: | $(BUILD)
 	python3 Tests/test_project.py
 	$(MAKE) $(BUILD)/ical-host.a
 	$(MAKE) test-rule
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation -lsqlite3 Tests/test_store.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-host.a -o $(BUILD)/test_store
+	$(MAKE) $(BUILD)/test_store $(BUILD)/test_sync
 	$(BUILD)/test_store
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation -lsqlite3 Tests/test_sync.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-host.a -o $(BUILD)/test_sync
 	$(BUILD)/test_sync
+	$(MAKE) test-sched
+	$(MAKE) test-reminder
 	$(MAKE) store
 	PYTHONPATH=scripts python3 -B Tests/test_cli.py
 
@@ -101,8 +105,33 @@ $(BUILD)/test_rule: Tests/test_rule.m Sources/TaskRule.m $(HEADERS) $(BUILD)/ica
 
 store: $(BUILD)/taskstore
 
-$(BUILD)/taskstore: cli/storecli.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(HEADERS) $(BUILD)/ical-host.a | $(BUILD)
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DTT_STORE_CLI -ISources -IVendor/libical -framework Foundation -lsqlite3 cli/storecli.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m $(BUILD)/ical-host.a -o $@
+$(BUILD)/host/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) Makefile
+	mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_FLAGS) -c $< -o $@
+
+$(BUILD)/host/test_%.o: Tests/test_%.m $(HEADERS) Makefile
+	mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_FLAGS) -c $< -o $@
+
+$(BUILD)/host/TaskScheduler.o: $(CORE_SWIFT) $(HEADERS) $(ICAL_HEADERS) Makefile
+	mkdir -p $(dir $@)
+	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O -emit-object $(CORE_SWIFT) -o $@
+
+$(BUILD)/test_store $(BUILD)/test_sync $(BUILD)/test_sched $(BUILD)/test_reminder: $(BUILD)/test_%: $(BUILD)/host/test_%.o $(HOST_OBJECTS) $(BUILD)/ical-host.a
+	xcrun --sdk macosx swiftc $^ -framework Foundation -lsqlite3 -o $@
+
+test-sched: $(BUILD)/test_sched
+	$(BUILD)/test_sched
+
+test-reminder: $(BUILD)/test_reminder
+	$(BUILD)/test_reminder
+
+$(BUILD)/host/storecli.o: cli/storecli.m $(HEADERS) Makefile
+	mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_FLAGS) -DTT_STORE_CLI -c $< -o $@
+
+$(BUILD)/taskstore: $(BUILD)/host/storecli.o $(HOST_OBJECTS) $(BUILD)/ical-host.a
+	xcrun --sdk macosx swiftc $^ -framework Foundation -lsqlite3 -o $@
 
 $(BUILD)/ical-ios/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
 	mkdir -p $(dir $@)
@@ -125,7 +154,7 @@ $(BUILD)/ical-sim/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
 $(BUILD)/ical-sim.a: $(ICAL_SIM)
 	xcrun ar rcs $@ $^
 
-UI_M_SOURCES := Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m Sources/TaskSched.m
+UI_M_SOURCES := Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m
 UI_OBJECTS := $(patsubst Sources/%.m,$(BUILD)/ui/%.o,$(UI_M_SOURCES)) $(BUILD)/ui/test_ui.o $(BUILD)/ui/TaskSwift.o
 SIM_SDK := $(shell xcrun --sdk iphonesimulator --show-sdk-path)
 

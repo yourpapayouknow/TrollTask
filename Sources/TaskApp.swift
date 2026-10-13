@@ -45,7 +45,7 @@
         if !lb_svcfg(["enabled": monitor.isOn]) { monitor.isOn.toggle(); stat("保存失败") }
         else if monitor.isOn {
             if !lb_spawn() { monitor.isOn = false; _ = lb_svcfg(["enabled": false]); stat("启动失败") } else { stat("预览浮层") }
-        } else { notify_post(LB_STOP_NOTE); stat("预览浮层") }
+        } else { stat("预览浮层") }
         sync()
     }
     // 请求预览并等待HUD就绪。

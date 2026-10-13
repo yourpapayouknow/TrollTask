@@ -220,7 +220,7 @@ static void tstcycles(NSString *path) {
 
 // 在独立接收进程实际运行HUD使用的调度器。
 static int tstmonitor(NSString *path) {
-    TaskSched *scheduler = [[TaskSched alloc] initStore:tstopen(path) handler:^(NSDictionary *alert, NSError *error) {
+    TaskScheduler *scheduler = [[TaskScheduler alloc] initStore:tstopen(path) handler:^(NSDictionary *alert, NSError *error) {
         assert((!error));
         NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"task_id": alert[@"task_id"] ?: (id)NSNull.null} options:0 error:nil];
         fwrite(data.bytes, 1, data.length, stdout); putchar('\n'); fflush(stdout);

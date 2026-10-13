@@ -97,7 +97,7 @@ int ts_cli(int argc, char *argv[], NSString *path) {
     NSMutableArray *args = [NSMutableArray array];
     for (int index = 0; index < argc; index++) [args addObject:@(argv[index])];
     if (store && args.count == 1 && [args[0] isEqual:@"watch"]) {
-        TaskSched *scheduler = [[TaskSched alloc] initStore:store handler:^(NSDictionary *alert, NSError *failure) {
+        TaskScheduler *scheduler = [[TaskScheduler alloc] initStore:store handler:^(NSDictionary *alert, NSError *failure) {
             NSData *line = [NSJSONSerialization dataWithJSONObject:@{@"alert": alert ?: (id)NSNull.null, @"error": failure.localizedDescription ?: (id)NSNull.null}
                 options:NSJSONWritingSortedKeys error:nil];
             fwrite(line.bytes, 1, line.length, stdout); putchar('\n'); fflush(stdout);
