@@ -12,7 +12,7 @@ final class TaskCell: UITableViewCell {
         check.translatesAutoresizingMaskIntoConstraints = false; star.translatesAutoresizingMaskIntoConstraints = false
         var config = check.configuration; config?.preferredSymbolConfigurationForImage = .init(pointSize: 20); check.configuration = config
         titleLabelView.numberOfLines = 0; titleLabelView.adjustsFontSizeToFitWidth = false
-        for label in [day, clock] { label.textColor = TaskTheme.muted; label.font = .preferredFont(forTextStyle: .subheadline) }
+        for label in [day, clock] { label.textColor = TaskTheme.muted; label.font = lb_fnt(.subheadline, nil) }
         heights = [titleLabelView, day, clock].map { $0.heightAnchor.constraint(equalToConstant: 1) }
         let labels = tu_stk([titleLabelView, day, clock]); labels.translatesAutoresizingMaskIntoConstraints = false
         [check, labels, star].forEach { contentView.addSubview($0) }
@@ -37,8 +37,8 @@ final class TaskCell: UITableViewCell {
         check.removeTarget(nil, action: nil, for: .touchUpInside); star.removeTarget(nil, action: nil, for: .touchUpInside)
         check.addTarget(owner, action: #selector(TaskHome.tglTsk(_:)), for: .touchUpInside); star.addTarget(owner, action: #selector(TaskHome.tglStar(_:)), for: .touchUpInside)
         titleLabelView.text = task["title"] as? String; titleLabelView.accessibilityLabel = titleLabelView.text
-        titleLabelView.font = .preferredFont(forTextStyle: .body, compatibleWith: owner.traitCollection)
-        day.font = .preferredFont(forTextStyle: .subheadline, compatibleWith: owner.traitCollection); clock.font = day.font
+        titleLabelView.font = lb_fnt(.body, owner.traitCollection)
+        day.font = lb_fnt(.subheadline, owner.traitCollection); clock.font = day.font
         titleLabelView.textColor = complete ? TaskTheme.muted : TaskTheme.ink
         indentationLevel = task["parent_id"] is NSNull ? 0 : 1; indentationWidth = 4
         let stamp = task[complete ? "completed_at" : "remind_at"] as? NSNumber ?? task["due_at"] as? NSNumber ?? task["deadline_at"] as? NSNumber
@@ -75,8 +75,6 @@ final class TaskCell: UITableViewCell {
     // 创建横向清单、透明列表和底部功能入口。
     override func viewDidLoad() {
         super.viewDidLoad(); title = "待办"
-        let bar = UINavigationBarAppearance(); bar.configureWithTransparentBackground(); bar.titleTextAttributes = [.foregroundColor: TaskTheme.ink]
-        navigationController?.navigationBar.standardAppearance = bar; navigationController?.navigationBar.scrollEdgeAppearance = bar; navigationController?.navigationBar.tintColor = lb_acnt()
         navigationItem.rightBarButtonItem = UIBarButtonItem(customView: tu_ibtn("settings", "后台设置", "home.settings", self, #selector(sttng)))
         let create = tu_ibtn("add", "新建待办", "home.create", self, #selector(crt)); var config = create.configuration; config?.baseBackgroundColor = lb_acnt(); config?.baseForegroundColor = .black; create.configuration = config
         let buttons = [tu_ibtn("menu", "选择清单", "home.lists", self, #selector(lstMenu)), create, tu_ibtn("more", "清单选项", "home.more", self, #selector(more))]
@@ -98,7 +96,7 @@ final class TaskCell: UITableViewCell {
     // 刷新共享数据。
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); rfrsh() }
     // 适应动态字体高度。
-    override func viewWillLayoutSubviews() { super.viewWillLayoutSubviews(); tabHeight.constant = max(52, ceil(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traitCollection).lineHeight) + 8) }
+    override func viewWillLayoutSubviews() { super.viewWillLayoutSubviews(); tabHeight.constant = max(52, ceil(lb_fnt(.headline, traitCollection).lineHeight) + 16) }
     // 注册跨进程数据通知。
     private func reg() {
         guard token < 0, let store = store else { return }
@@ -274,7 +272,7 @@ final class TaskCell: UITableViewCell {
     }
     // 避免大字号折叠标题溢出。
     func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        section != 0 && !completed.isEmpty ? max(44, ceil(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traitCollection).lineHeight + 8)) : 0.01
+        section != 0 && !completed.isEmpty ? max(44, ceil(lb_fnt(.headline, traitCollection).lineHeight + 16)) : 0.01
     }
     // 点击文字区域编辑。
     func tableView(_ tableView: UITableView, didSelectRowAt path: IndexPath) {

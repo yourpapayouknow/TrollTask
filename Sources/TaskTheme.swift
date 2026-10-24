@@ -1,11 +1,19 @@
-// 定义压暗青橙渐变及统一文字颜色。
+// 定义磨砂底层的青橙色与统一文字颜色。
 enum TaskTheme {
-    static let teal = UIColor(red: 8/255, green: 43/255, blue: 40/255, alpha: 1)
+    static let teal = UIColor(red: 18/255, green: 96/255, blue: 86/255, alpha: 1)
     static let base = UIColor(red: 8/255, green: 31/255, blue: 32/255, alpha: 1)
-    static let orange = UIColor(red: 53/255, green: 33/255, blue: 22/255, alpha: 1)
+    static let orange = UIColor(red: 112/255, green: 68/255, blue: 42/255, alpha: 1)
     static let ink = UIColor(white: 244/255, alpha: 1)
-    static let muted = UIColor(red: 163/255, green: 173/255, blue: 178/255, alpha: 1)
+    static let muted = UIColor(red: 196/255, green: 206/255, blue: 206/255, alpha: 1)
     static let danger = UIColor(red: 1, green: 138/255, blue: 128/255, alpha: 1)
+}
+
+// 复用参考项目的原生磨砂材质与圆角描边。
+func tu_gls() -> UIVisualEffectView {
+    let glass = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+    glass.layer.cornerRadius = 20; glass.layer.cornerCurve = .continuous; glass.clipsToBounds = true
+    glass.layer.borderWidth = 1 / UIScreen.main.scale; glass.layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
+    return glass
 }
 
 // 用系统图层绘制低亮渐变，离屏或减少动态效果时停止动画。
@@ -22,6 +30,9 @@ final class TaskBackdrop: UIView {
         gradient.locations = [0, 0.5, 1]
         gradient.startPoint = CGPoint(x: 0, y: 0)
         gradient.endPoint = CGPoint(x: 1, y: 1)
+        let material = tu_gls(); material.accessibilityIdentifier = "theme.material"; material.isUserInteractionEnabled = false
+        material.layer.cornerRadius = 0; material.layer.borderWidth = 0; material.frame = bounds
+        material.autoresizingMask = [.flexibleWidth, .flexibleHeight]; addSubview(material)
         for name in [UIAccessibility.reduceMotionStatusDidChangeNotification, UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 self?.mtn(note.name != UIApplication.willResignActiveNotification)
@@ -48,22 +59,35 @@ final class TaskBackdrop: UIView {
     deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
 }
 
-// 统一所有Swift页面的渐变背景。
+// 统一导航栏的大字与透明表面。
+func tu_nav(_ page: UIViewController) {
+    page.overrideUserInterfaceStyle = .dark
+    let bar = UINavigationBarAppearance(); bar.configureWithTransparentBackground()
+    bar.titleTextAttributes = [.foregroundColor: TaskTheme.ink, .font: lb_fnt(.title1, page.traitCollection)!]
+    bar.largeTitleTextAttributes = bar.titleTextAttributes
+    for item in [bar.buttonAppearance, bar.doneButtonAppearance, bar.backButtonAppearance] {
+        item.normal.titleTextAttributes = [.foregroundColor: lb_acnt()!, .font: lb_fnt(.headline, page.traitCollection)!]
+    }
+    let navigation = page.navigationController?.navigationBar
+    navigation?.standardAppearance = bar; navigation?.scrollEdgeAppearance = bar; navigation?.compactAppearance = bar; navigation?.tintColor = lb_acnt()
+}
+
+// 统一所有Swift页面的磨砂与青橙底层。
 class TaskScreen: UIViewController {
     // 在安全区内容下插入原生背景。
     override func viewDidLoad() {
         super.viewDidLoad(); view.backgroundColor = TaskTheme.base; view.tintColor = lb_acnt()
         let backdrop = TaskBackdrop(frame: view.bounds)
         backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]; view.insertSubview(backdrop, at: 0)
+        tu_nav(self)
     }
 }
 
-// 创建透明青绿按钮并复用原生统一形状。
+// 复用统一圆角按钮并设置模板图标。
 func tu_btn(_ title: String?, _ icon: String? = nil, _ target: Any? = nil, _ action: Selector? = nil) -> UIButton {
     let button = lb_mkbtn(title, target, action)!
     var config = button.configuration!
-    config.baseBackgroundColor = .clear; config.baseForegroundColor = lb_acnt()
-    config.image = icon.flatMap { lb_icon($0) }; config.imagePadding = 4
+    config.image = icon.flatMap { lb_icon($0) }; config.imagePadding = 8
     button.configuration = config; button.tintColor = lb_acnt()
     button.contentHorizontalAlignment = title?.isEmpty == false ? .leading : .center
     button.titleLabel?.adjustsFontForContentSizeCategory = true
@@ -78,15 +102,15 @@ func tu_ibtn(_ icon: String, _ label: String, _ id: String, _ target: Any?, _ ac
 }
 // 创建动态字体标签。
 func tu_lbl(_ text: String?) -> UILabel {
-    let label = UILabel(); label.text = text; label.font = .preferredFont(forTextStyle: .body)
+    let label = UILabel(); label.text = text; label.font = lb_fnt(.body, nil)
     label.adjustsFontForContentSizeCategory = true; label.textColor = TaskTheme.ink
-    label.adjustsFontSizeToFitWidth = true; label.minimumScaleFactor = 0.5
+    label.numberOfLines = 0; label.adjustsFontSizeToFitWidth = false
     label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     return label
 }
 // 创建唯一间距的纵向布局。
 func tu_stk(_ views: [UIView]) -> UIStackView {
-    let stack = UIStackView(arrangedSubviews: views); stack.axis = .vertical; stack.spacing = 4; return stack
+    let stack = UIStackView(arrangedSubviews: views); stack.axis = .vertical; stack.spacing = 8; return stack
 }
 // 创建标签与原生控件横向行。
 func tu_row(_ title: String, _ control: UIView) -> UIStackView {
@@ -100,11 +124,11 @@ func tu_row(_ title: String, _ control: UIView) -> UIStackView {
 // 约束单列最大宽度和统一边距。
 func tu_wdth(_ content: UIView, _ parent: UIView) {
     content.translatesAutoresizingMaskIntoConstraints = false
-    let width = content.widthAnchor.constraint(equalTo: parent.safeAreaLayoutGuide.widthAnchor, constant: -8); width.priority = .defaultHigh
+    let width = content.widthAnchor.constraint(equalTo: parent.safeAreaLayoutGuide.widthAnchor, constant: -24); width.priority = .defaultHigh
     NSLayoutConstraint.activate([width, content.widthAnchor.constraint(lessThanOrEqualToConstant: 680),
         content.centerXAnchor.constraint(equalTo: parent.safeAreaLayoutGuide.centerXAnchor),
-        content.leadingAnchor.constraint(greaterThanOrEqualTo: parent.safeAreaLayoutGuide.leadingAnchor, constant: 4),
-        content.trailingAnchor.constraint(lessThanOrEqualTo: parent.safeAreaLayoutGuide.trailingAnchor, constant: -4)])
+        content.leadingAnchor.constraint(greaterThanOrEqualTo: parent.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+        content.trailingAnchor.constraint(lessThanOrEqualTo: parent.safeAreaLayoutGuide.trailingAnchor, constant: -12)])
 }
 // 使用原生键盘布局指南避让输入。
 @discardableResult func tu_form(_ parent: UIViewController, _ fields: UIStackView, _ id: String) -> UIScrollView {
@@ -153,6 +177,7 @@ func tu_sheet(_ parent: UIViewController, _ content: UIViewController) {
         sheet?.detents = [.custom(identifier: .init("content")) { min(height, $0.maximumDetentValue) }, .large()]
     }
     sheet?.prefersGrabberVisible = true; parent.present(content, animated: true)
+    sheet?.preferredCornerRadius = 20
 }
 // 请求原生删除确认。
 func tu_cfrm(_ parent: UIViewController, _ title: String, _ work: @escaping () -> Void) {
@@ -172,6 +197,7 @@ final class TaskMenu: UITableViewController {
     // 设置透明菜单及关闭入口。
     override func viewDidLoad() {
         super.viewDidLoad(); tableView.backgroundView = TaskBackdrop(frame: tableView.bounds); tableView.backgroundColor = .clear
+        tu_nav(self)
         tableView.separatorColor = .clear; tableView.rowHeight = UITableView.automaticDimension; tableView.estimatedRowHeight = 52
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "关闭", style: .plain, target: self, action: #selector(cls))
     }
@@ -183,7 +209,7 @@ final class TaskMenu: UITableViewController {
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let item = actions[indexPath.row]; let cell = UITableViewCell(style: .default, reuseIdentifier: nil); cell.backgroundColor = .clear
         var content = UIListContentConfiguration.cell(); content.text = item.title; content.image = item.image; content.textProperties.numberOfLines = 0
-        content.textProperties.font = .preferredFont(forTextStyle: .body)
+        content.textProperties.font = lb_fnt(.body, traitCollection)
         content.textProperties.color = item.attributes.contains(.disabled) ? TaskTheme.muted : (item.attributes.contains(.destructive) ? TaskTheme.danger : TaskTheme.ink)
         content.imageProperties.tintColor = lb_acnt(); content.directionalLayoutMargins = .init(top: 4, leading: 4, bottom: 4, trailing: 4)
         cell.contentConfiguration = content; cell.accessibilityIdentifier = item.identifier.rawValue

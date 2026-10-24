@@ -73,12 +73,12 @@ final class TaskDate {
             more.menu = UIMenu(children: actions); more.showsMenuAsPrimaryAction = true; navigationItem.rightBarButtonItems = [UIBarButtonItem(customView: more)]
         }
         for (field, id, label, style) in [(titleField, "edit.title", "任务标题", UIFont.TextStyle.title2), (notes, "edit.notes", "详细信息", .body)] {
-            field.delegate = self; field.accessibilityIdentifier = id; field.accessibilityLabel = label; field.font = .preferredFont(forTextStyle: style); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.backgroundColor = .clear
-            field.textContainerInset = .init(top: 4, left: 4, bottom: 4, right: 4); field.textContainer.lineFragmentPadding = 0; field.heightAnchor.constraint(equalToConstant: 120).isActive = true
+            field.delegate = self; field.accessibilityIdentifier = id; field.accessibilityLabel = label; field.font = lb_fnt(style, nil); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.backgroundColor = .clear
+            field.textContainerInset = .init(top: 8, left: 8, bottom: 8, right: 8); field.textContainer.lineFragmentPadding = 0; field.heightAnchor.constraint(equalToConstant: 120).isActive = true
         }
         titleField.text = task?["title"] as? String ?? draft["title"] as? String ?? ""; notes.text = task?["notes"] as? String ?? draft["notes"] as? String ?? ""; notes.isHidden = notes.text.isEmpty
         hint.textColor = TaskTheme.muted; hint.isHidden = !titleField.text.isEmpty; hint.translatesAutoresizingMaskIntoConstraints = false; titleField.addSubview(hint)
-        NSLayoutConstraint.activate([hint.leadingAnchor.constraint(equalTo: titleField.leadingAnchor, constant: 4), hint.topAnchor.constraint(equalTo: titleField.topAnchor, constant: 4)])
+        NSLayoutConstraint.activate([hint.leadingAnchor.constraint(equalTo: titleField.leadingAnchor, constant: 8), hint.topAnchor.constraint(equalTo: titleField.topAnchor, constant: 8)])
         plan = TaskDate(task ?? draft, deadline: false, zone: zone, target: self); deadline = TaskDate(task ?? draft, deadline: true, zone: zone, target: self)
         notesBtn = tu_btn(quick ? nil : "添加详细信息", "notes", self, #selector(nts)); notesBtn.accessibilityLabel = "添加详细信息"; notesBtn.accessibilityIdentifier = "edit.details"
         dateBtn = tu_btn(nil, "time", self, #selector(clndr(_:))); dateBtn.accessibilityIdentifier = "edit.date"
@@ -91,7 +91,7 @@ final class TaskDate {
         duration.keyboardType = .decimalPad; duration.accessibilityIdentifier = "edit.duration"; duration.accessibilityLabel = "预计分钟"
         if let number = extras["planned_duration"] as? NSNumber { duration.text = String(format: "%.10g", number.doubleValue / 60) }
         timezone.text = extras["timezone_id"] as? String ?? zone.identifier; timezone.accessibilityIdentifier = "edit.timezone"; timezone.accessibilityLabel = "时区"; timezone.autocorrectionType = .no; timezone.autocapitalizationType = .none
-        for field in [duration, timezone] { field.font = .preferredFont(forTextStyle: .body); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true; field.addTarget(self, action: #selector(extraChg(_:)), for: .editingChanged) }
+        for field in [duration, timezone] { field.font = lb_fnt(.body, nil); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true; field.addTarget(self, action: #selector(extraChg(_:)), for: .editingChanged) }
         advanced = tu_stk([plan.view, deadline.view, repeatBtn, grade("urgency"), grade("difficulty"), tu_row("预计分钟", duration), tu_row("时区", timezone)]); advanced.isHidden = true
         let extra = tu_btn("更多选项", "down", self, #selector(more)); extra.accessibilityIdentifier = "edit.more"
         let fields: [UIView] = quick ? [titleField, notes, detail, extra, advanced] : [listBtn, titleField, notes, notesBtn, dateBtn, detail, extra, advanced]

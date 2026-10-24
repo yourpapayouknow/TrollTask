@@ -16,7 +16,7 @@ def tstcmd(path, *args, success=True):
 def tstcli():
     with TemporaryDirectory(prefix='trolltask-cli-') as root:
         path = Path(root) / 'tasks.sqlite3'
-        assert tstcmd(path, 'schema')['schema_version'] == 4
+        assert tstcmd(path, 'schema')['schema_version'] == 8
         assert tstcmd(path, 'lists')[0]['title'] == '我的任务'
         task = tstcmd(path, 'create', jdmp({'title': '两天完成', 'planned_duration': 172800, 'deadline_at': 1800000000}))
         task_id = task['task_id']
@@ -68,6 +68,44 @@ def tstcli():
         assert len(tstcmd(path, 'lists')) == 1
         assert tstcmd(path, 'clear-completed', listing, success=False)['kind'] == 'not_found'
         assert tstcmd(path, 'delete-list', tstcmd(path, 'lists')[0]['list_id'], success=False)['kind'] == 'invalid_fields'
+        proof_task = tstcmd(path, 'create', jdmp({'title': '图片打卡命令', 'due_at': 100}))
+        plan = tstcmd(path, 'plan', '101')
+        alert = next(item for item in plan['alerts'] if item['task_id'] == proof_task['task_id'])
+        occurrence = tstcmd(path, 'claim', jdmp(alert), str(plan['revision']), '101')['occurrence_id']
+        assert tstcmd(path, 'hold', occurrence, 'snooze')['defer_count'] == 1
+        assert tstcmd(path, 'hold', occurrence, 'snooze', success=False)['kind'] == 'invalid_fields'
+        assert tstcmd(path, 'resume', occurrence)['resumed']
+        picture = ROOT / 'Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@2x.png'
+        proof = tstcmd(path, 'checkin', occurrence, 'image', str(picture))
+        assert proof['occurrence_id'] == occurrence and proof['image_bytes'] == len(picture.read_bytes())
+        file_task = tstcmd(path, 'create', jdmp({'title': '普通文件打卡', 'due_at': 100}))
+        file_plan = tstcmd(path, 'plan', '101')
+        file_alert = next(item for item in file_plan['alerts'] if item['task_id'] == file_task['task_id'])
+        file_id = tstcmd(path, 'claim', jdmp(file_alert), str(file_plan['revision']), '101')['occurrence_id']
+        document = Path(root) / '原始文件.bin'
+        document.write_bytes(bytes([0, 255, 1, 0, 42]))
+        file_proof = tstcmd(path, 'checkin', file_id, 'file', str(document))
+        assert file_proof['method'] == 'file' and file_proof['name'] == document.name and file_proof['image_bytes'] == 5
+        output = Path(root) / 'roundtrip.bin'
+        tstcmd(path, 'proof', file_id, str(output))
+        assert output.read_bytes() == document.read_bytes()
+        exported = Path(root) / 'proof.png'
+        assert tstcmd(path, 'proof', occurrence, str(exported))['method'] == 'image'
+        assert exported.read_bytes() == picture.read_bytes()
+        assert tstcmd(path, 'get', proof_task['task_id'])['status'] == 'completed'
+        assert tstcmd(path, 'checkin', occurrence, 'image', str(picture), success=False)['kind'] == 'not_found'
+        batch_task = tstcmd(path, 'create', jdmp({'title': '六附件命令', 'due_at': 100}))
+        plan = tstcmd(path, 'plan', '101')
+        alert = next(item for item in plan['alerts'] if item['task_id'] == batch_task['task_id'])
+        batch_id = tstcmd(path, 'claim', jdmp(alert), str(plan['revision']), '101')['occurrence_id']
+        tstcmd(path, 'checkin', batch_id, 'image', *([str(picture)] * 7), success=False)
+        tstcmd(path, 'checkin', batch_id, 'image', str(picture), str(Path(root) / 'missing.png'), success=False)
+        assert tstcmd(path, 'proofs', batch_id) == [] and tstcmd(path, 'get', batch_task['task_id'])['status'] == 'needsAction'
+        tstcmd(path, 'checkin', batch_id, 'image', *([str(picture)] * 6))
+        records = tstcmd(path, 'proofs', batch_id)
+        assert len(records) == 6 and [row['position'] for row in records] == list(range(6))
+        assert all(row['image_bytes'] == len(picture.read_bytes()) for row in records)
+        assert tstcmd(path, 'get', batch_task['task_id'])['status'] == 'completed'
         bad = Path(root) / 'broken.sqlite3'
         bad.write_bytes(b'not sqlite')
         assert tstcmd(bad, 'schema', success=False)['kind'] == 'database_failure'
@@ -76,7 +114,7 @@ def tstcli():
             assert tstcmd(path, 'update', task_id, jdmp({'notes': '锁等待失败'}), success=False)['kind'] == 'database_busy'
             lock.rollback()
         assert tstcmd(path, 'get', task_id)['notes'] == before['notes']
-    print('TaskStore CLI: JSON, durable CRUD/import/order, explicit errors, claims/actions and atomic batch rollback passed')
+    print('TaskStore CLI: JSON, durable CRUD/import/order, explicit errors, claims/actions, hold/resume/checkin/proof and atomic batch rollback passed')
 
 
 # 执行独立CLI验收。

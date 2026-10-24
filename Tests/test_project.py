@@ -22,16 +22,21 @@ def tstns():
                 "com.apple.QuartzCore.secure-mode", "com.apple.private.persona-mgmt",
                 "com.apple.private.security.no-sandbox"]:
         assert entitlements[key] is True
+    # 平台App的原生导入需要读取所选iCloud源文件。
+    assert entitlements["com.apple.private.security.storage.MobileDocuments"] is True
+    # 系统采集必须能够写入本应用容器内的临时文件。
+    assert entitlements["com.apple.private.security.storage.AppDataContainers"] is True
     # 检查平台应用的系统图像渲染权限。
     clients = entitlements.get("com.apple.security.exception.iokit-user-client-class", [])
-    assert isinstance(clients, list) and {"AGXDeviceUserClient", "IOSurfaceRootUserClient"} <= set(clients), \
+    assert isinstance(clients, list) and {"AGXDeviceUserClient", "IOSurfaceRootUserClient", "IOSurfaceAcceleratorClient"} <= set(clients), \
         "Missing GPU access for CoreImage template rendering"
     return root
 
 
 # 检查旧业务和命名空间没有进入运行工程。
 def tstbiz(root):
-    forbidden = r'lowbatcntdwn|LowBat|LBState|LBMode|lb_(init|cfg|feed|tick|snzdur|chknght|shwnght|setlowpower)\b|UIDeviceBattery|batteryMonitoringEnabled|batteryLevel|CoreDuet|CDBatterySaver|NSTimer|nightLocked|threshold|countdown|倒计时|低电量'
+    # 阶段九允许从绝对时刻显示边栏剩余时间，继续禁止旧业务及累加式NSTimer。
+    forbidden = r'lowbatcntdwn|LowBat|LBState|LBMode|lb_(init|cfg|feed|tick|snzdur|chknght|shwnght|setlowpower)\b|UIDeviceBattery|batteryMonitoringEnabled|batteryLevel|CoreDuet|CDBatterySaver|NSTimer|nightLocked|threshold|低电量'
     paths = list((root / "Sources").glob("*")) + list((root / "Resources").glob("*.plist")) + [root / "Makefile"]
     for path in paths:
         assert not re.search(forbidden, path.read_text(), re.I), f"Old business reference in {path}"
@@ -50,8 +55,12 @@ def tstarch(root):
     for text in ["posix_spawnattr_set_persona_np(&attr, 99", "posix_spawnattr_set_persona_uid_np(&attr, 0)",
                  "posix_spawnattr_set_persona_gid_np(&attr, 0)", "POSIX_SPAWN_SETPGROUP", '"--hud"', "LOCK_EX | LOCK_NB"]:
         assert text in shared
-    order = ["gsInit();", "bksStart();", "uiInit();", "uiSingle([LBHudApp class]);", "[app _accessibilityInit];",
-             "lb_ldax();", "if (pBKSHID) pBKSHID(lb_onhidevt);", "gsEvtInit(0);", "[app __completeAndRunAsPlugin];"]
+    # 原生入口负责事件源和帧调度，插件完成回调等待运行循环就绪。
+    assert "UIApplicationMain(argc, argv, NSStringFromClass(LBHudApp.class), NSStringFromClass(LBHudDel.class))" in hud
+    assert "dispatch_async(dispatch_get_main_queue(), ^{ lb_hudrun(self); });" in hud
+    assert "[super _run];" in hud
+    assert "UIApplicationInstantiateSingleton" not in hud and "GSEventRunModal" not in hud
+    order = ["[self _accessibilityInit];", "lb_ldax();", "pBKSHID(lb_onhidevt);", "[app __completeAndRunAsPlugin];"]
     positions = [hud.index(text) for text in order]
     assert positions == sorted(positions)
     assert "SBSpringBoardDidLaunchNotification" in hud and "DISPATCH_VNODE_DELETE" in hud

@@ -335,7 +335,7 @@ static void tstv3(NSString *root) {
         NSString *path = [root stringByAppendingPathComponent:fail.boolValue ? @"v3-failed.sqlite3" : @"v3.sqlite3"];
         __block NSString *uuid; __block NSNumber *updated;
         @autoreleasepool { TaskStore *store = tstopn(path); NSDictionary *task = [store crtTsk:@{@"title":@"第三版数据",@"starred":@1} error:nil]; uuid = task[@"task_id"]; updated = task[@"updated_at"]; }
-        tstsql(path,@"ALTER TABLE tasks DROP COLUMN starred_at; ALTER TABLE task_lists DROP COLUMN deleted; UPDATE store_meta SET schema_version=3;");
+        tstsql(path,@"DROP TABLE capture_request; DROP TABLE reminder_checkins; ALTER TABLE reminder_occurrences DROP COLUMN defer_count; ALTER TABLE reminder_occurrences DROP COLUMN hold_reason; ALTER TABLE reminder_occurrences DROP COLUMN hold_until; ALTER TABLE tasks DROP COLUMN starred_at; ALTER TABLE task_lists DROP COLUMN deleted; UPDATE store_meta SET schema_version=3;");
         if (fail.boolValue) tstsql(path,@"CREATE TRIGGER migrate_fail BEFORE UPDATE ON store_meta BEGIN SELECT RAISE(ABORT,'blocked'); END;");
         NSError *error = nil; TaskStore *store = [[TaskStore alloc] initAt:path error:&error];
         if (fail.boolValue) {

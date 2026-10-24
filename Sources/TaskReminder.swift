@@ -6,6 +6,8 @@
     private var lock: Int32 = -1, tokens: [Int32] = []
     private var signals: [DispatchSourceSignal] = [], restores: [() -> Void] = [], ended = false
     @objc private(set) var running = false
+    // 为采集交接复用服务已有的唯一数据库连接。
+    var captureStore: TaskStore? { store }
     // 读取同一生产调度器的最近绝对时刻。
     @objc var nextFireAt: Date? { scheduler?.nextFireAt }
     // 注入已有系统窗口与进程边界，不建立第二套呈现逻辑。
@@ -31,6 +33,7 @@
         guard lock >= 0 else { return err(error, errno, "提醒服务锁不可用") }
         do {
             store = try TaskStore(at: path)
+            try store?.delCap(nil)
             try reg(LB_STOP_NOTE) { [weak self] in self?.halt() }
             try reg(LB_CFG_NOTE) { [weak self] in if (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue != true { self?.halt(true) } }
             for number in [SIGTERM, SIGINT] {
@@ -52,10 +55,25 @@
     }
     // 转交当前提醒动作并复用事务后重排。
     @objc(act:until:occID:) func act(_ action: String, until: NSNumber?, occID: String) { scheduler?.act(action, until: until, occID: occID) }
+    // 为HUD读取同一服务连接的轻量快照。
+    @objc(snapshot:) func snap(_ error: AutoreleasingUnsafeMutablePointer<NSError?>?) -> NSDictionary? {
+        guard let store else { return nil }
+        do { return try store.snapshot() as NSDictionary } catch let issue { error?.pointee = issue as NSError; return nil }
+    }
+    // 转交当前轮次的持久化边栏操作。
+    @objc(hold:occID:) func hld(_ mode: String, occID: String) { scheduler?.hld(mode, occID: occID) }
+    // 提交边栏主动展开请求。
+    @objc(resumeOcc:) func rsm(_ id: String) { scheduler?.rsm(id) }
+    // 转交有效图片提交到同一串行调度器。
+    @objc(check:method:image:) func chk(_ occID: String, method: String, image: Data) { chk(occID, attachments: [["method": method, "image": image]]) }
+    // 提交同一提醒的全部附件。
+    @objc(check:attachments:) func chk(_ occID: String, attachments: [TaskFields]) { scheduler?.chk(occID, attachments: attachments) }
     // 显式解除计时、数据库、窗口和锁，重复停止保持幂等。
     @objc(stop) func stp() {
         guard !ended else { return }; ended = true; running = false
-        scheduler?.stp(); scheduler = nil; store = nil
+        scheduler?.stp(); scheduler = nil
+        do { try store?.delCap(nil) } catch { NSLog("采集请求清理失败：%@", error as NSError) }
+        notify_post(TS_CAPTURE_NOTE); store = nil
         tokens.forEach { notify_cancel($0) }; tokens.removeAll()
         signals.forEach { $0.cancel() }; signals.removeAll()
         if lock >= 0 { cleanup(); close(lock); lock = -1 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # 复用原工程的浏览器安装流程，分发当前TrollTask安装包。
 from head import (
-    AF_INET, SOCK_DGRAM, ROOT, Path, SimpleHTTPRequestHandler, TCPServer,
+    AF_INET, SOCK_DGRAM, ROOT, ArgumentParser, Path, SimpleHTTPRequestHandler, ThreadingHTTPServer,
     TemporaryDirectory, copy2, escape, loads, partial, quote, run, socket, urlencode,
 )
 
@@ -19,6 +19,8 @@ def lclip():
 
 # 保留原工程的安装页缓存策略。
 class Hnd(SimpleHTTPRequestHandler):
+    timeout = 30
+
     # 禁用安装页与包的浏览器缓存。
     def end_headers(self):
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -27,15 +29,15 @@ class Hnd(SimpleHTTPRequestHandler):
         super().end_headers()
 
 
-# 复用固定端口的本服务连接。
-class Srv(TCPServer):
+# 并发响应浏览器预连接和安装包下载。
+class Srv(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
 # 在独立临时目录和固定端口提供浏览器安装入口。
-def srvmain():
+def srvmain(pkg=None):
     cfg = loads((ROOT / "Resources/Info.plist").read_bytes())
-    pkg = ROOT / "build" / f"{cfg['CFBundleExecutable']}-{cfg['CFBundleShortVersionString']}.tipa"
+    pkg = pkg or ROOT / "build" / f"{cfg['CFBundleExecutable']}-{cfg['CFBundleShortVersionString']}.tipa"
     ip = lclip()
     assets = ROOT / "Resources/Installer"
     with TemporaryDirectory(prefix="trolltask-install-") as stage:
@@ -61,4 +63,6 @@ def srvmain():
 
 # 启动浏览器安装服务。
 if __name__ == "__main__":
-    srvmain()
+    parser = ArgumentParser()
+    parser.add_argument("--package", type=Path)
+    srvmain(parser.parse_args().package)

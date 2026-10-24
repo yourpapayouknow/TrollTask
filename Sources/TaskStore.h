@@ -2,8 +2,10 @@
 
 #define TS_DB_PATH @"/var/mobile/Library/Application Support/com.iwmei.taskforiwmei/tasks.sqlite3"
 #define TS_DFLT_LST @"00000000-0000-4000-8000-000000000001"
-#define TS_SCH_VER 4
+#define TS_SCH_VER 8
+#define TS_ATT_MAX 6
 #define TS_DATA_NOTE "com.iwmei.taskforiwmei.data"
+#define TS_CAPTURE_NOTE "com.iwmei.taskforiwmei.capture"
 
 // 提供主App与HUD共用的SQLite数据模型。
 @interface TaskStore : NSObject
@@ -14,6 +16,8 @@
 + (instancetype)shrd:(NSError **)error;
 // 在提交前复用存储层的标题与说明校验。
 + (BOOL)vldTxt:(NSString *)title notes:(NSString *)notes error:(NSError **)error;
+// 统一校验图片及普通文件批次。
++ (BOOL)vldPrfs:(NSArray *)attachments error:(NSError **)error;
 // 在指定绝对路径创建或迁移数据库。
 - (instancetype)initAt:(NSString *)path error:(NSError **)error;
 // 读取应用数据模型版本。
@@ -64,6 +68,28 @@
 - (NSDictionary *)claim:(NSDictionary *)alert revision:(long long)revision at:(NSTimeInterval)stamp error:(NSError **)error;
 // 原子处理当前提醒，延后不修改原截止日期。
 - (BOOL)actOcc:(NSString *)occID action:(NSString *)action until:(NSNumber *)until error:(NSError **)error;
+// 收起当前轮次并持久化截图或唯一五分钟延期。
+- (NSDictionary *)hldOcc:(NSString *)occID mode:(NSString *)mode error:(NSError **)error;
+// 主动展开尚未处理的边栏提醒。
+- (BOOL)rsmOcc:(NSString *)occID error:(NSError **)error;
+// 原子保存有效图片与当前轮次的完成记录。
+- (BOOL)chkOcc:(NSString *)occID method:(NSString *)method image:(NSData *)image error:(NSError **)error;
+// 校验并原子提交最多六个附件，全部成功后完成提醒。
+- (BOOL)chkOcc:(NSString *)occID attachments:(NSArray<NSDictionary *> *)attachments error:(NSError **)error;
+// 按附件序号读取同库证据，元数据读取不加载图片。
+- (NSArray<NSDictionary *> *)lsChk:(NSString *)occID images:(BOOL)images error:(NSError **)error;
+// 读取本次打卡元数据或完整图片。
+- (NSDictionary *)rdChk:(NSString *)occID image:(BOOL)image error:(NSError **)error;
+// 在同库建立唯一的短期前台采集请求。
+- (NSDictionary *)reqCap:(NSString *)occID source:(NSString *)source limit:(NSInteger)limit error:(NSError **)error;
+// 读取指定或当前采集请求及已返回的图片。
+- (NSDictionary *)rdCap:(NSString *)token error:(NSError **)error;
+// 由前台采集进程认领请求。
+- (BOOL)ackCap:(NSString *)token error:(NSError **)error;
+// 原子交回选图结果，空批次表示取消，不完成待办。
+- (BOOL)finCap:(NSString *)token attachments:(NSArray *)attachments issue:(NSString *)issue error:(NSError **)error;
+// 清理指定或全部短期采集记录。
+- (BOOL)delCap:(NSString *)token error:(NSError **)error;
 // 幂等记录某任务某个计划时刻的一次提醒。
 - (NSDictionary *)crtOcc:(NSString *)taskID at:(NSNumber *)stamp error:(NSError **)error;
 // 更新单次提醒的触发及处理记录。

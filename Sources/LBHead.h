@@ -5,7 +5,16 @@
 #import <QuartzCore/QuartzCore.h>
 #endif
 
+#ifdef LB_UI_TEST
+#import "../Vendor/TrollSpeed/head.h"
+// 在原生模拟器验收同一UIKit触摸路由。
+@interface UIApplication (LBTouchSPI)
+- (UIEvent *)_touchesEvent;
+@end
+#endif
+
 #include <CoreFoundation/CoreFoundation.h>
+#import <ImageIO/ImageIO.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -47,9 +56,23 @@ extern const char *lb_tstlock;
 
 extern char **environ;
 
+#if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
+// 声明现成原生应用激活入口。
+@interface LSApplicationWorkspace : NSObject
++ (instancetype)defaultWorkspace;
+- (BOOL)openApplicationWithBundleID:(NSString *)identifier;
+@end
+// 按需激活已安装的采集App。
+BOOL lb_opnapp(void);
+#endif
+
 #ifndef LB_HOST_TEST
+#import "../Vendor/TrollSpeed/head.h"
 @interface UIApplication (LBPrivate)
+// 进入UIKit原生事件运行循环。
+- (void)_run;
 - (void)_accessibilityInit;
+- (UIEvent *)_touchesEvent;
 - (void)__completeAndRunAsPlugin;
 @end
 
@@ -92,6 +115,8 @@ extern char **environ;
 
 @interface AXEventRepresentation : NSObject
 - (BOOL)isTouchDown;
+- (BOOL)isMove;
+- (id)handInfo;
 - (BOOL)isLift;
 - (BOOL)isCancel;
 - (BOOL)isInRangeLift;
@@ -99,24 +124,52 @@ extern char **environ;
 + (instancetype)representationWithHIDEvent:(void *)event hidStreamIdentifier:(NSString *)identifier;
 @end
 
+// 声明上游已使用的触摸标识与前台方向接口。
+@interface NSObject (LBHudSPI)
+- (NSArray *)paths;
+- (NSInteger)pathIdentity;
+@end
+
+// 集中声明上游前台方向观察者的真实类型。
+@interface FBSOrientationUpdate : NSObject
+- (long long)orientation;
+- (double)duration;
+@end
+@interface FBSOrientationObserver : NSObject
+- (long long)activeInterfaceOrientation;
+- (void)setHandler:(void (^)(FBSOrientationUpdate *))handler;
+- (void)invalidate;
+@end
+
 // 运行TaskReminder独立进程及其系统HUD。
-int lb_hudmain(void);
+int lb_hudmain(int argc, char **argv);
 
 #endif
 
 #if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
 // 创建统一外观的功能按钮。
 UIButton *lb_mkbtn(NSString *title, id target, SEL action);
+// 读取统一大字与动态字体。
+UIFont *lb_fnt(UIFontTextStyle style, UITraitCollection *traits);
 // 读取统一OLED强调色和MingCute模板图标。
 UIColor *lb_acnt(void);
 UIImage *lb_icon(NSString *name);
+// 读取前台方向的统一旋转角。
+CGFloat lb_hudang(UIInterfaceOrientation orientation);
+// 将安全区右边栏投影到系统窗口物理坐标。
+CGRect lb_hudfrm(CGRect screen, UIEdgeInsets insets, UIInterfaceOrientation orientation);
 #ifndef TT_SWIFT_BRIDGE
 #import "TaskUI.h"
+#import "TaskHUD.h"
 #endif
 #endif
 
 // 读取共享配置文件。
 NSDictionary *lb_ldcfg(void);
+// 识别仅用于有界真机诊断的安装包。
+BOOL lb_dbg(void);
+// 用进程级期限保证主线程挂住时仍能退出。
+void lb_dbgarm(unsigned int seconds);
 
 // 保存共享配置文件。
 BOOL lb_svcfg(NSDictionary *config);

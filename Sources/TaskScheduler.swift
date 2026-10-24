@@ -45,7 +45,7 @@
                 guard let task, let occ, (task["deleted"] as? NSNumber)?.boolValue == false,
                     task["status"] as? String == "needsAction", (task["reminder_version"] as? NSNumber) == (alert["generation"] as? NSNumber),
                     occ["status"] as? String == "triggered" else { self.handler(nil, nil); self.rfrsh(); return }
-                var fresh = alert; fresh["task"] = task; self.handler(fresh as NSDictionary, error)
+                var fresh = alert; fresh["task"] = task; fresh["occurrence"] = occ; self.handler(fresh as NSDictionary, error)
             } catch { self.handler(nil, error as NSError); self.rfrsh() }
         }
     }
@@ -78,7 +78,7 @@
                 if let failure { throw failure }
             }
             if previous != nil && previous != active?["occurrence_id"] as? String { pub(nil) }
-            if let active { pub(active) }
+            if let active { pub(active) } else { pub(nil) }
             if let next = alerts.first(where: { alert in
                 guard let stamp = alert["remind_at"] as? NSNumber else { return false }
                 return stamp.doubleValue > now && (alert["occurrence_id"] as? String).map { !triggered.contains($0) } != false
@@ -120,6 +120,34 @@
         queue.async { [weak self] in
             guard let self, self.running, self.active?["occurrence_id"] as? String == occID, let store = self.store else { return }
             do { try store.actOcc(occID, action: action, until: until); self.active = nil; self.pub(nil); self.rld() }
+            catch { self.pub(self.active, error as NSError) }
+        }
+    }
+    // 持久化收起当前轮次后才撤下全屏并重新调度。
+    @objc(hold:occID:) func hld(_ mode: String, occID: String) {
+        wrk(occID) { store in _ = try store.hldOcc(occID, mode: mode) }
+    }
+    // 主动展开持久化边栏后读取同一任务队列。
+    @objc(resumeOcc:) func rsm(_ id: String) {
+        queue.async { [weak self] in
+            guard let self, self.running, let store = self.store else { return }
+            do { try store.rsmOcc(id); self.req() }
+            catch { self.pub(self.active, error as NSError) }
+        }
+    }
+    // 证据与完成记录提交成功后才撤下当前提醒。
+    @objc(check:method:image:) func chk(_ occID: String, method: String, image: Data) {
+        chk(occID, attachments: [["method": method, "image": image]])
+    }
+    // 在唯一数据库内原子提交整组附件。
+    @objc(check:attachments:) func chk(_ occID: String, attachments: [TaskFields]) {
+        wrk(occID) { store in try store.chkOcc(occID, attachments: attachments) }
+    }
+    // 只处理仍然显示的同一轮次，失败保留原界面。
+    private func wrk(_ id: String, _ work: @escaping (TaskStore) throws -> Void) {
+        queue.async { [weak self] in
+            guard let self, self.running, self.active?["occurrence_id"] as? String == id, let store = self.store else { return }
+            do { try work(store); self.active = nil; self.pub(nil); self.rld() }
             catch { self.pub(self.active, error as NSError) }
         }
     }

@@ -126,7 +126,9 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             const char *type = [value objCType];
             code = (*type == 'd' || *type == 'f') ? sqlite3_bind_double(statement, slot, [value doubleValue])
                 : sqlite3_bind_int64(statement, slot, [value longLongValue]);
-        } else code = SQLITE_MISMATCH;
+        // 空文件须绑定为零长BLOB，不能把空指针当成SQL空值。
+        } else if ([value isKindOfClass:NSData.class]) code = [value length] ? sqlite3_bind_blob(statement, slot, [value bytes], (int)[value length], SQLITE_TRANSIENT) : sqlite3_bind_zeroblob(statement, slot, 0);
+        else code = SQLITE_MISMATCH;
     }
     NSMutableArray *rows = [NSMutableArray array];
     while (code == SQLITE_OK && (code = sqlite3_step(statement)) == SQLITE_ROW) {
@@ -138,6 +140,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             else if (type == SQLITE_FLOAT) value = @(sqlite3_column_double(statement, column));
             else if (type == SQLITE_TEXT) value = [[NSString alloc] initWithBytes:sqlite3_column_text(statement, column)
                 length:sqlite3_column_bytes(statement, column) encoding:NSUTF8StringEncoding];
+            else if (type == SQLITE_BLOB) value = [NSData dataWithBytes:sqlite3_column_blob(statement, column) length:sqlite3_column_bytes(statement, column)];
             if (!value) { code = SQLITE_MISMATCH; break; }
             row[@(sqlite3_column_name(statement, column))] = value;
         }
@@ -261,6 +264,37 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             "UPDATE tasks SET starred_at=updated_at WHERE starred=1;"
             "ALTER TABLE task_lists ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1));"
             "UPDATE store_meta SET schema_version=4 WHERE singleton=1;" error:failure]) return NO;
+        if (version <= 4 && ![self exec:
+            "ALTER TABLE reminder_occurrences ADD COLUMN defer_count INTEGER NOT NULL DEFAULT 0 CHECK(defer_count IN (0,1));"
+            "ALTER TABLE reminder_occurrences ADD COLUMN hold_reason TEXT CHECK(hold_reason IN ('snooze','screenshot'));"
+            "ALTER TABLE reminder_occurrences ADD COLUMN hold_until REAL;"
+            "CREATE TABLE reminder_checkins(occurrence_id TEXT PRIMARY KEY NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,"
+            "method TEXT NOT NULL CHECK(method IN ('camera','screenshot','image')), image BLOB NOT NULL CHECK(length(image)>0),created_at REAL NOT NULL);"
+            "UPDATE store_meta SET schema_version=5 WHERE singleton=1;" error:failure]) return NO;
+        if (version <= 5 && ![self exec:
+            "CREATE TABLE reminder_checkins_v6(occurrence_id TEXT NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,"
+            "position INTEGER NOT NULL CHECK(typeof(position)='integer' AND position BETWEEN 0 AND 5),"
+            "method TEXT NOT NULL CHECK(method IN ('camera','screenshot','image')),image BLOB NOT NULL CHECK(length(image)>0),"
+            "created_at REAL NOT NULL,PRIMARY KEY(occurrence_id,position));"
+            "INSERT INTO reminder_checkins_v6 SELECT occurrence_id,0,method,image,created_at FROM reminder_checkins;"
+            "DROP TABLE reminder_checkins;ALTER TABLE reminder_checkins_v6 RENAME TO reminder_checkins;"
+            "UPDATE store_meta SET schema_version=6 WHERE singleton=1;" error:failure]) return NO;
+        if (version <= 6 && ![self exec:
+            "CREATE TABLE capture_request(token TEXT PRIMARY KEY NOT NULL,occurrence_id TEXT NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,"
+            "source TEXT NOT NULL CHECK(source IN ('camera','image','screenshot','file')),capacity INTEGER NOT NULL CHECK(capacity BETWEEN 1 AND 6),"
+            "created_at REAL NOT NULL,state INTEGER NOT NULL DEFAULT 0 CHECK(state BETWEEN 0 AND 2),pid INTEGER,payload BLOB,issue TEXT);"
+            "UPDATE store_meta SET schema_version=7 WHERE singleton=1;" error:failure]) return NO;
+        // 复用原附件表，保留旧图片字段并增加普通文件元数据。
+        if (version <= 7 && ![self exec:
+            "CREATE TABLE reminder_checkins_v8(occurrence_id TEXT NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,"
+            "position INTEGER NOT NULL CHECK(typeof(position)='integer' AND position BETWEEN 0 AND 5),"
+            "method TEXT NOT NULL CHECK(method IN ('camera','screenshot','image','file')),"
+            "image BLOB NOT NULL CHECK(length(image)<=20971520 AND (method='file' OR length(image)>0)),"
+            "created_at REAL NOT NULL,name TEXT,content_type TEXT,PRIMARY KEY(occurrence_id,position),"
+            "CHECK(method!='file' OR (name IS NOT NULL AND length(name)>0 AND content_type IS NOT NULL AND length(content_type)>0)));"
+            "INSERT INTO reminder_checkins_v8(occurrence_id,position,method,image,created_at) SELECT occurrence_id,position,method,image,created_at FROM reminder_checkins;"
+            "DROP TABLE reminder_checkins;ALTER TABLE reminder_checkins_v8 RENAME TO reminder_checkins;"
+            "UPDATE store_meta SET schema_version=8 WHERE singleton=1;" error:failure]) return NO;
         return YES;
     } error:error];
 }
@@ -672,6 +706,166 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         if ([action isEqual:@"complete"] && ![task[@"recurrence"] count]) return [self cmplTsk:task[@"task_id"] error:failure];
         return YES;
     } error:error];
+}
+
+// 在当前轮次的同一事务中处理收起和次数限制。
+- (NSDictionary *)hldOcc:(NSString *)occID mode:(NSString *)mode error:(NSError **)error {
+    __block NSDictionary *result = nil;
+    BOOL success = [self wrTxn:^BOOL(NSError **failure) {
+        if (!ts_uuid(occID) || ![@[@"snooze",@"screenshot"] containsObject:mode])
+            return [self dbErr:SQLITE_MISMATCH message:@"收起方式无效" error:failure];
+        NSDictionary *row = [self qry:"SELECT * FROM reminder_occurrences WHERE occurrence_id=?" values:@[occID.lowercaseString] error:failure].firstObject;
+        if (!row) return [self dbErr:SQLITE_NOTFOUND message:@"提醒不存在" error:failure];
+        BOOL snooze = [mode isEqual:@"snooze"];
+        if (snooze && [row[@"defer_count"] integerValue] != 0)
+            return [self dbErr:SQLITE_CONSTRAINT message:@"本次已延后" error:failure];
+        NSNumber *until = @(NSDate.date.timeIntervalSince1970 + (snooze ? 300 : 120));
+        if (![self actOcc:occID action:@"snooze" until:until error:failure]) return NO;
+        if (![self qry:"UPDATE reminder_occurrences SET defer_count=defer_count+?,hold_reason=?,hold_until=? WHERE occurrence_id=?"
+            values:@[@(snooze ? 1 : 0),mode,until,occID.lowercaseString] error:failure]) return NO;
+        result = [self qry:"SELECT occurrence_id,defer_count,hold_reason,hold_until FROM reminder_occurrences WHERE occurrence_id=?"
+            values:@[occID.lowercaseString] error:failure].firstObject;
+        return result != nil;
+    } error:error];
+    return success ? result : nil;
+}
+
+// 主动展开边栏，保留该轮次的唯一延期次数。
+- (BOOL)rsmOcc:(NSString *)occID error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        if (!ts_uuid(occID)) return [self dbErr:SQLITE_MISMATCH message:@"提醒标识无效" error:failure];
+        NSDictionary *row = [self qry:"SELECT * FROM reminder_occurrences WHERE occurrence_id=?" values:@[occID.lowercaseString] error:failure].firstObject;
+        NSDictionary *task = row ? [self rdTsk:row[@"task_id"] error:failure] : nil;
+        if (!task || ![row[@"status"] isEqual:@"handled"] || ![row[@"action"] isEqual:@"snooze"] || row[@"hold_reason"]==NSNull.null
+            || [task[@"deleted"] boolValue] || ![task[@"status"] isEqual:@"needsAction"] || ![task[@"reminder_version"] isEqual:row[@"generation"]])
+            return [self dbErr:SQLITE_NOTFOUND message:@"边栏提醒已失效" error:failure];
+        return [self updOcc:occID fields:@{@"status":@"triggered",@"triggered_at":@(NSDate.date.timeIntervalSince1970),@"handled_at":NSNull.null,@"action":NSNull.null,@"snooze_until":NSNull.null} error:failure];
+    } error:error];
+}
+
+// 保留单图入口并复用同一批次提交事务。
+- (BOOL)chkOcc:(NSString *)occID method:(NSString *)method image:(NSData *)image error:(NSError **)error {
+    if (!method || !image) return [self dbErr:SQLITE_MISMATCH message:@"打卡图片或方式无效" error:error];
+    return [self chkOcc:occID attachments:@[@{@"method":method,@"image":image}] error:error];
+}
+
+// 核对全部图片后在同一事务保存附件并完成提醒。
+- (BOOL)chkOcc:(NSString *)occID attachments:(NSArray<NSDictionary *> *)attachments error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        if (!ts_uuid(occID)) return [self dbErr:SQLITE_MISMATCH message:@"打卡标识无效" error:failure];
+        if (![TaskStore vldPrfs:attachments error:failure]) return NO;
+        if (![self actOcc:occID action:@"complete" until:nil error:failure]) return NO;
+        NSTimeInterval stamp=NSDate.date.timeIntervalSince1970;
+        for (NSUInteger index=0;index<attachments.count;index++) {
+            NSDictionary *item=attachments[index];
+            if (![self qry:"INSERT INTO reminder_checkins(occurrence_id,position,method,image,created_at,name,content_type) VALUES(?,?,?,?,?,?,?)"
+                values:@[occID.lowercaseString,@(index),item[@"method"],item[@"image"],@(stamp),item[@"name"] ?: NSNull.null,item[@"content_type"] ?: NSNull.null] error:failure]) return NO;
+        }
+        return YES;
+    } error:error];
+}
+
+// 所有采集和最终提交复用同一组图片边界。
++ (BOOL)vldPrfs:(NSArray *)attachments error:(NSError **)error {
+    if (![attachments isKindOfClass:NSArray.class] || attachments.count<1 || attachments.count>TS_ATT_MAX)
+        return ts_err(error,SQLITE_MISMATCH,@"附件数量须为1至6个");
+    for (id item in attachments) {
+        if (![item isKindOfClass:NSDictionary.class]) return ts_err(error,SQLITE_MISMATCH,@"附件无效");
+        NSString *method=item[@"method"]; NSData *image=item[@"image"];
+        if (![method isKindOfClass:NSString.class] || ![@[@"camera",@"screenshot",@"image",@"file"] containsObject:method] || ![image isKindOfClass:NSData.class]
+            || image.length>20*1024*1024) return ts_err(error,SQLITE_MISMATCH,@"打卡附件或方式无效");
+        // 普通文件保留原始内容，不能按图片解码或转换。
+        if ([method isEqual:@"file"]) {
+            if (!ts_txt(item[@"name"],1024) || !ts_txt(item[@"content_type"],255)) return ts_err(error,SQLITE_MISMATCH,@"文件信息无效");
+            continue;
+        }
+        if (!image.length) return ts_err(error,SQLITE_MISMATCH,@"打卡图片或方式无效");
+        CGImageSourceRef source=CGImageSourceCreateWithData((__bridge CFDataRef)image,NULL);
+        NSDictionary *properties=source ? CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source,0,NULL)) : nil;
+        long long width=[properties[(__bridge NSString *)kCGImagePropertyPixelWidth] longLongValue],height=[properties[(__bridge NSString *)kCGImagePropertyPixelHeight] longLongValue];
+        BOOL valid=width>0 && height>0 && width<=20000 && height<=20000 && width*height<=100000000;
+        CGImageRef decoded=valid ? CGImageSourceCreateImageAtIndex(source,0,NULL) : NULL;
+        if (source) CFRelease(source);
+        if (decoded) CGImageRelease(decoded); else return ts_err(error,SQLITE_MISMATCH,@"图片无法读取");
+    }
+    return YES;
+}
+
+// 请求只携带轮次、来源和剩余名额，不修改完成状态。
+- (NSDictionary *)reqCap:(NSString *)occID source:(NSString *)source limit:(NSInteger)limit error:(NSError **)error {
+    __block NSDictionary *request=nil;
+    BOOL success=[self wrTxn:^BOOL(NSError **failure) {
+        if (!ts_uuid(occID) || ![@[@"camera",@"image",@"screenshot",@"file"] containsObject:source] || limit<1 || limit>TS_ATT_MAX)
+            return [self dbErr:SQLITE_MISMATCH message:@"采集参数无效" error:failure];
+        NSArray *valid=[self qry:"SELECT o.occurrence_id FROM reminder_occurrences o JOIN tasks t ON t.task_id=o.task_id WHERE o.occurrence_id=? AND o.status='triggered' AND t.deleted=0 AND t.status='needsAction' AND o.generation=t.reminder_version" values:@[occID] error:failure];
+        if (!valid) return NO;
+        if (!valid.count) return [self dbErr:SQLITE_NOTFOUND message:@"采集轮次已失效" error:failure];
+        NSString *token=NSUUID.UUID.UUIDString.lowercaseString;
+        if (![self qry:"DELETE FROM capture_request" values:@[] error:failure] || ![self qry:"INSERT INTO capture_request(token,occurrence_id,source,capacity,created_at) VALUES(?,?,?,?,?)" values:@[token,occID,source,@(limit),@(NSDate.date.timeIntervalSince1970)] error:failure]) return NO;
+        request=[self rdCap:token error:failure];return request!=nil;
+    } error:error];
+    return success ? request : nil;
+}
+
+// 二进制属性列表只在短期交接表内传递，不增加数据库文件。
+- (NSDictionary *)rdCap:(NSString *)token error:(NSError **)error {
+    @synchronized(self) {
+        NSArray *rows=[self qry:token ? "SELECT * FROM capture_request WHERE token=?" : "SELECT * FROM capture_request LIMIT 1" values:token ? @[token] : @[] error:error];
+        if (!rows) return nil;
+        if (!rows.count) return @{};
+        NSMutableDictionary *row=[rows.firstObject mutableCopy];
+        if ([row[@"payload"] isKindOfClass:NSData.class]) {
+            id items=[NSPropertyListSerialization propertyListWithData:row[@"payload"] options:NSPropertyListImmutable format:nil error:error];
+            if (![items isKindOfClass:NSArray.class]) return nil;
+            row[@"attachments"]=items;
+        }
+        [row removeObjectForKey:@"payload"];return row;
+    }
+}
+
+// 前台进程确认接管后，HUD监视该进程退出。
+- (BOOL)ackCap:(NSString *)token error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        NSDictionary *row=[self rdCap:token error:failure];
+        if (!row[@"token"] || [row[@"state"] intValue]!=0 || NSDate.date.timeIntervalSince1970-[row[@"created_at"] doubleValue]>30)
+            return [self dbErr:SQLITE_NOTFOUND message:@"采集请求已失效" error:failure];
+        return [self qry:"UPDATE capture_request SET state=1,pid=? WHERE token=?" values:@[@(getpid()),token] error:failure]!=nil;
+    } error:error];
+}
+
+// 取消、读取失败与有效结果均只交回HUD，不直接打卡。
+- (BOOL)finCap:(NSString *)token attachments:(NSArray *)attachments issue:(NSString *)issue error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        NSDictionary *row=[self rdCap:token error:failure];
+        if (!row || [row[@"state"] intValue]!=1 || [row[@"pid"] intValue]!=getpid()) return [self dbErr:SQLITE_NOTFOUND message:@"采集请求已失效" error:failure];
+        if (![attachments isKindOfClass:NSArray.class] || attachments.count>[row[@"capacity"] unsignedIntegerValue]) return [self dbErr:SQLITE_MISMATCH message:@"附件超出剩余名额" error:failure];
+        if (attachments.count && ![TaskStore vldPrfs:attachments error:failure]) return NO;
+        NSData *payload=[NSPropertyListSerialization dataWithPropertyList:attachments format:NSPropertyListBinaryFormat_v1_0 options:0 error:failure];
+        if (!payload) return NO;
+        return [self qry:"UPDATE capture_request SET state=2,payload=?,issue=? WHERE token=?" values:@[payload,issue ?: NSNull.null,token] error:failure]!=nil;
+    } error:error];
+}
+
+// 交接结束或服务重新启动时清理临时结果。
+- (BOOL)delCap:(NSString *)token error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {return [self qry:token ? "DELETE FROM capture_request WHERE token=?" : "DELETE FROM capture_request" values:token ? @[token] : @[] error:failure]!=nil;} error:error];
+}
+
+// 按序读取同一提醒的全部附件，普通读取仅返回元数据。
+- (NSArray<NSDictionary *> *)lsChk:(NSString *)occID images:(BOOL)images error:(NSError **)error {
+    @synchronized(self) {
+        if (!ts_uuid(occID)) { [self dbErr:SQLITE_MISMATCH message:@"打卡标识无效" error:error]; return nil; }
+        return [self qry:images ? "SELECT * FROM reminder_checkins WHERE occurrence_id=? ORDER BY position"
+            : "SELECT occurrence_id,position,method,created_at,name,content_type,length(image) AS image_bytes FROM reminder_checkins WHERE occurrence_id=? ORDER BY position"
+            values:@[occID.lowercaseString] error:error];
+    }
+}
+
+// 保留旧单图读取约定，返回按序排列的首个附件。
+- (NSDictionary *)rdChk:(NSString *)occID image:(BOOL)image error:(NSError **)error {
+    NSArray *rows=[self lsChk:occID images:image error:error];
+    if (rows && rows.count==0) [self dbErr:SQLITE_NOTFOUND message:@"尚未打卡" error:error];
+    return rows.firstObject;
 }
 
 // 创建任务清单。

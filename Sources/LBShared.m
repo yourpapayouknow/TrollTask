@@ -1,5 +1,15 @@
 #import "LBHead.h"
 
+#if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
+// 复用LaunchServices激活同一App，不派生第二个采集守护进程。
+BOOL lb_opnapp(void) {
+    Class workspace=NSClassFromString(@"LSApplicationWorkspace");
+    if (![workspace respondsToSelector:@selector(defaultWorkspace)]) return NO;
+    id instance=[workspace defaultWorkspace];
+    return [instance respondsToSelector:@selector(openApplicationWithBundleID:)] && [instance openApplicationWithBundleID:@"com.iwmei.taskforiwmei"];
+}
+#endif
+
 #ifdef LB_HOST_TEST
 // 为未使用服务的宿主入口提供可由隔离测试覆盖的路径符号。
 __attribute__((weak)) NSString *lb_tstpath;
@@ -12,6 +22,12 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *attr, uid_t p
 extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *attr, uid_t uid);
 extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *attr, uid_t gid);
 #endif
+
+// 仅诊断安装包启用限时HUD，正常包没有此标记。
+BOOL lb_dbg(void) { return [NSBundle.mainBundle.infoDictionary[@"TTHUDDebug"] boolValue]; }
+
+// 默认SIGALRM由系统结束进程，不依赖触摸或主RunLoop。
+void lb_dbgarm(unsigned int seconds) { signal(SIGALRM, SIG_DFL); alarm(seconds); }
 
 // 生成经过边界校验的配置。
 static NSDictionary *lb_normcfg(NSDictionary *input) {
@@ -132,17 +148,58 @@ UIColor *lb_acnt(void) { return [UIColor colorWithRed:28.0/255 green:209.0/255 b
 UIImage *lb_icon(NSString *name) {
     return [[UIImage imageNamed:[@"MingCute/" stringByAppendingString:name]] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
+// 将同一前台方向用于内容和边栏投影。
+CGFloat lb_hudang(UIInterfaceOrientation orientation) {
+    if (orientation == UIInterfaceOrientationLandscapeLeft) return -M_PI_2;
+    if (orientation == UIInterfaceOrientationLandscapeRight) return M_PI_2;
+    return orientation == UIInterfaceOrientationPortraitUpsideDown ? M_PI : 0;
+}
+
+// 在真实安全区右缘放置单一边栏窗口。
+CGRect lb_hudfrm(CGRect screen, UIEdgeInsets insets, UIInterfaceOrientation orientation) {
+    CGFloat angle = lb_hudang(orientation);
+    BOOL landscape = UIInterfaceOrientationIsLandscape(orientation);
+    CGSize logical = landscape ? CGSizeMake(screen.size.height,screen.size.width) : screen.size;
+    CGRect safe = CGRectOffset(UIEdgeInsetsInsetRect(screen,insets),-CGRectGetMidX(screen),-CGRectGetMidY(screen));
+    safe = CGRectApplyAffineTransform(safe,CGAffineTransformMakeRotation(-angle));
+    safe = CGRectOffset(safe,logical.width/2,logical.height/2);
+    CGPoint center = CGPointMake(CGRectGetMaxX(safe)-40-logical.width/2,CGRectGetMidY(safe)-logical.height/2);
+    center = CGPointApplyAffineTransform(center,CGAffineTransformMakeRotation(angle));
+    center.x += CGRectGetMidX(screen); center.y += CGRectGetMidY(screen);
+    CGSize size = landscape ? CGSizeMake(96,72) : CGSizeMake(72,96);
+    return CGRectMake(center.x-size.width/2,center.y-size.height/2,size.width,size.height);
+}
+
+// 读取统一大字与动态字体。
+UIFont *lb_fnt(UIFontTextStyle style, UITraitCollection *traits) {
+    CGFloat size = 20; UIFontWeight weight = UIFontWeightMedium;
+    if ([style isEqual:UIFontTextStyleTitle1] || [style isEqual:UIFontTextStyleTitle2] || [style isEqual:UIFontTextStyleLargeTitle]) {
+        size = 28; weight = UIFontWeightSemibold;
+    } else if ([style isEqual:UIFontTextStyleHeadline]) {
+        weight = UIFontWeightSemibold;
+    } else if ([style isEqual:UIFontTextStyleSubheadline] || [style isEqual:UIFontTextStyleFootnote] || [style isEqual:UIFontTextStyleCaption1] || [style isEqual:UIFontTextStyleCaption2]) {
+        size = 18;
+    }
+    return [[UIFontMetrics metricsForTextStyle:style] scaledFontForFont:[UIFont systemFontOfSize:size weight:weight] compatibleWithTraitCollection:traits];
+}
+
 // 创建统一外观的功能按钮。
 UIButton *lb_mkbtn(NSString *title, id target, SEL action) {
     UIButtonConfiguration *config = [UIButtonConfiguration filledButtonConfiguration];
     config.title = title;
-    config.baseBackgroundColor = lb_acnt();
-    config.baseForegroundColor = UIColor.blackColor;
+    config.baseBackgroundColor = [UIColor colorWithRed:37/255.0 green:51/255.0 blue:53/255.0 alpha:0.72];
+    config.baseForegroundColor = lb_acnt();
     config.cornerStyle = UIButtonConfigurationCornerStyleFixed;
-    config.background.cornerRadius = 16.0;
-    config.contentInsets = NSDirectionalEdgeInsetsMake(4.0, 4.0, 4.0, 4.0);
+    config.background.cornerRadius = 20.0;
+    config.background.strokeColor = [UIColor colorWithWhite:1 alpha:0.12];
+    config.background.strokeWidth = 1.0 / UIScreen.mainScreen.scale;
+    config.contentInsets = NSDirectionalEdgeInsetsMake(8.0, 8.0, 8.0, 8.0);
+    config.titleTextAttributesTransformer = ^NSDictionary<NSAttributedStringKey,id> *(NSDictionary<NSAttributedStringKey,id> *attributes) {
+        NSMutableDictionary *result = attributes.mutableCopy; result[NSFontAttributeName] = lb_fnt(UIFontTextStyleHeadline, nil); return result;
+    };
     UIButton *button = [UIButton buttonWithConfiguration:config primaryAction:nil];
-    button.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    button.layer.cornerCurve = kCACornerCurveContinuous;
+    button.titleLabel.adjustsFontForContentSizeCategory = YES;
     [button.heightAnchor constraintGreaterThanOrEqualToConstant:44.0].active = YES;
     [button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
     return button;

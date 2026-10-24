@@ -3,15 +3,56 @@
 @objc(LBAppDel) final class TaskApp: UIResponder, UIApplicationDelegate {
     @objc var window: UIWindow?
     private var store: TaskStore?
+    private var capture: TaskHUD?, captureID: String?, captureNote: Int32 = -1
     // 启动共享存储和已启用的独立HUD。
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         do { store = try TaskStore.shrd() } catch { NSLog("TaskStore初始化失败：%@", error as NSError) }
         let home = TaskHome(store: store) { $0.pushViewController(TaskSettings(), animated: true) }
         let navigation = UINavigationController(rootViewController: home); navigation.overrideUserInterfaceStyle = .dark
         let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = navigation; self.window = window; window.makeKeyAndVisible()
+        let result = notify_register_dispatch(TS_CAPTURE_NOTE, &captureNote, .main) { [weak self] _ in self?.capStart() }
+        if result != NOTIFY_STATUS_OK { captureNote = -1 }
         if store != nil, (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true { _ = lb_spawn() }
         return true
     }
+    // 只在正常前台生命周期中开启系统采集。
+    func applicationDidBecomeActive(_ application: UIApplication) { capStart() }
+    // 用户切走或划掉采集App时交回取消，提醒服务继续运行。
+    func applicationDidEnterBackground(_ application: UIApplication) { capture?.capAbort() }
+    // 按同库请求临时呈现采集页，不创建提醒服务或另一个数据库。
+    private func capStart() {
+        guard UIApplication.shared.applicationState == .active, let store, let root = window?.rootViewController else { return }
+        do {
+            if let token = captureID {
+                let current = try store.rdCap(token)
+                if current["token"] == nil { capture?.capAbort() }
+                return
+            }
+            guard capture == nil, lb_svcup() else { return }
+            var host = root
+            while let presented = host.presentedViewController { host = presented }
+            let request = try store.rdCap(nil)
+            guard (request["state"] as? NSNumber)?.intValue == 0, let token = request["token"] as? String else { return }
+            try store.ackCap(token)
+            let picker = TaskHUD(); capture = picker; captureID = token; picker.modalPresentationStyle = .overFullScreen
+            host.present(picker, animated: false) { [weak self, weak picker] in
+                guard let self, let picker else { return }
+                picker.capOpen(request as? TaskFields ?? [:]) { [weak self, weak picker] items, issue in
+                    guard let self, self.captureID == token else { return }
+                    do { let current = try store.rdCap(token); if current["token"] != nil { try store.finCap(token, attachments: items, issue: issue) } }
+                    catch {
+                        NSLog("前台采集交回失败：%@", error as NSError)
+                        do { try store.finCap(token, attachments: [], issue: "图片读取失败") } catch { NSLog("采集取消交回失败：%@", error as NSError) }
+                    }
+                    self.captureID = nil; self.capture = nil; notify_post(TS_CAPTURE_NOTE)
+                    picker?.dismiss(animated: false) { [weak self] in picker?.stp(); self?.capStart() }
+                }
+                notify_post(TS_CAPTURE_NOTE)
+            }
+        } catch { NSLog("前台采集启动失败：%@", error as NSError) }
+    }
+    // 注销采集请求通知。
+    deinit { if captureNote >= 0 { notify_cancel(captureNote) } }
 }
 #endif
 

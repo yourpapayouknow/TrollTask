@@ -103,6 +103,13 @@ static void ut_bounds(UIView *view, UIView *viewport) {
         }
         if ([child isKindOfClass:UITextView.class] || [child isKindOfClass:UITextField.class]
             || [child isKindOfClass:UIDatePicker.class] || [child isKindOfClass:UIButton.class]) continue;
+        // 附件滚动内容由HUD单行及末项可达断言单独检查。
+        if ([child.accessibilityIdentifier isEqual:@"hud.attachments"]) {
+            CGRect frame=[child convertRect:child.bounds toView:viewport];
+            if (CGRectGetMinX(frame)<-1 || CGRectGetMaxX(frame)>viewport.bounds.size.width+1 || child.hasAmbiguousLayout)
+                [NSException raise:@"UITestFailure" format:@"附件滚动区超出页面或布局歧义：%@",NSStringFromCGRect(frame)];
+            continue;
+        }
         ut_bounds(child, viewport);
     }
 }
@@ -224,6 +231,8 @@ static void ut_run(void) {
     // 验证原生渐变覆盖页面、生命周期停止以及恢复动画。
     ut_ui(^{
         UIView *background = ut_find(ut_top().view, @"theme.gradient");
+        ut_req([ut_find(background,@"theme.material") isKindOfClass:UIVisualEffectView.class], @"App渐变沿用同一原生磨砂底层");
+        ut_req(lb_fnt(UIFontTextStyleBody,nil).pointSize>=20 && lb_fnt(UIFontTextStyleTitle2,nil).pointSize>=28, @"正文和标题采用统一大字");
         ut_req([background.layer isKindOfClass:CAGradientLayer.class] && !background.userInteractionEnabled, @"原生渐变不拦截触摸");
         CAGradientLayer *gradient = (CAGradientLayer *)background.layer;
         ut_req(gradient.colors.count == 3 && CGRectEqualToRect(background.frame, ut_top().view.bounds), @"压暗青橙覆盖页面边界");
@@ -595,6 +604,36 @@ static void ut_svc(void) {
     });
 }
 
+#include "test_hud.inc"
+
+// 在普通模拟器窗口内持续操作生产HUD及真实提醒服务。
+static void ut_hdbg(BOOL seed) {
+    TTTaskHUD *hud = [TTTaskHUD new]; UIViewController *host = ut_window.rootViewController;
+    [host addChildViewController:hud]; hud.view.frame = host.view.bounds; hud.view.hidden = YES;
+    [host.view addSubview:hud.view]; [hud didMoveToParentViewController:host];
+    __weak TTTaskHUD *weakHUD = hud; __weak UIViewController *weakHost = host;
+    hud.windowMode = ^(NSInteger mode) {
+        UIView *view = weakHUD.view; UIView *parent = weakHost.view;
+        view.hidden = mode == 0;
+        view.frame = mode == 2 ? lb_hudfrm(parent.bounds, parent.safeAreaInsets, UIInterfaceOrientationPortrait) : parent.bounds;
+        view.autoresizingMask = mode == 2 ? UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin
+            : UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        NSLog(@"HUDInspect mode=%ld", (long)mode);
+    };
+    ut_req(lb_svcfg(@{@"enabled":@YES}), @"保存独立调试配置");
+    ut_sched = [[TaskReminder alloc] initAt:ut_store.path handler:^(NSDictionary *alert, NSError *error) {
+        NSLog(@"HUDInspect occurrence=%@ error=%@", alert[@"occurrence_id"] ?: @"idle", error.localizedDescription ?: @"");
+        [weakHUD display:alert error:error];
+    } cleanup:^{ [weakHUD stop]; } finish:^(__unused BOOL restart) {}];
+    hud.reminder = ut_sched;
+    ut_req([ut_sched start:nil], @"启动同一生产提醒服务");
+    if (seed) {
+        NSString *notes = [@"调试正文\n" stringByPaddingToLength:600 withString:@"检查长正文滚动与按钮位置。\n" startingAtIndex:0];
+        ut_req([ut_store crtTsk:@{@"title":@"调试待办", @"notes":notes, @"due_at":@(NSDate.date.timeIntervalSince1970 + 1), @"schedule_kind":@"timed"} error:nil] != nil, @"创建独立调试待办");
+    }
+    [ut_store.path writeToFile:[ut_docs stringByAppendingPathComponent:@"HUDInspectStore.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
 // 为真实UIKit测试创建独立数据库和应用窗口。
 @interface UITestDel : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
@@ -606,7 +645,10 @@ static void ut_svc(void) {
     ut_docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     [NSFileManager.defaultManager createDirectoryAtPath:[ut_docs stringByAppendingPathComponent:@"screens"] withIntermediateDirectories:YES attributes:nil error:nil];
     lb_tstpath = [ut_docs stringByAppendingPathComponent:@"test.plist"]; lb_tstlock = "/tmp/trolltask-ui.lock";
-    NSString *path = [ut_docs stringByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingString:@".sqlite3"]];
+    BOOL hudInspect = [NSProcessInfo.processInfo.arguments containsObject:@"--hud-inspect"];
+    if (hudInspect) { lb_tstpath = [ut_docs stringByAppendingPathComponent:@"hud-inspect.plist"]; lb_tstlock = "/tmp/trolltask-hud-inspect.lock"; }
+    NSString *path = [ut_docs stringByAppendingPathComponent:hudInspect ? @"HUDInspect.sqlite3" : [NSUUID.UUID.UUIDString stringByAppendingString:@".sqlite3"]];
+    BOOL seed = hudInspect && ![NSFileManager.defaultManager fileExistsAtPath:path];
     ut_store = [[TaskStore alloc] initAt:path error:nil]; ut_checks = [NSMutableArray array];
     TaskHome *home = [[TaskHome alloc] initWithStore:ut_store settings:nil];
     ut_nav = [[UINavigationController alloc] initWithRootViewController:home]; ut_nav.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
@@ -615,6 +657,7 @@ static void ut_svc(void) {
     [host addChildViewController:ut_nav]; ut_nav.view.frame = host.view.bounds;
     [host.view addSubview:ut_nav.view]; [ut_nav didMoveToParentViewController:host];
     [self.window makeKeyAndVisible]; ut_nav.view.frame = self.window.bounds;
+    if (hudInspect) { ut_hdbg(seed); return YES; }
     if ([NSProcessInfo.processInfo.arguments containsObject:@"--inspect"]) {
         [ut_store.path writeToFile:[ut_docs stringByAppendingPathComponent:@"InspectStore.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{ ut_mon(); }); return YES;
@@ -627,10 +670,12 @@ static void ut_svc(void) {
                 BOOL phase6 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase06"];
                 BOOL phase7 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase07"];
                 BOOL phase8 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase08"];
-                if (!phase5 && !phase6 && !phase7 && !phase8) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
-                if (@available(iOS 16.0,*)) { if (!phase6 && !phase7 && !phase8) ut_edit(); if (!phase5 && !phase7 && !phase8) ut_rpt(); }
-                if (!phase5 && !phase6 && !phase8) ut_schd();
-                if (!phase5 && !phase6 && !phase7) ut_svc();
+                BOOL phase9 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase09"];
+                if (!phase5 && !phase6 && !phase7 && !phase8 && !phase9) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
+                if (@available(iOS 16.0,*)) { if (!phase6 && !phase7 && !phase8 && !phase9) ut_edit(); if (!phase5 && !phase7 && !phase8 && !phase9) ut_rpt(); }
+                if (!phase5 && !phase6 && !phase8 && !phase9) ut_schd();
+                if (!phase5 && !phase6 && !phase7 && !phase9) ut_svc();
+                if (!phase5 && !phase6 && !phase7 && !phase8) ut_hud();
             } @catch (NSException *exception) { passed = NO; failure = exception.reason; }
             __block NSString *device, *runtime;
             ut_ui(^{ device = UIDevice.currentDevice.model; runtime = UIDevice.currentDevice.systemVersion; });

@@ -1,6 +1,14 @@
 #import "LBHead.h"
 
+static void lb_hudrun(UIApplication *app);
+
 @implementation LBHudApp
+// 等原生运行入口装好事件源，再完成独立HUD启动。
+- (void)_run {
+    [self _accessibilityInit];
+    dispatch_async(dispatch_get_main_queue(), ^{ lb_hudrun(self); });
+    [super _run];
+}
 @end
 
 @implementation LBHudWin
@@ -23,26 +31,17 @@
 @end
 
 @interface LBHudCtl ()
-@property(nonatomic, assign) BOOL touchActive;
-@property(nonatomic, strong) UIButton *closeButton;
-@property(nonatomic, strong) UIButton *completeButton;
-@property(nonatomic, strong) UIButton *snoozeButton;
-@property(nonatomic, weak) UIButton *touchButton;
-@property(nonatomic, strong) UILabel *titleLabel;
-@property(nonatomic, strong) UILabel *kindLabel;
-@property(nonatomic, strong) UILabel *timeLabel;
-@property(nonatomic, strong) UIStackView *actions;
-@property(nonatomic, strong) UIStackView *snoozes;
-@property(nonatomic, strong) NSDictionary *alert;
-@property(nonatomic, assign) BOOL acting;
-- (void)onTchDn:(CGPoint)point;
-- (void)onTchUp:(CGPoint)point;
-- (void)onTchCn;
+@property(nonatomic, strong) TTTaskHUD *content;
+@property(nonatomic, strong) FBSOrientationObserver *orientationObserver;
+@property(nonatomic, assign) UIInterfaceOrientation orientation;
 - (void)dspAlrt:(NSDictionary *)alert error:(NSError *)error;
 - (void)stpMon;
+- (void)wndmd:(NSInteger)mode;
+- (void)rtt:(UIInterfaceOrientation)orientation;
 @end
 
 static __weak LBHudCtl *s_lbhudctl = nil;
+static NSMutableSet<NSNumber *> *lb_touchids;
 static Class s_lbaxcls = nil;
 static TaskReminder *lb_reminder;
 static LBHudDel *lb_delegate;
@@ -62,231 +61,116 @@ static void lb_ldax(void) {
     });
 }
 
-// 接收底层硬件触摸事件回调。
+// 将同一硬件触摸路由至原生UIKit，支持滚动及系统图片选择。
 static void lb_onhidevt(void *target, void *refcon, void *service, void *event) {
-    (void)target;
-    (void)refcon;
-    (void)service;
+    (void)target; (void)refcon; (void)service;
     LBHudCtl *ctl = s_lbhudctl;
     if (!ctl || ctl.hudWindow.hidden) return;
-
     AXEventRepresentation *rep = [s_lbaxcls representationWithHIDEvent:event hidStreamIdentifier:@"UIApplicationEvents"];
     if (!rep) return;
-    if ([rep isCancel]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [ctl onTchCn];
-        });
-        return;
-    }
-    if (![rep respondsToSelector:@selector(location)]) return;
-    CGPoint point = [rep location];
-    if ([rep isTouchDown]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [ctl onTchDn:point];
-        });
-    } else if ([rep isLift] || [rep isInRangeLift]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [ctl onTchUp:point];
-        });
-    }
+    // 诊断版仅记录前20个输入，核对实际硬件阶段和路径身份。
+    static unsigned int traces = 0;
+    if (lb_dbg() && traces++ < 20) NSLog(@"TTDBG HID down=%d move=%d lift=%d rangeLift=%d cancel=%d pointer=%ld point=%@", [rep isTouchDown], [rep isMove], [rep isLift], [rep isInRangeLift], [rep isCancel], (long)[[[[rep handInfo] paths] firstObject] pathIdentity], NSStringFromCGPoint([rep location]));
+    UITouchPhase phase = [rep isCancel] ? UITouchPhaseCancelled : ([rep isTouchDown] ? UITouchPhaseBegan : ([rep isMove] ? UITouchPhaseMoved : UITouchPhaseEnded));
+    if (phase == UITouchPhaseEnded && ![rep isLift] && ![rep isInRangeLift]) return;
+    CGPoint global = [rep location];
+    NSInteger pointer = [[[[rep handInfo] paths] firstObject] pathIdentity];
+    if (pointer <= 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        LBHudWin *window = ctl.hudWindow;
+        if (window.hidden || !window) return;
+        CGPoint local = [window convertPoint:global fromWindow:nil];
+        UIView *hit = [window hitTest:local withEvent:nil];
+        // 少量命中记录区分坐标、硬件输入与UIKit按钮分发。
+        static unsigned int hits = 0;
+        if (lb_dbg() && hits++ < 20) NSLog(@"TTDBG hit phase=%ld id=%ld local=%@ view=%@", (long)phase, (long)pointer, NSStringFromCGPoint(local), hit.accessibilityIdentifier ?: NSStringFromClass(hit.class));
+        NSNumber *identity = @(pointer);
+        if (phase == UITouchPhaseBegan) {
+            if (!hit) return;
+            if (!lb_touchids) lb_touchids = [NSMutableSet set];
+            [lb_touchids addObject:identity];
+        } else if (![lb_touchids containsObject:identity]) return;
+        [TSEventFetcher receiveAXEventID:MIN(MAX(pointer,1),98) atGlobalCoordinate:local withTouchPhase:phase inWindow:window onView:hit];
+        if (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled) [lb_touchids removeObject:identity];
+    });
 }
-
-
-
 
 @implementation LBHudCtl {
     int _testToken;
 }
 
-// 创建手动提醒预览界面。
+// 只连接Swift内容和已经验证的系统宿主。
 - (void)viewDidLoad {
-    [super viewDidLoad];
-    s_lbhudctl = self;
-    _testToken = -1;
-    self.view.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.88];
-    UIVisualEffectView *card = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterialDark]];
-    card.layer.cornerRadius = 16.0;
-    card.layer.masksToBounds = YES;
-    card.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
-    card.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.12].CGColor;
-    card.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:card];
-
-    UIImageView *icon = [[UIImageView alloc] initWithImage:lb_icon(@"list")];
-    icon.contentMode = UIViewContentModeScaleAspectFit;
-    icon.tintColor = lb_acnt();
-    [icon.heightAnchor constraintEqualToConstant:44.0].active = YES;
-    UILabel *title = [[UILabel alloc] init];
-    title.text = @"待办提醒";
-    title.textAlignment = NSTextAlignmentCenter;
-    title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
-    title.textColor = [UIColor colorWithWhite:244.0/255 alpha:1.0];
-    title.adjustsFontForContentSizeCategory = YES;
-    self.titleLabel = title;
-    UILabel *kind = [[UILabel alloc] init];
-    kind.textAlignment = NSTextAlignmentCenter;
-    kind.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    kind.textColor = title.textColor; kind.adjustsFontForContentSizeCategory = YES;
-    kind.hidden = YES; self.kindLabel = kind;
-    UILabel *time = [[UILabel alloc] init];
-    time.textAlignment = NSTextAlignmentCenter;
-    time.font = kind.font; time.textColor = title.textColor; time.adjustsFontForContentSizeCategory = YES;
-    time.hidden = YES; self.timeLabel = time;
-    UIButton *button = lb_mkbtn(@"收起预览", self, @selector(hdeprvw));
-    self.closeButton = button;
-    self.completeButton = lb_mkbtn(@"完成任务", self, @selector(cmpTask));
-    self.snoozeButton = lb_mkbtn(@"延后提醒", self, @selector(snzMenu));
-    self.completeButton.hidden = YES; self.snoozeButton.hidden = YES;
-    self.actions = [[UIStackView alloc] initWithArrangedSubviews:@[self.completeButton, self.snoozeButton, button]];
-    self.actions.axis = UILayoutConstraintAxisVertical; self.actions.spacing = 4.0;
-    self.snoozes = [[UIStackView alloc] init];
-    self.snoozes.axis = UILayoutConstraintAxisVertical; self.snoozes.spacing = 4.0; self.snoozes.hidden = YES;
-    for (NSNumber *minutes in @[@5, @10, @30, @60]) {
-        UIButton *choice = lb_mkbtn([NSString stringWithFormat:@"%@分钟", minutes], self, @selector(snzPick:));
-        choice.tag = minutes.integerValue; [self.snoozes addArrangedSubview:choice];
-    }
-    [self.snoozes addArrangedSubview:lb_mkbtn(@"返回", self, @selector(hdesnz))];
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[icon, kind, title, time, self.actions, self.snoozes]];
-    stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 4.0;
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [card.contentView addSubview:stack];
-    NSLayoutConstraint *width = [card.widthAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-(4.0 + 4.0)];
-    width.priority = UILayoutPriorityDefaultHigh;
-    [NSLayoutConstraint activateConstraints:@[
-        [card.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
-        [card.centerYAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerYAnchor],
-        [card.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:4.0],
-        [card.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-4.0],
-        [card.widthAnchor constraintLessThanOrEqualToConstant:380.0],
-        width,
-        [stack.leadingAnchor constraintEqualToAnchor:card.contentView.leadingAnchor constant:4.0],
-        [stack.trailingAnchor constraintEqualToAnchor:card.contentView.trailingAnchor constant:-4.0],
-        [stack.topAnchor constraintEqualToAnchor:card.contentView.topAnchor constant:4.0],
-        [stack.bottomAnchor constraintEqualToAnchor:card.contentView.bottomAnchor constant:-4.0],
-    ]];
-}
-
-// 收起手动预览。
-- (void)hdeprvw {
-    self.touchActive = NO;
-    self.touchButton = nil;
-    if (self.alert) { [self wrkAct:@"dismiss" until:nil]; return; }
-    self.hudWindow.hidden = YES;
-}
-
-// 按真实按钮及其子视图判断触摸命中。
-- (UIButton *)btntst:(CGPoint)point {
-    UIView *hit = [self.hudWindow hitTest:point withEvent:nil];
-    while (hit && ![hit isKindOfClass:UIButton.class]) hit = hit.superview;
-    UIButton *button = (UIButton *)hit;
-    return button.enabled && !button.hidden ? button : nil;
-}
-
-// 只记录按钮内开始的触摸。
-- (void)onTchDn:(CGPoint)point {
-    BOOL active = self.touchActive;
-    self.touchButton = [self btntst:point];
-    lb_btntap(&active, self.touchButton != nil, YES);
-    self.touchActive = active;
-}
-
-// 仅在按钮内结束有效触摸时触发按钮动作。
-- (void)onTchUp:(CGPoint)point {
-    BOOL active = self.touchActive;
-    UIButton *button = self.touchButton;
-    BOOL fire = lb_btntap(&active, button && [self btntst:point] == button, NO);
-    self.touchActive = active;
-    self.touchButton = nil;
-    if (fire) [button sendActionsForControlEvents:UIControlEventTouchUpInside];
-}
-
-// 取消触摸并清除按钮按下状态。
-- (void)onTchCn {
-    BOOL active = self.touchActive;
-    lb_btntap(&active, NO, NO);
-    self.touchActive = active;
-    self.touchButton = nil;
-}
-
-// 显示数据库核对后的真实提醒并限制标题长度。
-- (void)dspAlrt:(NSDictionary *)alert error:(NSError *)error {
-    self.acting = NO;
-    for (UIButton *button in self.actions.arrangedSubviews) { [button cancelTrackingWithEvent:nil]; button.enabled = YES; }
-    for (UIButton *button in self.snoozes.arrangedSubviews) { [button cancelTrackingWithEvent:nil]; button.enabled = YES; }
-    self.touchActive = NO; self.touchButton = nil; self.alert = alert;
-    self.actions.hidden = NO; self.snoozes.hidden = YES;
-    self.completeButton.hidden = !alert; self.snoozeButton.hidden = !alert;
-    self.kindLabel.hidden = !alert; self.timeLabel.hidden = !alert;
-    [self.closeButton setTitle:alert ? @"关闭提醒" : @"收起预览" forState:UIControlStateNormal];
-    if (error) NSLog(@"提醒调度失败：%@", error);
-    if (!alert) { self.titleLabel.text = @"待办提醒"; self.hudWindow.hidden = YES; return; }
-    NSString *text = alert[@"task"][@"title"];
-    self.titleLabel.text = lb_shrt(text);
-    self.kindLabel.text = [alert[@"kind"] isEqual:@"plan"] ? @"计划提醒" : ([alert[@"kind"] isEqual:@"deadline"] ? @"截止提醒" : @"合并提醒");
-    NSDateFormatter *formatter = [NSDateFormatter new]; formatter.dateFormat = @"MM-dd HH:mm"; formatter.timeZone = NSTimeZone.localTimeZone;
-    self.timeLabel.text = [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:[alert[@"remind_at"] doubleValue]]];
-    [self.completeButton setTitle:[alert[@"task"][@"recurrence"] count] ? @"完成本次" : @"完成任务" forState:UIControlStateNormal];
-    if (error) [self.closeButton setTitle:@"操作失败" forState:UIControlStateNormal];
-    self.hudWindow.hidden = NO;
-}
-
-// 完成当前普通任务或重复轮次。
-- (void)cmpTask { [self wrkAct:@"complete" until:nil]; }
-
-// 在原卡片内选择延后时长。
-- (void)snzMenu { if (self.alert) { self.actions.hidden = YES; self.snoozes.hidden = NO; } }
-
-// 返回当前提醒操作。
-- (void)hdesnz { self.actions.hidden = NO; self.snoozes.hidden = YES; }
-
-// 延后当前一次提醒并保留原截止日期。
-- (void)snzPick:(UIButton *)button {
-    [self wrkAct:@"snooze" until:@(NSDate.date.timeIntervalSince1970 + button.tag * 60)];
-}
-
-// 固定操作目标并阻止重复触摸误处理下一条提醒。
-- (void)wrkAct:(NSString *)action until:(NSNumber *)until {
-    if (!self.alert || self.acting) return;
-    self.acting = YES;
-    for (UIButton *button in self.actions.arrangedSubviews) button.enabled = NO;
-    for (UIButton *button in self.snoozes.arrangedSubviews) button.enabled = NO;
-    [lb_reminder act:action until:until occID:self.alert[@"occurrence_id"]];
-}
-
-// 窗口就绪后接入统一提醒服务并监听预览。
-- (void)startMon {
+    [super viewDidLoad]; s_lbhudctl = self; _testToken = -1;
+    self.view.backgroundColor = UIColor.clearColor;
+    TTTaskHUD *content = [TTTaskHUD new]; content.reminder = lb_reminder; content.globalCapture = YES; self.content = content;
+    [self addChildViewController:content]; content.view.frame = self.view.bounds;
+    content.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:content.view]; [content didMoveToParentViewController:self];
     __weak typeof(self) weakSelf = self;
-    NSError *error = nil;
-    if (notify_register_dispatch(LB_TEST_NOTE, &_testToken, dispatch_get_main_queue(), ^(__unused int token) {
-        [weakSelf forceTest];
-    }) != NOTIFY_STATUS_OK) lb_hudend(EXIT_FAILURE);
-    if (![lb_reminder start:&error]) { NSLog(@"TaskReminder启动失败：%@", error); lb_hudend(EXIT_FAILURE); }
+    content.windowMode = ^(NSInteger mode) { [weakSelf wndmd:mode]; };
+    Class observer = objc_getClass("FBSOrientationObserver");
+    if (observer) {
+        self.orientationObserver = [[observer alloc] init];
+        self.orientation = (UIInterfaceOrientation)[self.orientationObserver activeInterfaceOrientation];
+        [self.orientationObserver setHandler:^(FBSOrientationUpdate *update) { dispatch_async(dispatch_get_main_queue(), ^{
+            weakSelf.orientation = (UIInterfaceOrientation)[update orientation]; [weakSelf wndmd:weakSelf.content.mode];
+        }); }];
+    }
 }
 
-// 清除预览通知、触摸与当前显示。
+// 全屏覆盖与边栏物理窗口共用同一安全context。
+- (void)wndmd:(NSInteger)mode {
+    LBHudWin *window = self.hudWindow;
+    if (!window) return;
+    if (mode == 0) { window.hidden = YES; return; }
+    CGRect screen = UIScreen.mainScreen.bounds;
+    window.hidden = YES;
+    window.frame = screen;
+    if (mode == 2) window.frame = lb_hudfrm(screen,window.safeAreaInsets,self.orientation);
+    [TSEventFetcher stop]; [lb_touchids removeAllObjects];
+    [self rtt:self.orientation]; window.hidden = NO;
+}
+
+// 按上游前台方向观察更新坐标与内容安全区。
+- (void)rtt:(UIInterfaceOrientation)orientation {
+    self.orientation = orientation;
+    CGRect bounds = self.hudWindow.bounds;
+    if (CGRectIsEmpty(bounds)) return;
+    CGFloat angle = lb_hudang(orientation);
+    if (UIInterfaceOrientationIsLandscape(orientation)) bounds = CGRectMake(0,0,bounds.size.height,bounds.size.width);
+    self.view.transform = CGAffineTransformIdentity; self.view.bounds = bounds;
+    self.view.center = CGPointMake(CGRectGetMidX(self.hudWindow.bounds),CGRectGetMidY(self.hudWindow.bounds));
+    self.view.transform = CGAffineTransformMakeRotation(angle); [self.view setNeedsLayout];
+}
+
+// 延续上游手动跟随方向策略，避免UIKit再次旋转。
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
+
+// 只转交数据库核对后的展示。
+- (void)dspAlrt:(NSDictionary *)alert error:(NSError *)error { [self.content display:alert error:error]; }
+
+// 保持原服务启动及预览Darwin通知顺序。
+- (void)startMon {
+    __weak typeof(self) weakSelf = self; NSError *error = nil;
+    if (notify_register_dispatch(LB_TEST_NOTE, &_testToken, dispatch_get_main_queue(), ^(__unused int token) { [weakSelf.content preview]; notify_post(LB_READY_NOTE); }) != NOTIFY_STATUS_OK) lb_hudend(EXIT_FAILURE);
+    if (![lb_reminder start:&error]) { NSLog(@"TaskReminder启动失败：%@",error); lb_hudend(EXIT_FAILURE); }
+}
+
+// 停止原生触摸、方向、计时和图片资源。
 - (void)stpMon {
     if (_testToken >= 0) { notify_cancel(_testToken); _testToken = -1; }
-    [self onTchCn]; [self dspAlrt:nil error:nil];
+    [self.orientationObserver invalidate]; self.orientationObserver = nil;
+    [TSEventFetcher stop]; [lb_touchids removeAllObjects]; [self.content stop]; self.content = nil;
     if (s_lbhudctl == self) s_lbhudctl = nil;
 }
 
-// 显示手动预览并确认就绪。
-- (void)forceTest {
-    if (![lb_ldcfg()[@"enabled"] boolValue]) return;
-    if (self.alert) { notify_post(LB_READY_NOTE); return; }
-    [self dspAlrt:nil error:nil];
-    if (self.hudWindow.hidden) self.touchActive = NO;
-    self.hudWindow.hidden = NO;
-    notify_post(LB_READY_NOTE);
-}
-
-// 注销共享通知。
+// 解除尚未停止的方向与通知。
 - (void)dealloc {
     if (_testToken >= 0) notify_cancel(_testToken);
+    [self.orientationObserver invalidate];
     if (s_lbhudctl == self) s_lbhudctl = nil;
 }
-
 @end
 
 @implementation LBHudDel {
@@ -303,6 +187,7 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
 
     LBHudWin *window = [[LBHudWin alloc] initWithFrame:UIScreen.mainScreen.bounds];
     window.rootViewController = _controller;
+    window.backgroundColor = UIColor.clearColor; window.opaque = NO;
     window.windowLevel = 10000010.0;
     window.alpha = 0.0;
     window.hidden = NO;
@@ -344,6 +229,7 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
 static BOOL lb_ldfw(void) {
     const char *frameworks[] = {
         "/System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices",
+        "/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices",
         "/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices",
         "/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices",
     };
@@ -351,11 +237,6 @@ static BOOL lb_ldfw(void) {
         if (!dlopen(frameworks[index], RTLD_NOW | RTLD_GLOBAL)) return NO;
     }
     return YES;
-}
-
-// 获取无参数私有函数。
-static void (*lb_fn0(const char *name))(void) {
-    return (void (*)(void))dlsym(RTLD_DEFAULT, name);
 }
 
 // 清除进程观察者和已有私有HUD窗口。
@@ -383,8 +264,24 @@ static void lb_monexe(void) {
     dispatch_resume(lb_exesrc);
 }
 
+// 在UIKit事件源就绪后注册全局输入并完成插件启动。
+static void lb_hudrun(UIApplication *app) {
+    lb_delegate = (LBHudDel *)app.delegate;
+    lb_ldax();
+    void (*pBKSHID)(void (*)(void *, void *, void *, void *)) =
+        (void (*)(void (*)(void *, void *, void *, void *)))dlsym(RTLD_DEFAULT, "BKSHIDEventRegisterEventCallback");
+    if (!pBKSHID || !s_lbaxcls) lb_hudend(EXIT_FAILURE);
+    pBKSHID(lb_onhidevt);
+#ifdef LB_HUD_PROBE
+    lb_prblog(@"input.native.ready");
+#endif
+    [app __completeAndRunAsPlugin];
+}
+
 // 运行长期TaskReminder服务，主App只负责启动和提交数据。
-int lb_hudmain(void) {
+int lb_hudmain(int argc, char **argv) {
+    // 诊断版最多占用屏幕30秒，系统信号保证UI失灵时也有退路。
+    if (lb_dbg()) { lb_dbgarm(30); NSLog(@"TTDBG HUD armed30"); }
     NSError *error = nil;
     lb_reminder = [[TaskReminder alloc] initAt:TS_DB_PATH handler:^(NSDictionary *alert, NSError *failure) {
         [s_lbhudctl dspAlrt:alert error:failure];
@@ -403,43 +300,5 @@ int lb_hudmain(void) {
     }) != NOTIFY_STATUS_OK) lb_hudend(EXIT_FAILURE);
 
     if (!lb_ldfw()) lb_hudend(EXIT_FAILURE);
-    void (*gsInit)(void) = lb_fn0("GSInitialize");
-    void (*bksStart)(void) = lb_fn0("BKSDisplayServicesStart");
-    void (*uiInit)(void) = lb_fn0("UIApplicationInitialize");
-    void (*uiSingle)(Class) = (void (*)(Class))dlsym(RTLD_DEFAULT, "UIApplicationInstantiateSingleton");
-    if (!gsInit || !bksStart || !uiInit || !uiSingle) lb_hudend(EXIT_FAILURE);
-
-    [UIScreen initialize];
-    CFRunLoopGetCurrent();
-    gsInit();
-    bksStart();
-    uiInit();
-    uiSingle([LBHudApp class]);
-
-    lb_delegate = [[LBHudDel alloc] init];
-    UIApplication *app = UIApplication.sharedApplication;
-    app.delegate = lb_delegate;
-    [app _accessibilityInit];
-
-    // 预加载无障碍事件解析类（必须在回调注册前就绪）。
-    lb_ldax();
-
-    // 注册全局 HID 触摸回调——必须在 __completeAndRunAsPlugin 之前，
-    // 与 TrollSpeed/HUDApp.mm 保持完全一致的初始化顺序。
-    void (*pBKSHID)(void (*)(void *, void *, void *, void *)) =
-        (void (*)(void (*)(void *, void *, void *, void *)))dlsym(RTLD_DEFAULT, "BKSHIDEventRegisterEventCallback");
-    if (pBKSHID) pBKSHID(lb_onhidevt);
-
-    // iOS 15+ 需要额外初始化 GSEvent RunLoop 模式才能正常路由 BKS 事件。
-    void (*gsEvtInit)(int) = (void (*)(int))dlsym(RTLD_DEFAULT, "GSEventInitialize");
-    void (*gsEvtPush)(CFStringRef) = (void (*)(CFStringRef))dlsym(RTLD_DEFAULT, "GSEventPushRunLoopMode");
-    if (gsEvtInit && gsEvtPush) {
-        gsEvtInit(0);
-        gsEvtPush(kCFRunLoopDefaultMode);
-    }
-
-    [app __completeAndRunAsPlugin];
-    CFRunLoopRun();
-    [lb_reminder stop]; lb_reminder = nil;
-    return EXIT_SUCCESS;
+    return UIApplicationMain(argc, argv, NSStringFromClass(LBHudApp.class), NSStringFromClass(LBHudDel.class));
 }

@@ -54,6 +54,27 @@ static id ts_cmd(TaskStore *store, NSArray *args, NSError **error) {
         id until = args.count == 4 ? ts_json(args[3], error) : nil;
         return [store actOcc:args[1] action:args[2] until:until error:error] ? @{@"handled": @YES} : nil;
     }
+    if ([command isEqual:@"hold"] && args.count == 3) return [store hldOcc:args[1] mode:args[2] error:error];
+    if ([command isEqual:@"resume"] && args.count == 2) return [store rsmOcc:args[1] error:error] ? @{@"resumed":@YES} : nil;
+    // 读取1至6个文件后交给同一多附件事务。
+    if ([command isEqual:@"checkin"] && args.count >= 4 && args.count <= 3+TS_ATT_MAX) {
+        NSMutableArray *attachments=[NSMutableArray array];
+        for (NSString *path in [args subarrayWithRange:NSMakeRange(3,args.count-3)]) {
+            NSData *image=[NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:error];
+            if (!image) return nil;
+            NSMutableDictionary *item=[@{@"method":args[2],@"image":image} mutableCopy];
+            if ([args[2] isEqual:@"file"]) {item[@"name"]=path.lastPathComponent;item[@"content_type"]=@"public.data";}
+            [attachments addObject:item];
+        }
+        return [store chkOcc:args[1] attachments:attachments error:error] ? [store rdChk:args[1] image:NO error:error] : nil;
+    }
+    // 列出同一提醒的附件元数据。
+    if ([command isEqual:@"proofs"] && args.count == 2) return [store lsChk:args[1] images:NO error:error];
+    if ([command isEqual:@"proof"] && (args.count == 2 || args.count == 3)) {
+        NSDictionary *record = [store rdChk:args[1] image:args.count==3 error:error];
+        if (!record || (args.count == 3 && ![record[@"image"] writeToFile:args[2] options:NSDataWritingAtomic error:error])) return nil;
+        return [store rdChk:args[1] image:NO error:error];
+    }
     if ([command isEqual:@"get"] && args.count == 2) return [store rdTsk:args[1] error:error];
     if ([command isEqual:@"create"] && args.count == 2) {
         id fields = ts_json(args[1], error);

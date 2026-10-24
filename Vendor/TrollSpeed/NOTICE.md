@@ -1,0 +1,8 @@
+# 原生触摸来源
+
+取自Lessica/TrollSpeed的a609be260c8261ead36509c3bc4ded8479da9c40：
+https://github.com/Lessica/TrollSpeed/tree/a609be260c8261ead36509c3bc4ded8479da9c40
+
+保留TSEventFetcher和KIF的作者注释及许可证。这里只将系统引用集中到head.h，触摸源延后到UIKit宿主就绪时初始化，停止时释放RunLoop源和UITouch引用；未修改触摸合成原理。源码与许可证随安装包保存。
+
+TrollSpeed使用MIT许可；KIF触摸辅助代码使用Apache2.0许可，完整版权与许可文本见KIF-LICENSE。

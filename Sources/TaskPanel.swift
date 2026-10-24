@@ -1,6 +1,6 @@
 // 创建统一数值输入。
 private func tp_num(_ text: String, _ id: String) -> UITextField {
-    let field = UITextField(); field.text = text; field.accessibilityIdentifier = id; field.keyboardType = .numberPad; field.font = .preferredFont(forTextStyle: .body)
+    let field = UITextField(); field.text = text; field.accessibilityIdentifier = id; field.keyboardType = .numberPad; field.font = lb_fnt(.body, nil)
     field.adjustsFontForContentSizeCategory = true; field.textAlignment = .right
     NSLayoutConstraint.activate([field.widthAnchor.constraint(greaterThanOrEqualToConstant: 44), field.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)]); return field
 }
@@ -38,7 +38,7 @@ private func tp_num(_ text: String, _ id: String) -> UITextField {
         }
         for control in [interval!, count!, until] { control.addTarget(self, action: #selector(chg(_:)), for: control is UITextField ? .editingChanged : .valueChanged) }
         typeBtn = tu_btn(nil, "repeat"); typeBtn.accessibilityIdentifier = "repeat.type"; endBtn = tu_btn(nil, "down"); endBtn.accessibilityIdentifier = "repeat.end"; daysBtn = tu_btn("指定星期", "calendar"); daysBtn.accessibilityIdentifier = "repeat.days"
-        raw.delegate = self; raw.text = lines.joined(separator: "\n"); raw.font = .preferredFont(forTextStyle: .body); raw.adjustsFontForContentSizeCategory = true; raw.textColor = TaskTheme.ink; raw.backgroundColor = .clear
+        raw.delegate = self; raw.text = lines.joined(separator: "\n"); raw.font = lb_fnt(.body, nil); raw.adjustsFontForContentSizeCategory = true; raw.textColor = TaskTheme.ink; raw.backgroundColor = .clear
         raw.accessibilityIdentifier = "repeat.rules"; raw.accessibilityLabel = "完整重复规则"; raw.textContainerInset = .init(top: 4, left: 4, bottom: 4, right: 4); raw.heightAnchor.constraint(equalToConstant: 180).isActive = true
         let done = tu_btn("完成", nil, self, #selector(sv)); done.accessibilityIdentifier = "repeat.done"
         untilRow = tu_row("结束日期", until); countRow = tu_row("结束次数", count)

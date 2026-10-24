@@ -36,15 +36,28 @@ static NSUInteger rm_fd(NSString *path) {
 // 在独立子进程运行生产TaskReminder，不连接生产路径或私有窗口。
 static int rm_svc(NSString *path) {
     for (int descriptor=0;descriptor<3;descriptor++) assert(fcntl(descriptor,F_GETFD)>=0);
+    __block __weak TaskReminder *weakService;
     TaskReminder *service=[[TaskReminder alloc] initAt:path handler:^(NSDictionary *alert,NSError *error) {
         assert(!error); rm_evt(@"events.jsonl",@{@"task_id":alert[@"task_id"] ?: (id)NSNull.null,@"at":@(NSDate.date.timeIntervalSince1970)});
+        // 仅在隔离夹具中把已选图片交给独立服务的生产提交入口。
+        if (alert) {
+            NSString *file=[rm_root stringByAppendingPathComponent:[NSString stringWithFormat:@"submit-%@.png",alert[@"occurrence_id"]]];
+            NSData *image=[NSData dataWithContentsOfFile:file];
+            if (image) {
+                assert(unlink(file.fileSystemRepresentation)==0);
+                rm_evt(@"checkins.jsonl",@{@"pid":@(getpid()),@"parent":@(getppid()),@"occurrence_id":alert[@"occurrence_id"],@"bytes":@(image.length)});
+                NSMutableArray *attachments=[NSMutableArray array];
+                for (NSUInteger index=0;index<TS_ATT_MAX;index++) [attachments addObject:@{@"method":@"image",@"image":image}];
+                [weakService check:alert[@"occurrence_id"] attachments:attachments];
+            }
+        }
     } cleanup:^{
         rm_evt(@"cleanup.jsonl",@{@"pid":@(getpid()),@"lock_held":@(lb_svcup()),@"db_fds":@(rm_fd(path))});
         NSString *again=[rm_root stringByAppendingPathComponent:@"reenable"];
         if ([NSFileManager.defaultManager fileExistsAtPath:again]) { unlink(again.fileSystemRepresentation); assert(lb_svcfg(@{@"enabled":@YES}) && lb_spawn()); }
     }
        finish:^(BOOL restart) { rm_evt(@"stops.jsonl",@{@"pid":@(getpid()),@"lock_held":@(lb_svcup()),@"db_fds":@(rm_fd(path)),@"at":@(NSDate.date.timeIntervalSince1970),@"restart":@(restart)}); if (restart) assert(lb_spawn()); exit(0); }];
-    NSError *error=nil;
+    weakService=service; NSError *error=nil;
     if (![service open:&error]) return error.code==EWOULDBLOCK || error.code==ECANCELED ? 0 : 1;
     assert([service start:&error]);
     rm_evt(@"starts.jsonl",@{@"pid":@(getpid()),@"pgid":@(getpgrp()),@"parent":@(getppid())});
@@ -82,6 +95,23 @@ static void rm_unit(void) {
     rm_req(![disabled start:&error] && error.code==ECANCELED && !lb_spawn(),@"服务禁用时拒绝创建后台进程"); disabled=nil;
     rm_req(lb_svcfg(@{@"enabled":@YES}),@"恢复隔离测试配置");
 }
+// 验证主App退出后，独立服务提交图片且新连接能读取完成记录。
+static void rm_chk(TaskStore *writer, NSDictionary *task) {
+    NSString *taskID=task[@"task_id"];
+    rm_wt(3,^BOOL { return [writer lsOcc:taskID error:nil].count==1 && [rm_rows(@"events.jsonl").lastObject[@"task_id"] isEqual:taskID]; },@"退出后的服务已呈现图片打卡任务");
+    NSString *id=[writer lsOcc:taskID error:nil].firstObject[@"occurrence_id"];
+    rm_req([[writer rdTsk:taskID error:nil][@"status"] isEqual:@"needsAction"] && ![writer rdChk:id image:NO error:nil],@"发送附件前任务未完成且无图片记录");
+    NSData *image=[NSData dataWithContentsOfFile:@"Resources/MingCute/check_circle.png"];
+    NSString *file=[rm_root stringByAppendingPathComponent:[NSString stringWithFormat:@"submit-%@.png",id]];
+    rm_req(image.length>0 && [image writeToFile:file atomically:YES],@"准备隔离图片输入");
+    notify_post(writer.changeNote.UTF8String);
+    rm_wt(3,^BOOL { return [[writer rdTsk:taskID error:nil][@"status"] isEqual:@"completed"] && [[writer rdChk:id image:YES error:nil][@"image"] isEqual:image] && [writer lsChk:id images:NO error:nil].count==TS_ATT_MAX; },@"主App退出后服务原子保存图片并完成任务");
+    NSDictionary *event=rm_rows(@"checkins.jsonl").lastObject;
+    rm_req([event[@"pid"] intValue]==rm_pid() && [event[@"occurrence_id"] isEqual:id],@"图片提交确实发生于独立服务进程");
+    TaskStore *reopened=[[TaskStore alloc] initAt:writer.path error:nil];
+    rm_req([[reopened rdTsk:taskID error:nil][@"status"] isEqual:@"completed"] && [[reopened rdChk:id image:YES error:nil][@"image"] isEqual:image] && [[reopened rdChk:id image:NO error:nil][@"method"] isEqual:@"image"] && [reopened lsChk:id images:YES error:nil].count==TS_ATT_MAX,@"新连接读到相同附件及完成状态");
+}
+
 // 证明主App退出、重复启动、实时数据同步及三种正常停止。
 static void rm_proc(NSString *path) {
     NSTask *app=rm_chld(@"--app"); [app waitUntilExit]; rm_req(app.terminationStatus==0,@"主App启动服务后已经退出");
@@ -99,6 +129,8 @@ static void rm_proc(NSString *path) {
     rm_req(rm_rows(@"starts.jsonl").count==1 && rm_pid()==pid,@"八次重复启动没有创建第二个服务");
     rm_req([writer delTsk:task[@"task_id"] error:nil],@"主App删除当前提醒提交");
     rm_wt(1,^BOOL { return rm_rows(@"events.jsonl").lastObject[@"task_id"]==NSNull.null; },@"跨进程Darwin删除立即撤下提醒");
+    NSDictionary *check=[writer crtTsk:@{@"title":@"正常退出后图片打卡",@"due_at":@(NSDate.date.timeIntervalSince1970-1)} error:nil];
+    rm_req(check!=nil,@"正常退出后建立独立提交任务"); rm_chk(writer,check);
     NSTimeInterval old=NSDate.date.timeIntervalSince1970+1;
     NSDictionary *future=[writer crtTsk:@{@"title":@"修改服务计划",@"due_at":@(old)} error:nil]; rm_req(future!=nil,@"服务运行时创建任务");
     rm_req([writer updTsk:future[@"task_id"] fields:@{@"due_at":@(old+60)} error:nil],@"临近提醒改时提交");
@@ -120,6 +152,8 @@ static void rm_proc(NSString *path) {
     rm_req(lb_svcfg(@{@"enabled":@YES}) && lb_spawn(),@"停用后允许重新启用");
     rm_wt(3,^BOOL { return rm_rows(@"starts.jsonl").count==3 && lb_svcup(); },@"启用后唯一服务就绪");
     pid=rm_pid(); rm_req(pid>1 && pid!=getpid() && kill(pid,SIGTERM)==0,@"向本次服务发送正常终止信号"); rm_end(3);
+    // 清理已验证的旧提醒，隔离强退后的图片提交目标。
+    rm_req([writer delTsk:cancel[@"task_id"] error:nil],@"清理重启验证任务");
     NSTask *forced=rm_chld(@"--hold");
     rm_wt(3,^BOOL { return rm_rows(@"starts.jsonl").count==4 && lb_svcup(); },@"主App保持打开时独立服务就绪");
     pid=rm_pid(); pid_t parent=forced.processIdentifier;
@@ -130,12 +164,13 @@ static void rm_proc(NSString *path) {
     rm_wt(4,^BOOL { return [writer lsOcc:after[@"task_id"] error:nil].count==1; },@"主App被强制结束后服务仍按时触发");
     double forcedDelay=[[writer lsOcc:after[@"task_id"] error:nil].firstObject[@"triggered_at"] doubleValue]-[after[@"due_at"] doubleValue];
     rm_req(kill(pid,0)==0 && forcedDelay>=0 && forcedDelay<2,@"强制关闭主App不终止服务或破坏计时");
+    rm_chk(writer,after);
     notify_post(LB_STOP_NOTE); rm_end(4);
     rm_req(lb_spawn(),@"快速切换前服务启动"); rm_wt(3,^BOOL { return rm_rows(@"starts.jsonl").count==5 && lb_svcup(); },@"快速切换前服务就绪");
     rm_req([@"1" writeToFile:[rm_root stringByAppendingPathComponent:@"reenable"] atomically:YES encoding:NSUTF8StringEncoding error:nil] && lb_svcfg(@{@"enabled":@NO}),@"清理仍持锁期间模拟主App重新启用");
     rm_wt(3,^BOOL { return rm_rows(@"starts.jsonl").count==6 && lb_svcup(); },@"关开竞争后最新启用意图仍有唯一服务");
     notify_post(LB_STOP_NOTE); rm_end(6);
-    NSDictionary *report=@{@"checks":@(rm_checks),@"app_pid":@(app.processIdentifier),@"forced_app_pid":@(parent),@"trigger_lateness":@(delay),@"forced_trigger_lateness":@(forcedDelay),@"starts":rm_rows(@"starts.jsonl"),@"cleanups":rm_rows(@"cleanup.jsonl"),@"stops":rm_rows(@"stops.jsonl")};
+    NSDictionary *report=@{@"checks":@(rm_checks),@"app_pid":@(app.processIdentifier),@"forced_app_pid":@(parent),@"trigger_lateness":@(delay),@"forced_trigger_lateness":@(forcedDelay),@"checkins":rm_rows(@"checkins.jsonl"),@"starts":rm_rows(@"starts.jsonl"),@"cleanups":rm_rows(@"cleanup.jsonl"),@"stops":rm_rows(@"stops.jsonl")};
     NSData *data=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]; assert([data writeToFile:@"build/TaskReminderReport.json" atomically:YES]);
 }
 // 为所有真实子进程注入同一隔离目录，不触及手机服务。
@@ -150,7 +185,7 @@ int main(void) {
         if (args.count==2 && [args[1] isEqual:@"--app"]) { TaskStore *writer=[[TaskStore alloc] initAt:path error:nil]; assert(([writer crtTsk:@{@"title":@"主App退出后提醒",@"due_at":@(NSDate.date.timeIntervalSince1970+2)} error:nil])); return lb_spawn() ? 0 : 1; }
         if (args.count==2 && [args[1] isEqual:@"--hold"]) { TaskStore *writer=[[TaskStore alloc] initAt:path error:nil]; assert(([writer crtTsk:@{@"title":@"强制退出后提醒",@"due_at":@(NSDate.date.timeIntervalSince1970+2)} error:nil])); assert(lb_spawn()); CFRunLoopRun(); return 1; }
         rm_unit(); rm_proc(path);
-        printf("TaskReminder: %lu checks passed; normal/SIGKILL parent exit, repeat/concurrent starts, live Darwin CRUD, lock/DB/timer cleanup and Darwin/config/SIGTERM shutdown passed\n",(unsigned long)rm_checks);
+        printf("TaskReminder: %lu checks passed; normal/SIGKILL parent exit, post-exit image check-in, repeat/concurrent starts, live Darwin CRUD, lock/DB/timer cleanup and Darwin/config/SIGTERM shutdown passed\n",(unsigned long)rm_checks);
         assert([NSFileManager.defaultManager removeItemAtPath:rm_root error:nil]); return 0;
     }
 }

@@ -119,6 +119,18 @@ static void tsttap(void) {
     assert(lb_btntap(&active, YES, NO));
 }
 
+// 主线程永久等待时由系统期限退出，并自动释放单实例锁。
+static void tstescape(void) {
+    pid_t child = fork(); assert(child >= 0);
+    if (child == 0) {
+        if (lb_lckhud() < 0) _exit(EXIT_FAILURE);
+        lb_dbgarm(1); for (;;) pause();
+    }
+    int status = 0; assert(waitpid(child, &status, 0) == child);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGALRM);
+    assert(!lb_svcup());
+}
+
 // 运行共享配置、进程通信和按钮触摸测试。
 int main(void) {
     @autoreleasepool {
@@ -132,6 +144,7 @@ int main(void) {
         tstipc();
         tstlock();
         tsttap();
+        tstescape();
         assert([NSFileManager.defaultManager removeItemAtPath:root error:nil]);
         puts("Shared configuration, Darwin IPC, single-instance lock and button tap tests passed");
     }
