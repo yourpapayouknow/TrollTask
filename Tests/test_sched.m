@@ -87,7 +87,7 @@ static void sc_due(ScStore *reader, TaskStore *writer) {
         double delay=[occ[@"triggered_at"] doubleValue]-[task[@"due_at"] doubleValue]; [sc_delays addObject:@(delay)];
         [sc_records addObject:@{@"task_id":task[@"task_id"],@"due_at":task[@"due_at"],@"occurrence":occ,@"lateness":@(delay)}];
         sc_req(delay>=0 && delay<2,@"正常到期误差小于两秒且不提前触发");
-        sc_req([occ[@"status"] isEqual:@"triggered"] && [occ[@"scheduled_at"] isEqual:task[@"due_at"]],@"Occurrence保留原始绝对时刻");
+        sc_req([occ[@"status"] isEqual:@"presented"] && [occ[@"scheduled_at"] isEqual:task[@"due_at"]],@"Occurrence保留原始绝对时刻");
     }
     sc_wait(1,^BOOL { return [sc_alert[@"task_id"] isEqual:tasks.firstObject[@"task_id"]]; },@"HUD按最早任务逐条展示");
     sc_span(0.1); NSUInteger plans=reader.plans,revisions=reader.revisions; sc_span(1.2);
@@ -123,12 +123,102 @@ static void sc_fault(ScStore *reader, TaskStore *writer) {
     sc_req([writer delTsk:task[@"task_id"] error:nil],@"清理故障测试任务"); [sc_sched stop]; sc_span(0.05);
 }
 // 独立运行真实调度器与隔离数据库，不访问生产数据。
-int main(void) {
+// 当前附件未提交时后续到期排队，失败保留原轮次，重试只推进一次。
+static void sc_overlap(ScStore *reader, TaskStore *writer) {
+    NSDictionary *a=sc_mk(writer,NSDate.date.timeIntervalSince1970-1);
+    sc_start(reader);sc_wait(1,^BOOL{return [sc_alert[@"task_id"] isEqual:a[@"task_id"]];},@"先展示A");
+    NSString *aid=sc_alert[@"occurrence_id"];
+    NSDictionary *b=sc_mk(writer,NSDate.date.timeIntervalSince1970+0.2);
+    for (NSUInteger i=0;i<30;i++) notify_post(reader.changeNote.UTF8String);
+    sc_wait(1,^BOOL{return [writer lsOcc:b[@"task_id"] error:nil].count==1;},@"A未提交时B照常登记到期");
+    sc_req([sc_alert[@"occurrence_id"] isEqual:aid],@"B到期不替换A");
+    for (NSDictionary *event in sc_events) sc_req(![event[@"alert"] isKindOfClass:NSDictionary.class] || ![event[@"alert"][@"task_id"] isEqual:b[@"task_id"]],@"等待期间B不抢占");
+    [sc_sched check:aid attachments:@[]];
+    sc_wait(1,^BOOL{return [sc_events.lastObject[@"error"] isKindOfClass:NSError.class];},@"无效提交回报失败");
+    sc_req([sc_alert[@"occurrence_id"] isEqual:aid],@"提交失败仍保留A并继续等待");
+    NSDictionary *file=@{@"method":@"file",@"image":[@"proof" dataUsingEncoding:NSUTF8StringEncoding],@"name":@"a.txt",@"content_type":@"public.plain-text"};
+    for (NSUInteger i=0;i<30;i++) {[sc_sched check:aid attachments:@[file]];notify_post(reader.changeNote.UTF8String);}
+    sc_wait(1,^BOOL{return [sc_alert[@"task_id"] isEqual:b[@"task_id"]];},@"A提交成功立即推进B");
+    sc_req([writer lsChk:aid images:YES error:nil].count==1 && [[writer rdTsk:b[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"],@"重复A提交不重复写附件或误完成B");
+    NSUInteger firstB=0;for (;firstB<sc_events.count;firstB++) if ([sc_events[firstB][@"alert"] isKindOfClass:NSDictionary.class] && [sc_events[firstB][@"alert"][@"task_id"] isEqual:b[@"task_id"]]) break;
+    sc_req(firstB>0 && sc_events[firstB-1][@"alert"]==NSNull.null,@"推进B前解除A全屏窗口");
+    [sc_sched act:@"complete" until:nil occID:aid];sc_span(0.05);
+    sc_req([sc_alert[@"task_id"] isEqual:b[@"task_id"]],@"过时A动作不能处理B");
+    [sc_sched act:@"complete" until:nil occID:sc_alert[@"occurrence_id"]];sc_wait(1,^BOOL{return sc_alert==nil;},@"B完成后进入空闲");
+    [sc_sched stop];sc_span(0.05);
+}
+// 同刻任务按原时间和UUID稳定排队，通知风暴不重复呈现。
+static void sc_queue(ScStore *reader, TaskStore *writer) {
+    NSTimeInterval stamp=NSDate.date.timeIntervalSince1970-2;
+    NSMutableArray *tasks=[NSMutableArray array];
+    for (NSUInteger i=0;i<5;i++) [tasks addObject:sc_mk(writer,stamp)];
+    [tasks sortUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"task_id"] compare:b[@"task_id"]];}];
+    sc_start(reader);sc_wait(1,^BOOL{return [sc_alert[@"task_id"] isEqual:tasks[0][@"task_id"]];},@"同刻任务以UUID稳定决定队首");
+    sc_wait(1,^BOOL{for (NSDictionary *task in tasks) if ([writer lsOcc:task[@"task_id"] error:nil].count!=1) return NO;return YES;},@"同刻五任务各有一个持久轮次");
+    sc_req([sc_alert[@"occurrence_at"] isEqual:@(stamp)],@"单次身份保留原定occurrence_at");
+    sc_span(0.1);NSUInteger events=sc_events.count;NSString *first=sc_alert[@"occurrence_id"];
+    for (NSUInteger i=0;i<100;i++) {
+        notify_post(reader.changeNote.UTF8String);[sc_sched refresh];
+        [NSNotificationCenter.defaultCenter postNotificationName:NSSystemClockDidChangeNotification object:nil];
+        [NSNotificationCenter.defaultCenter postNotificationName:NSSystemTimeZoneDidChangeNotification object:nil];
+    }
+    sc_span(0.3);sc_req(sc_events.count==events,@"重复timer重读数据库和时钟事件不重复呈现HUD");
+    for (NSDictionary *task in tasks) sc_req([writer lsOcc:task[@"task_id"] error:nil].count==1,@"通知风暴不新增同次轮次");
+    for (NSUInteger i=0;i<20;i++) [sc_sched hold:@"snooze" occID:first];
+    sc_wait(1,^BOOL{return [sc_alert[@"task_id"] isEqual:tasks[1][@"task_id"]];},@"五分钟延后后立即展示下一项");
+    NSDictionary *held=[writer lsOcc:tasks[0][@"task_id"] error:nil].firstObject;
+    sc_req([held[@"status"] isEqual:@"snoozed"] && [held[@"defer_count"] intValue]==1 && [held[@"scheduled_at"] isEqual:@(stamp)],@"连续延后只消耗一次且原身份不变");
+    sc_req([writer rsmOcc:first error:nil],@"模拟边栏主动恢复旧轮次");sc_span(0.1);
+    sc_req([sc_alert[@"task_id"] isEqual:tasks[1][@"task_id"]],@"已恢复早期轮次不抢占当前任务");
+    [sc_sched stop];sc_span(0.05);sc_start(reader);
+    sc_wait(1,^BOOL{return [sc_alert[@"occurrence_id"] isEqual:first];},@"重建队列按原时间恢复稳定次序");
+    for (NSDictionary *task in tasks) {
+        sc_wait(1,^BOOL{return [sc_alert[@"task_id"] isEqual:task[@"task_id"]];},@"同刻队列逐一稳定推进");
+        NSString *current=sc_alert[@"occurrence_id"];
+        for (NSUInteger i=0;i<15;i++) [sc_sched act:@"complete" until:nil occID:current];
+        sc_wait(1,^BOOL{return ![sc_alert[@"occurrence_id"] isEqual:current];},@"重复操作只退出本条一次");
+    }
+    sc_req(sc_alert==nil,@"全部同刻轮次完成后没有残留窗口");
+    [sc_sched stop];sc_span(0.05);sc_start(reader);sc_span(0.1);
+    sc_req(sc_alert==nil,@"重启后所有Resolved均不得重现");[sc_sched stop];sc_span(0.05);
+}
+// 子进程运行生产调度器并立即写出真实呈现身份。
+static int sc_child(NSString *path,NSString *log) {
+    TaskStore *store=[[TaskStore alloc] initAt:path error:nil];assert(store);
+    TaskScheduler *scheduler=[[TaskScheduler alloc] initStore:store handler:^(NSDictionary *alert,NSError *error){
+        assert(!error);if (!alert) return;
+        NSData *data=[NSJSONSerialization dataWithJSONObject:@{@"task_id":alert[@"task_id"],@"occurrence_id":alert[@"occurrence_id"]} options:0 error:nil];
+        [data writeToFile:log atomically:YES];
+    }];assert([scheduler start:nil]);CFRunLoopRun();return 0;
+}
+// 强杀真实调度进程后使用同库恢复，不重写触发记录或复活已完成项。
+static void sc_crash(TaskStore *writer,NSString *path,NSString *root) {
+    NSDictionary *a=sc_mk(writer,NSDate.date.timeIntervalSince1970-2),*b=sc_mk(writer,NSDate.date.timeIntervalSince1970-1);
+    NSString *log=[root stringByAppendingPathComponent:@"child.json"];
+    NSString *occID=nil;NSNumber *triggered=nil;
+    for (NSUInteger run=0;run<3;run++) {
+        [NSFileManager.defaultManager removeItemAtPath:log error:nil];
+        NSTask *child=[NSTask new];child.executableURL=[NSURL fileURLWithPath:NSProcessInfo.processInfo.arguments[0]];child.arguments=@[@"--child",path,log];
+        sc_req([child launchAndReturnError:nil],@"隔离调度子进程启动");
+        sc_wait(2,^BOOL{return [NSFileManager.defaultManager fileExistsAtPath:log];},@"子进程持久认领后实际呈现");
+        NSDictionary *seen=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:log] options:0 error:nil];
+        NSDictionary *row=[writer lsOcc:(run==2?b:a)[@"task_id"] error:nil].firstObject;
+        sc_req([seen[@"task_id"] isEqual:(run==2?b:a)[@"task_id"]],@"崩溃重启恢复未处理队首且跳过Resolved");
+        if (run==0) {occID=row[@"occurrence_id"];triggered=row[@"triggered_at"];}
+        if (run==1) sc_req([row[@"occurrence_id"] isEqual:occID] && [row[@"triggered_at"] isEqual:triggered],@"SIGKILL恢复复用原身份和触发时间");
+        kill(child.processIdentifier,SIGKILL);[child waitUntilExit];
+        sc_req(child.terminationReason==NSTaskTerminationReasonUncaughtSignal,@"确认为进程异常终止");
+        if (run==1) sc_req([writer actOcc:occID action:@"complete" until:nil error:nil],@"完成已恢复的第一项");
+    }
+    sc_req([writer actOcc:[writer lsOcc:b[@"task_id"] error:nil].firstObject[@"occurrence_id"] action:@"complete" until:nil error:nil],@"清理第二个异常恢复测试项");
+}
+int main(int argc,const char *argv[]) {
     @autoreleasepool {
+        if (argc==4 && strcmp(argv[1],"--child")==0) return sc_child(@(argv[2]),@(argv[3]));
         char folder[]="/tmp/trolltask-scheduler.XXXXXX"; assert(mkdtemp(folder));
         NSString *path=[@(folder) stringByAppendingPathComponent:@"tasks.sqlite3"];
         ScStore *reader=[[ScStore alloc] initAt:path error:nil]; TaskStore *writer=[[TaskStore alloc] initAt:path error:nil]; assert(reader && writer);
-        sc_delays=[NSMutableArray array]; sc_records=[NSMutableArray array]; sc_idle(reader,writer); sc_due(reader,writer); sc_restart(reader,writer); sc_fault(reader,writer);
+        sc_delays=[NSMutableArray array]; sc_records=[NSMutableArray array]; sc_idle(reader,writer); sc_due(reader,writer); sc_restart(reader,writer); sc_fault(reader,writer);sc_overlap(reader,writer);sc_queue(reader,writer);sc_crash(writer,path,@(folder));
         double max=0,sum=0; for (NSNumber *delay in sc_delays) { max=fmax(max,delay.doubleValue); sum+=delay.doubleValue; }
         printf("TaskScheduler: %lu checks passed; %lu actual triggers, max lateness %.6fs, mean %.6fs; idle/future/active DB reads unchanged\n",(unsigned long)sc_checks,(unsigned long)sc_delays.count,max,sum/sc_delays.count);
         NSData *report=[NSJSONSerialization dataWithJSONObject:@{@"checks":@(sc_checks),@"records":sc_records,@"max_lateness":@(max),@"mean_lateness":@(sum/sc_delays.count)} options:NSJSONWritingPrettyPrinted error:nil];

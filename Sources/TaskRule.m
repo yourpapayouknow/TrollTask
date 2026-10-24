@@ -228,15 +228,15 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
     NSNumber *completedFloor = nil;
     for (NSDictionary *row in history) if ([row[@"task_id"] isEqual:task[@"task_id"]] && [row[@"generation"] isEqual:task[@"reminder_version"]]) {
         [records addObject:row];
-        if ([row[@"action"] isEqual:@"complete"]) {
+        if ([@[@"completed",@"resolved"] containsObject:row[@"status"]] && [row[@"action"] isEqual:@"complete"]) {
             [completed addObject:row[@"cycle_at"]];
             if (!completedFloor || [completedFloor compare:row[@"cycle_at"]] == NSOrderedAscending) completedFloor = row[@"cycle_at"];
         }
-        if ([row[@"status"] isEqual:@"handled"] && ![row[@"action"] isEqual:@"snooze"]) {
+        if ([row[@"status"] isEqual:@"resolved"]) {
             NSArray *keys = [row[@"kind"] isEqual:@"both"] ? @[@"plan", @"deadline", @"both"] : @[row[@"kind"]];
             for (NSString *key in keys) if (!floor[key] || [floor[key] compare:row[@"scheduled_at"]] == NSOrderedAscending) floor[key] = row[@"scheduled_at"];
         }
-        if ([row[@"action"] isEqual:@"snooze"] || [row[@"status"] isEqual:@"triggered"]) [set addObject:row[@"cycle_at"]];
+        if ([@[@"pending",@"snoozed",@"presented"] containsObject:row[@"status"]]) [set addObject:row[@"cycle_at"]];
     }
     // 提前完成超出预取窗口后，从已完成轮次继续展开原始规则。
     if (repeats && completedFloor && completedFloor.doubleValue >= stamp) {
@@ -265,11 +265,11 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
             BOOL handled = NO, pinned = NO;
             for (NSDictionary *row in records) if ([row[@"cycle_at"] isEqual:cycle] && [row[@"kind"] isEqual:kind]) {
                 item[@"occurrence_id"] = row[@"occurrence_id"];
-                if ([row[@"status"] isEqual:@"handled"] && ![row[@"action"] isEqual:@"snooze"]) handled = YES;
-                if ([row[@"action"] isEqual:@"snooze"] && row[@"snooze_until"] != NSNull.null) {
-                    item[@"remind_at"] = @(fmax([item[@"remind_at"] doubleValue], [row[@"snooze_until"] doubleValue])); pinned = YES;
+                if ([row[@"status"] isEqual:@"resolved"]) handled = YES;
+                if ([row[@"status"] isEqual:@"snoozed"] && row[@"next_fire_at"] != NSNull.null) {
+                    item[@"remind_at"] = @(fmax([item[@"remind_at"] doubleValue], [row[@"next_fire_at"] doubleValue])); pinned = YES;
                 }
-                if ([row[@"status"] isEqual:@"triggered"]) pinned = YES;
+                if ([@[@"pending",@"presented"] containsObject:row[@"status"]]) pinned = YES;
             }
             if (handled) continue;
             if (repeats && !pinned && floor[kind] && [scheduled compare:floor[kind]] != NSOrderedDescending) continue;

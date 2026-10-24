@@ -33,7 +33,7 @@ static void ut_hsame(NSDictionary *before,NSDictionary *after,NSArray<NSString *
 static void ut_hdue(NSString *path, NSString *id) {
     sqlite3 *db=NULL; ut_req(sqlite3_open(path.fileSystemRepresentation,&db)==SQLITE_OK,@"打开收起验证库");
     sqlite3_stmt *stmt=NULL;
-    ut_req(sqlite3_prepare_v2(db,"UPDATE reminder_occurrences SET hold_until=?,snooze_until=? WHERE occurrence_id=?",-1,&stmt,NULL)==SQLITE_OK,@"准备收起截止更新");
+    ut_req(sqlite3_prepare_v2(db,"UPDATE reminder_occurrences SET hold_until=?,next_fire_at=? WHERE occurrence_id=?",-1,&stmt,NULL)==SQLITE_OK,@"准备收起截止更新");
     double end=NSDate.date.timeIntervalSince1970+0.5; sqlite3_bind_double(stmt,1,end);sqlite3_bind_double(stmt,2,end);sqlite3_bind_text(stmt,3,id.UTF8String,-1,SQLITE_TRANSIENT);
     ut_req(sqlite3_step(stmt)==SQLITE_DONE,@"提交验证截止更新");sqlite3_finalize(stmt);sqlite3_close(db);
 }
@@ -175,6 +175,11 @@ static void ut_caphud(TTTaskHUD *hud,UIWindow *window,TaskStore *writer,NSDictio
         token=[writer rdCap:nil error:nil][@"token"];
         ut_req(window.hidden && token!=nil,@"全局采集隐藏窗口并建立唯一同库请求");
     });
+    // 采集App持有面板时下一条到期，仍须接回当前轮次。
+    NSDictionary *waiting=[writer crtTsk:@{@"title":@"采集中下一条",@"due_at":@(NSDate.date.timeIntervalSince1970+0.1)} error:nil];
+    ut_wait(^BOOL{return [writer lsOcc:waiting[@"task_id"] error:nil].count==1;},@"采集期间下一条按时入队");
+    for (NSUInteger i=0;i<20;i++) notify_post(writer.changeNote.UTF8String);
+    ut_ui(^{ut_req(window.hidden && [[writer rdCap:nil error:nil][@"token"] isEqual:token],@"后续到期及重复通知不抢占前台采集");});
     ut_req([writer ackCap:token error:nil],@"前台采集认领同库请求");
     ut_req([writer finCap:token attachments:@[proof,proof,proof,proof,proof,proof] issue:nil error:nil],@"前台交回六附件但不完成任务");
     notify_post(TS_CAPTURE_NOTE);
@@ -184,9 +189,11 @@ static void ut_caphud(TTTaskHUD *hud,UIWindow *window,TaskStore *writer,NSDictio
         ut_req([writer rdCap:token error:nil].count==0,@"交回后清除临时结果");
         ut_req(![(UIButton *)ut_find(hud.view,@"hud.attachment.5") isHidden] && ![(UIButton *)ut_find(hud.view,@"hud.image") isEnabled],@"交接六附件保持单行与名额");
         ut_req([[writer rdTsk:task[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"],@"采集交接不替代HUD对勾完成");
+        ut_req([[(UILabel *)ut_find(hud.view,@"hud.title") text] isEqual:[writer rdTsk:task[@"task_id"] error:nil][@"title"]],@"附件仍回到原任务");
         ut_hsame(geometry,ut_hgeo(hud),@[@"hud.card",@"hud.title",@"hud.planned",@"hud.notes",@"hud.details",@"hud.attachments",@"hud.choices",@"hud.back"],@"前台采集恢复");
         for (NSInteger i=5;i>=0;i--) [(UIButton *)ut_find(hud.view,[NSString stringWithFormat:@"hud.attachment.%ld",(long)i]) sendActionsForControlEvents:UIControlEventTouchUpInside];
     });
+    ut_req([writer delTsk:waiting[@"task_id"] error:nil],@"清理排队验证待办");
     // 图片读取失败时保留选择入口，重试和取消不退回初始操作。
     for (NSString *issue in @[@"图片读取失败",@""]) {
         ut_ui(^{
@@ -409,6 +416,10 @@ static void ut_hud(void) {
         NSData *audit=[NSJSONSerialization dataWithJSONObject:ut_layout options:NSJSONWritingPrettyPrinted error:nil];
         ut_req([audit writeToFile:[ut_docs stringByAppendingPathComponent:@"HUDLayoutAudit.json"] atomically:YES],@"保存状态切换真实几何审计");
         [confirm sendActionsForControlEvents:UIControlEventTouchUpInside];
+        // 同一轮次的迟到快照不能解除提交锁或清空附件。
+        [hud display:active error:nil];[hud.view layoutIfNeeded];
+        ut_req(!confirm.enabled && ![(UIButton *)ut_find(hud.view,@"hud.snooze") isEnabled] && ut_hcnt(hud)==TS_ATT_MAX,@"重复快照保留提交锁和六附件");
+        for (NSUInteger i=0;i<20;i++) [confirm sendActionsForControlEvents:UIControlEventTouchUpInside];
     });
     ut_wait(^BOOL{return hud.mode==0 && [[writer rdTsk:task[@"task_id"] error:nil][@"status"] isEqual:@"completed"];},@"图片与完成记录提交后才消失");ut_req([[writer rdChk:id image:NO error:nil][@"method"] isEqual:@"screenshot"] && [writer lsChk:id images:YES error:nil].count==TS_ATT_MAX && [[writer lsChk:id images:NO error:nil].lastObject[@"method"] isEqual:@"camera"],@"六附件按顺序关联当前Occurrence");
     NSDictionary *next=[writer crtTsk:@{@"title":@"边栏删除同步",@"due_at":@(NSDate.date.timeIntervalSince1970-1)} error:nil];

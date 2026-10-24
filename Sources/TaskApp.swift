@@ -12,11 +12,16 @@
         let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = navigation; self.window = window; window.makeKeyAndVisible()
         let result = notify_register_dispatch(TS_CAPTURE_NOTE, &captureNote, .main) { [weak self] _ in self?.capStart() }
         if result != NOTIFY_STATUS_OK { captureNote = -1 }
-        if store != nil, (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true { _ = lb_spawn() }
+        rstr()
         return true
     }
     // 只在正常前台生命周期中开启系统采集。
-    func applicationDidBecomeActive(_ application: UIApplication) { capStart() }
+    func applicationDidBecomeActive(_ application: UIApplication) { rstr(); capStart() }
+    // 每次回到App核对真实进程锁，按已有启用意图恢复服务。
+    private func rstr() {
+        guard store != nil, (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true, !lb_svcup() else { return }
+        if !lb_spawn() { NSLog("提醒服务恢复失败") }
+    }
     // 用户切走或划掉采集App时交回取消，提醒服务继续运行。
     func applicationDidEnterBackground(_ application: UIApplication) { capture?.capAbort() }
     // 按同库请求临时呈现采集页，不创建提醒服务或另一个数据库。
@@ -59,7 +64,7 @@
 // 通过原生Darwin通信控制既有独立HUD。
 @objc(LBSetCtl) final class TaskSettings: TaskScreen {
     private let monitor = UISwitch()
-    private var preview: UIButton!
+    private var preview: UIButton!, recovery: UIButton!
     private var pending = false
     private var request = 0
     private var token: Int32 = -1
@@ -69,7 +74,10 @@
         monitor.onTintColor = lb_acnt(); monitor.isOn = (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true
         monitor.accessibilityIdentifier = "settings.enabled"; monitor.addTarget(self, action: #selector(monChg), for: .valueChanged)
         preview = lb_mkbtn("预览浮层", self, #selector(tst)); preview.accessibilityIdentifier = "settings.preview"
-        let fields = tu_stk([tu_row("后台服务", monitor), preview]); view.addSubview(fields); tu_wdth(fields, view)
+        recovery = lb_mkbtn("整机重启后\n需打开一次App恢复提醒服务", self, #selector(rstr))
+        recovery.accessibilityIdentifier = "settings.recovery"
+        recovery.titleLabel?.numberOfLines = 0; recovery.titleLabel?.textAlignment = .center
+        let fields = tu_stk([tu_row("后台服务", monitor), preview, recovery]); view.addSubview(fields); tu_wdth(fields, view)
         fields.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4).isActive = true
         let result = notify_register_dispatch(LB_READY_NOTE, &token, .main) { [weak self] _ in
             guard let self = self, self.pending else { return }; self.pending = false; self.stat("预览浮层"); self.sync(); notify_post(LB_TEST_NOTE)
@@ -79,7 +87,12 @@
     // 更新唯一功能按钮文字。
     private func stat(_ title: String) { var config = preview.configuration; config?.title = title; preview.configuration = config }
     // 同步服务和预览请求状态。
-    private func sync() { preview.isEnabled = monitor.isOn && !pending }
+    private func sync() { preview.isEnabled = monitor.isOn && !pending; recovery.isEnabled = monitor.isOn && !pending }
+    // 保持重启限制可见，并提供现有服务的手动恢复入口。
+    @objc private func rstr() {
+        guard monitor.isOn, !pending else { return }
+        stat(lb_spawn() ? "预览浮层" : "恢复失败"); sync()
+    }
     // 保存配置并启动或停止HUD。
     @objc private func monChg() {
         pending = false; request += 1

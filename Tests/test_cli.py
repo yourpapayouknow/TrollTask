@@ -16,7 +16,7 @@ def tstcmd(path, *args, success=True):
 def tstcli():
     with TemporaryDirectory(prefix='trolltask-cli-') as root:
         path = Path(root) / 'tasks.sqlite3'
-        assert tstcmd(path, 'schema')['schema_version'] == 8
+        assert tstcmd(path, 'schema')['schema_version'] == 9
         assert tstcmd(path, 'lists')[0]['title'] == '我的任务'
         task = tstcmd(path, 'create', jdmp({'title': '两天完成', 'planned_duration': 172800, 'deadline_at': 1800000000}))
         task_id = task['task_id']
@@ -25,10 +25,10 @@ def tstcli():
         assert tstcmd(path, 'occur', task_id, '1700000000.25')['occurrence_id'] == occurrence['occurrence_id']
         tstcmd(path, 'batch', jdmp([
             ['update', task_id, jdmp({'status': 'completed'})],
-            ['handle', occurrence['occurrence_id'], jdmp({'status': 'handled', 'handled_at': 1700000100, 'action': 'complete'})]
+            ['handle', occurrence['occurrence_id'], jdmp({'status': 'resolved', 'handled_at': 1700000100, 'action': 'complete'})]
         ]))
         assert tstcmd(path, 'get', task_id)['completed_at'] is not None
-        assert tstcmd(path, 'occurrences', task_id)[0]['status'] == 'handled'
+        assert tstcmd(path, 'occurrences', task_id)[0]['status'] == 'resolved'
         before = tstcmd(path, 'get', task_id)
         tstcmd(path, 'batch', jdmp([
             ['update', task_id, jdmp({'notes': '不应保存'})],

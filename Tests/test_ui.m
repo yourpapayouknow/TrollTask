@@ -346,12 +346,16 @@ static void ut_sttng(void) {
         [ut_nav pushViewController:controller animated:NO];
         UISwitch *monitor = (UISwitch *)ut_find(controller.view, @"settings.enabled");
         UIButton *preview = (UIButton *)ut_find(controller.view, @"settings.preview");
+        UIButton *recovery = (UIButton *)ut_find(controller.view, @"settings.recovery");
+        ut_req([recovery.configuration.title containsString:@"需打开一次App恢复提醒服务"] && recovery.titleLabel.numberOfLines==0,@"整机重启限制明确可见并允许大字换行");
         monitor.on = NO; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
         ut_req(![lb_ldcfg()[@"enabled"] boolValue] && !preview.enabled, @"关闭服务保存并禁用预览");
         ut_spawn = NO; monitor.on = YES; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
         ut_req(!monitor.on && ![lb_ldcfg()[@"enabled"] boolValue], @"启动失败恢复关闭状态");
         ut_spawn = YES; monitor.on = YES; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
         ut_req(monitor.on && [lb_ldcfg()[@"enabled"] boolValue] && preview.enabled, @"开启服务保存并启用预览");
+        [recovery sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req([lb_ldcfg()[@"enabled"] boolValue] && recovery.enabled,@"恢复入口保持已启用意图");
         [preview sendActionsForControlEvents:UIControlEventTouchUpInside];
         ut_req(!preview.enabled, @"等待HUD就绪禁用重复预览");
         notify_post(LB_READY_NOTE);
@@ -671,11 +675,15 @@ static void ut_hdbg(BOOL seed) {
                 BOOL phase7 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase07"];
                 BOOL phase8 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase08"];
                 BOOL phase9 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase09"];
+                BOOL phase12 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase12"];
+                if (phase12) { ut_sttng(); ut_hud(); }
+                else {
                 if (!phase5 && !phase6 && !phase7 && !phase8 && !phase9) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
                 if (@available(iOS 16.0,*)) { if (!phase6 && !phase7 && !phase8 && !phase9) ut_edit(); if (!phase5 && !phase7 && !phase8 && !phase9) ut_rpt(); }
                 if (!phase5 && !phase6 && !phase8 && !phase9) ut_schd();
                 if (!phase5 && !phase6 && !phase7 && !phase9) ut_svc();
                 if (!phase5 && !phase6 && !phase7 && !phase8) ut_hud();
+                }
             } @catch (NSException *exception) { passed = NO; failure = exception.reason; }
             __block NSString *device, *runtime;
             ut_ui(^{ device = UIDevice.currentDevice.model; runtime = UIDevice.currentDevice.systemVersion; });

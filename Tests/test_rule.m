@@ -97,7 +97,7 @@ static void rr_ext(void) {
 static NSDictionary *rr_hst(NSDictionary *task, NSNumber *cycle, NSString *action, NSNumber *until) {
     return @{@"task_id":task[@"task_id"],@"occurrence_id":NSUUID.UUID.UUIDString.lowercaseString,
         @"generation":task[@"reminder_version"],@"cycle_at":cycle,@"scheduled_at":cycle,@"kind":@"plan",
-        @"status":@"handled",@"action":action,@"snooze_until":until ?: NSNull.null,@"handled_at":@1791663600};
+        @"status":[action isEqual:@"snooze"] ? @"snoozed" : @"resolved",@"action":action,@"next_fire_at":until ?: NSNull.null,@"handled_at":@1791663600};
 }
 
 // 验证完成时间与单次延后均不改变系列锚点。

@@ -36,6 +36,7 @@
             try store?.delCap(nil)
             try reg(LB_STOP_NOTE) { [weak self] in self?.halt() }
             try reg(LB_CFG_NOTE) { [weak self] in if (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue != true { self?.halt(true) } }
+            try reg(TS_SB_LAUNCH) { [weak self] in self?.halt(true) }
             for number in [SIGTERM, SIGINT] {
                 let previous = signal(number, SIG_IGN); restores.append { _ = signal(number, previous) }
                 let source = DispatchSource.makeSignalSource(signal: number, queue: .main)

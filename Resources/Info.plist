@@ -48,9 +48,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.10.9</string>
+    <string>0.13.0</string>
     <key>CFBundleVersion</key>
-    <string>22</string>
+    <string>25</string>
     <key>NSCameraUsageDescription</key>
     <string>用于拍摄本次待办的打卡图片</string>
     <key>LSRequiresIPhoneOS</key>

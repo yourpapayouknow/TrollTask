@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.10.9.tipa
+TIPA := $(BUILD)/TrollTask-0.13.0.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
@@ -30,13 +30,13 @@ SIM_CC := xcrun --sdk iphonesimulator clang
 SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -IVendor/libical
 HEADERS := $(wildcard Sources/*.h)
 HEADERS += Vendor/TrollSpeed/head.h
-CORE_SWIFT := Sources/SwiftHead.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift
+CORE_SWIFT := Sources/SwiftHead.swift Sources/ReminderQueue.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift
 HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical
 HOST_OBJECTS := $(BUILD)/host/TaskStore.o $(BUILD)/host/TaskRule.o $(BUILD)/host/LBShared.o $(BUILD)/host/TaskScheduler.o
 ICAL_HEADERS := $(wildcard Vendor/libical/*.h)
 ICAL_FILES := $(wildcard Vendor/libical/* Vendor/libical/LICENSES/*)
 
-.PHONY: all package package-debug test test-rule test-sched test-reminder test-checkin test-ui clean inspect icons serve store
+.PHONY: all package package-debug test test-rule test-queue test-recover test-sched test-reminder test-checkin test-occ test-ui clean inspect icons serve store
 
 icons: $(ICON_SOURCE)
 	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
@@ -113,6 +113,8 @@ test: | $(BUILD)
 	$(MAKE) $(BUILD)/test_store $(BUILD)/test_sync
 	$(BUILD)/test_store
 	$(BUILD)/test_sync
+	$(MAKE) test-queue
+	$(MAKE) test-recover
 	$(MAKE) test-sched
 	$(MAKE) test-reminder
 	$(MAKE) test-checkin
@@ -140,17 +142,32 @@ $(BUILD)/host/TaskScheduler.o: $(CORE_SWIFT) $(HEADERS) $(ICAL_HEADERS) Makefile
 	mkdir -p $(dir $@)
 	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O -emit-object $(CORE_SWIFT) -o $@
 
-$(BUILD)/test_store $(BUILD)/test_sync $(BUILD)/test_sched $(BUILD)/test_reminder $(BUILD)/test_checkin: $(BUILD)/test_%: $(BUILD)/host/test_%.o $(HOST_OBJECTS) $(BUILD)/ical-host.a
+$(BUILD)/test_store $(BUILD)/test_sync $(BUILD)/test_sched $(BUILD)/test_reminder $(BUILD)/test_checkin $(BUILD)/test_occ: $(BUILD)/test_%: $(BUILD)/host/test_%.o $(HOST_OBJECTS) $(BUILD)/ical-host.a
 	xcrun --sdk macosx swiftc $^ -framework Foundation -framework ImageIO -lsqlite3 -o $@
 
 test-sched: $(BUILD)/test_sched
 	$(BUILD)/test_sched
+
+test-queue: $(BUILD)/test_queue
+	$(BUILD)/test_queue
+
+test-recover: $(BUILD)/test_recover
+	$(BUILD)/test_recover
+
+$(BUILD)/test_recover: Tests/test_recover.swift $(CORE_SWIFT) $(filter-out $(BUILD)/host/TaskScheduler.o,$(HOST_OBJECTS)) $(BUILD)/ical-host.a $(HEADERS) Makefile
+	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O Tests/test_recover.swift $(CORE_SWIFT) $(filter-out $(BUILD)/host/TaskScheduler.o,$(HOST_OBJECTS)) $(BUILD)/ical-host.a -framework Foundation -framework ImageIO -lsqlite3 -o $@
+
+$(BUILD)/test_queue: Tests/test_queue.swift Sources/ReminderQueue.swift Sources/SwiftHead.swift $(HEADERS) Makefile | $(BUILD)
+	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O Sources/SwiftHead.swift Sources/ReminderQueue.swift Tests/test_queue.swift -o $@
 
 test-reminder: $(BUILD)/test_reminder
 	$(BUILD)/test_reminder
 
 test-checkin: $(BUILD)/test_checkin
 	$(BUILD)/test_checkin
+
+test-occ: $(BUILD)/test_occ
+	$(BUILD)/test_occ
 
 $(BUILD)/host/storecli.o: cli/storecli.m $(HEADERS) Makefile
 	mkdir -p $(dir $@)

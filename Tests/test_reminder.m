@@ -33,13 +33,8 @@ static NSUInteger rm_fd(NSString *path) {
     for (int fd=0;fd<getdtablesize();fd++) { char name[PATH_MAX]={0}; if (fcntl(fd,F_GETPATH,name)==0 && [@(name) hasPrefix:path]) count++; }
     return count;
 }
-// 在独立子进程运行生产TaskReminder，不连接生产路径或私有窗口。
-static int rm_svc(NSString *path) {
-    for (int descriptor=0;descriptor<3;descriptor++) assert(fcntl(descriptor,F_GETFD)>=0);
-    __block __weak TaskReminder *weakService;
-    TaskReminder *service=[[TaskReminder alloc] initAt:path handler:^(NSDictionary *alert,NSError *error) {
-        assert(!error); rm_evt(@"events.jsonl",@{@"task_id":alert[@"task_id"] ?: (id)NSNull.null,@"at":@(NSDate.date.timeIntervalSince1970)});
-        // 仅在隔离夹具中把已选图片交给独立服务的生产提交入口。
+// 仅在隔离夹具中把已选图片交给独立服务的生产提交入口。
+static void rm_sub(TaskReminder *service,NSDictionary *alert) {
         if (alert) {
             NSString *file=[rm_root stringByAppendingPathComponent:[NSString stringWithFormat:@"submit-%@.png",alert[@"occurrence_id"]]];
             NSData *image=[NSData dataWithContentsOfFile:file];
@@ -48,9 +43,17 @@ static int rm_svc(NSString *path) {
                 rm_evt(@"checkins.jsonl",@{@"pid":@(getpid()),@"parent":@(getppid()),@"occurrence_id":alert[@"occurrence_id"],@"bytes":@(image.length)});
                 NSMutableArray *attachments=[NSMutableArray array];
                 for (NSUInteger index=0;index<TS_ATT_MAX;index++) [attachments addObject:@{@"method":@"image",@"image":image}];
-                [weakService check:alert[@"occurrence_id"] attachments:attachments];
+                [service check:alert[@"occurrence_id"] attachments:attachments];
             }
         }
+}
+// 在独立子进程运行生产TaskReminder，不连接生产路径或私有窗口。
+static int rm_svc(NSString *path) {
+    for (int descriptor=0;descriptor<3;descriptor++) assert(fcntl(descriptor,F_GETFD)>=0);
+    __block __weak TaskReminder *weakService;
+    __block NSDictionary *current;
+    TaskReminder *service=[[TaskReminder alloc] initAt:path handler:^(NSDictionary *alert,NSError *error) {
+        assert(!error); current=alert; rm_evt(@"events.jsonl",@{@"task_id":alert[@"task_id"] ?: (id)NSNull.null,@"at":@(NSDate.date.timeIntervalSince1970)});
     } cleanup:^{
         rm_evt(@"cleanup.jsonl",@{@"pid":@(getpid()),@"lock_held":@(lb_svcup()),@"db_fds":@(rm_fd(path))});
         NSString *again=[rm_root stringByAppendingPathComponent:@"reenable"];
@@ -60,8 +63,12 @@ static int rm_svc(NSString *path) {
     weakService=service; NSError *error=nil;
     if (![service open:&error]) return error.code==EWOULDBLOCK || error.code==ECANCELED ? 0 : 1;
     assert([service start:&error]);
+    // 提交输入独立于展示回调，不要求重复呈现同一个HUD。
+    int token=-1;
+    NSString *input=[@"com.iwmei.taskforiwmei.test.submit." stringByAppendingString:rm_root.lastPathComponent];
+    assert(notify_register_dispatch(input.UTF8String,&token,dispatch_get_main_queue(),^(__unused int value){rm_sub(weakService,current);})==NOTIFY_STATUS_OK);
     rm_evt(@"starts.jsonl",@{@"pid":@(getpid()),@"pgid":@(getpgrp()),@"parent":@(getppid())});
-    CFRunLoopRun(); [service stop]; return 0;
+    CFRunLoopRun(); notify_cancel(token); [service stop]; return 0;
 }
 // 启动同一可执行程序的隔离主App或重复启动入口。
 static NSTask *rm_chld(NSString *arg) {
@@ -104,7 +111,7 @@ static void rm_chk(TaskStore *writer, NSDictionary *task) {
     NSData *image=[NSData dataWithContentsOfFile:@"Resources/MingCute/check_circle.png"];
     NSString *file=[rm_root stringByAppendingPathComponent:[NSString stringWithFormat:@"submit-%@.png",id]];
     rm_req(image.length>0 && [image writeToFile:file atomically:YES],@"准备隔离图片输入");
-    notify_post(writer.changeNote.UTF8String);
+    notify_post([@"com.iwmei.taskforiwmei.test.submit." stringByAppendingString:rm_root.lastPathComponent].UTF8String);
     rm_wt(3,^BOOL { return [[writer rdTsk:taskID error:nil][@"status"] isEqual:@"completed"] && [[writer rdChk:id image:YES error:nil][@"image"] isEqual:image] && [writer lsChk:id images:NO error:nil].count==TS_ATT_MAX; },@"主App退出后服务原子保存图片并完成任务");
     NSDictionary *event=rm_rows(@"checkins.jsonl").lastObject;
     rm_req([event[@"pid"] intValue]==rm_pid() && [event[@"occurrence_id"] isEqual:id],@"图片提交确实发生于独立服务进程");
@@ -170,6 +177,26 @@ static void rm_proc(NSString *path) {
     rm_req([@"1" writeToFile:[rm_root stringByAppendingPathComponent:@"reenable"] atomically:YES encoding:NSUTF8StringEncoding error:nil] && lb_svcfg(@{@"enabled":@NO}),@"清理仍持锁期间模拟主App重新启用");
     rm_wt(3,^BOOL { return rm_rows(@"starts.jsonl").count==6 && lb_svcup(); },@"关开竞争后最新启用意图仍有唯一服务");
     notify_post(LB_STOP_NOTE); rm_end(6);
+    rm_req(lb_spawn(),@"休眠恢复测试启动唯一服务");
+    rm_wt(3,^BOOL { return rm_rows(@"starts.jsonl").count==7 && lb_svcup(); },@"暂停前服务就绪");
+    pid=rm_pid();rm_req(kill(pid,SIGSTOP)==0,@"实际暂停调度进程");
+    NSDictionary *missed=[writer crtTsk:@{@"title":@"暂停期间到期",@"due_at":@(NSDate.date.timeIntervalSince1970+0.2)} error:nil];
+    NSDate *wake=[NSDate dateWithTimeIntervalSinceNow:0.5];
+    while (wake.timeIntervalSinceNow>0) CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.01,true);
+    rm_req([writer lsOcc:missed[@"task_id"] error:nil].count==0,@"暂停期间不会执行尚未运行的timer");
+    notify_post(TS_DISPLAY_ON);rm_req(kill(pid,SIGCONT)==0,@"恢复执行并投递唤醒事件");
+    rm_wt(2,^BOOL { return [writer lsOcc:missed[@"task_id"] error:nil].count==1; },@"暂停错过的任务立即补弹");
+    NSDictionary *missedOcc=[writer lsOcc:missed[@"task_id"] error:nil].firstObject;
+    rm_req([missedOcc[@"triggered_at"] doubleValue]>=[missed[@"due_at"] doubleValue],@"补弹使用恢复后的当前时间");
+    for (NSUInteger i=0;i<30;i++) notify_post(TS_SB_LAUNCH);
+    rm_wt(3,^BOOL { return rm_rows(@"starts.jsonl").count==8 && rm_rows(@"stops.jsonl").count==7 && rm_pid()!=pid && lb_svcup(); },@"原SpringBoard通知路径只重建一个新服务");
+    rm_wt(1,^BOOL { return [rm_rows(@"events.jsonl").lastObject[@"task_id"] isEqual:missed[@"task_id"]]; },@"新服务恢复仍未Resolved的轮次");
+    NSDictionary *recovered=[writer lsOcc:missed[@"task_id"] error:nil].firstObject;
+    rm_req([recovered[@"occurrence_id"] isEqual:missedOcc[@"occurrence_id"]] && [recovered[@"triggered_at"] isEqual:missedOcc[@"triggered_at"]],@"SpringBoard重建不新建或重触发同轮次");
+    NSDictionary *clean=rm_rows(@"cleanup.jsonl").lastObject,*stopped=rm_rows(@"stops.jsonl").lastObject;
+    rm_req([clean[@"lock_held"] boolValue] && ![stopped[@"lock_held"] boolValue] && [clean[@"db_fds"] unsignedIntegerValue]==0,@"原窗口及数据库先清理再释放锁和spawn");
+    rm_req([writer actOcc:recovered[@"occurrence_id"] action:@"complete" until:nil error:nil],@"完成补弹测试项");
+    notify_post(LB_STOP_NOTE);rm_end(8);
     NSDictionary *report=@{@"checks":@(rm_checks),@"app_pid":@(app.processIdentifier),@"forced_app_pid":@(parent),@"trigger_lateness":@(delay),@"forced_trigger_lateness":@(forcedDelay),@"checkins":rm_rows(@"checkins.jsonl"),@"starts":rm_rows(@"starts.jsonl"),@"cleanups":rm_rows(@"cleanup.jsonl"),@"stops":rm_rows(@"stops.jsonl")};
     NSData *data=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]; assert([data writeToFile:@"build/TaskReminderReport.json" atomically:YES]);
 }

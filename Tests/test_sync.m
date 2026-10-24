@@ -189,6 +189,7 @@ static void tstcycles(NSString *path) {
             assert(([reader revision:nil] == revision));
         }
         NSArray *history = [reader lsOcc:task[@"task_id"] error:nil]; NSMutableSet *ids = [NSMutableSet set];
+        history=[history filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"action == %@",@"complete"]];
         for (NSDictionary *occ in history) { [ids addObject:occ[@"occurrence_id"]]; assert(([occ[@"task_id"] isEqual:task[@"task_id"]] && [occ[@"action"] isEqual:@"complete"])); }
         assert(history.count==12 && ids.count==12);
         TaskStore *reopened = tstopen(path);

@@ -73,9 +73,9 @@ static void tstdata(NSString *path) {
     NSDictionary *occ = [store crtOcc:taskID at:@1700000000.125 error:nil];
     assert((occ && [[store crtOcc:taskID at:@1700000000.125 error:nil][@"occurrence_id"] isEqual:occ[@"occurrence_id"]]));
     assert(([store lsOcc:taskID error:nil].count == 1));
-    assert(([store updOcc:occ[@"occurrence_id"] fields:@{@"status": @"triggered", @"triggered_at": @1700000001.25} error:nil]));
-    assert(([store updOcc:occ[@"occurrence_id"] fields:@{@"status": @"handled", @"handled_at": @1700000002.25,
-        @"action": @"snooze", @"snooze_until": @1700000300} error:nil]));
+    assert(([store updOcc:occ[@"occurrence_id"] fields:@{@"status": @"presented", @"triggered_at": @1700000001.25} error:nil]));
+    assert(([store updOcc:occ[@"occurrence_id"] fields:@{@"status": @"snoozed", @"handled_at": @1700000002.25,
+        @"action": @"snooze", @"next_fire_at": @1700000300} error:nil]));
     assert(([[store lsOcc:taskID error:nil].firstObject[@"action"] isEqual:@"snooze"]));
     NSDateFormatter *formatter = [NSDateFormatter new];
     formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
@@ -149,7 +149,7 @@ static void tstedges(NSString *path) {
     } @catch (NSException *exception) { assert(([exception.name isEqual:@"expected-test"])); }
     assert(([[store rdTsk:taskID error:nil][@"notes"] isEqual:@""]));
     NSDictionary *occ = [store crtOcc:taskID at:@1 error:nil];
-    assert((![store updOcc:occ[@"occurrence_id"] fields:@{@"status": @"triggered"} error:nil]));
+    assert((![store updOcc:occ[@"occurrence_id"] fields:@{@"status": @"presented"} error:nil]));
     assert(([[store lsOcc:taskID error:nil].firstObject[@"status"] isEqual:@"pending"]));
     assert(([tstval(path, "PRAGMA integrity_check") isEqual:@"ok"]));
 }
@@ -316,15 +316,15 @@ static void tstlst(NSString *path) {
     NSString *repeatID = repeat[@"task_id"]; NSDictionary *display = [store lsPnd:nil].firstObject;
     assert(([display[@"task_id"] isEqual:repeatID] && [display[@"next_cycle_at"] isEqual:due]));
     assert(([store cmplNxt:repeatID cycle:due generation:repeat[@"reminder_version"] error:nil]));
-    assert(([[store rdTsk:repeatID error:nil][@"status"] isEqual:@"needsAction"] && [store lsOcc:repeatID error:nil].count == 1));
+    assert(([[store rdTsk:repeatID error:nil][@"status"] isEqual:@"needsAction"] && [store lsOcc:repeatID error:nil].count == 2));
     NSNumber *next = [store lsPnd:nil].firstObject[@"next_cycle_at"]; assert((next.doubleValue > due.doubleValue));
     revision = [store revision:nil];
     assert(([store cmplNxt:repeatID cycle:due generation:repeat[@"reminder_version"] error:nil] && [store revision:nil] == revision));
-    assert(([store lsOcc:repeatID error:nil].count == 1));
+    assert(([store lsOcc:repeatID error:nil].count == 2));
     assert(([store updTsk:repeatID fields:@{@"due_at":@(due.doubleValue+7200)} error:nil]));
-    assert(([store cmplNxt:repeatID cycle:next generation:repeat[@"reminder_version"] error:nil] && [store lsOcc:repeatID error:nil].count == 1));
+    assert(([store cmplNxt:repeatID cycle:next generation:repeat[@"reminder_version"] error:nil] && [store lsOcc:repeatID error:nil].count == 2));
     assert((![store cmplNxt:repeatID cycle:due generation:@1.5 error:&error] && [error.userInfo[@"kind"] isEqual:@"invalid_fields"]));
-    assert(([store cmplNxt:repeatID error:nil] && [store lsOcc:repeatID error:nil].count == 2));
+    assert(([store cmplNxt:repeatID error:nil] && [store lsOcc:repeatID error:nil].count == 4));
     assert(([store cmplTsk:repeatID error:nil] && [store rstrTsk:repeatID error:nil]));
     assert(([tstval(path,"PRAGMA integrity_check") isEqual:@"ok"]));
 }
@@ -335,6 +335,9 @@ static void tstv3(NSString *root) {
         NSString *path = [root stringByAppendingPathComponent:fail.boolValue ? @"v3-failed.sqlite3" : @"v3.sqlite3"];
         __block NSString *uuid; __block NSNumber *updated;
         @autoreleasepool { TaskStore *store = tstopn(path); NSDictionary *task = [store crtTsk:@{@"title":@"第三版数据",@"starred":@1} error:nil]; uuid = task[@"task_id"]; updated = task[@"updated_at"]; }
+        NSString *fixture=[NSString stringWithContentsOfFile:@"Tests/Fixtures/occurrence-v8.sql" encoding:NSUTF8StringEncoding error:nil];
+        for (NSString *line in [fixture componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"CREATE TABLE reminder_occurrences "])
+            tstsql(path,[@"DROP TABLE reminder_occurrences;" stringByAppendingString:line]);
         tstsql(path,@"DROP TABLE capture_request; DROP TABLE reminder_checkins; ALTER TABLE reminder_occurrences DROP COLUMN defer_count; ALTER TABLE reminder_occurrences DROP COLUMN hold_reason; ALTER TABLE reminder_occurrences DROP COLUMN hold_until; ALTER TABLE tasks DROP COLUMN starred_at; ALTER TABLE task_lists DROP COLUMN deleted; UPDATE store_meta SET schema_version=3;");
         if (fail.boolValue) tstsql(path,@"CREATE TRIGGER migrate_fail BEFORE UPDATE ON store_meta BEGIN SELECT RAISE(ABORT,'blocked'); END;");
         NSError *error = nil; TaskStore *store = [[TaskStore alloc] initAt:path error:&error];

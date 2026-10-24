@@ -63,7 +63,9 @@ def tstarch(root):
     order = ["[self _accessibilityInit];", "lb_ldax();", "pBKSHID(lb_onhidevt);", "[app __completeAndRunAsPlugin];"]
     positions = [hud.index(text) for text in order]
     assert positions == sorted(positions)
-    assert "SBSpringBoardDidLaunchNotification" in hud and "DISPATCH_VNODE_DELETE" in hud
+    reminder = (root / "Sources/TaskReminder.swift").read_text()
+    assert '"SBSpringBoardDidLaunchNotification"' in (root / "Sources/LBHead.h").read_text()
+    assert "reg(TS_SB_LAUNCH)" in reminder and "halt(true)" in reminder and "DISPATCH_VNODE_DELETE" in hud
 
 
 # 执行全部工程约束检查。

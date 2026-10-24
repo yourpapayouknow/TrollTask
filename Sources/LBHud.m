@@ -293,11 +293,7 @@ int lb_hudmain(int argc, char **argv) {
     }
     lb_monexe();
 
-    if (notify_register_dispatch("SBSpringBoardDidLaunchNotification", &lb_sbtok, dispatch_get_main_queue(), ^(__unused int token) {
-        [lb_reminder stop]; lb_reminder = nil;
-        if ([lb_ldcfg()[@"enabled"] boolValue]) lb_spawn();
-        exit(EXIT_SUCCESS);
-    }) != NOTIFY_STATUS_OK) lb_hudend(EXIT_FAILURE);
+
 
     if (!lb_ldfw()) lb_hudend(EXIT_FAILURE);
     return UIApplicationMain(argc, argv, NSStringFromClass(LBHudApp.class), NSStringFromClass(LBHudDel.class));

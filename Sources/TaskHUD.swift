@@ -181,7 +181,7 @@
         guard let snapshot = reminder?.snap(&issue) as? TaskFields else { held = nil; return }
         let tasks = snapshot["tasks"] as? [TaskFields] ?? []
         held = (snapshot["history"] as? [TaskFields] ?? []).filter { row in
-            row["status"] as? String == "handled" && row["action"] as? String == "snooze" && row["hold_reason"] is String
+            row["status"] as? String == "snoozed" && row["action"] as? String == "snooze" && row["hold_reason"] is String
                 && tasks.contains { $0["task_id"] as? String == row["task_id"] as? String && $0["status"] as? String == "needsAction"
                     && ($0["deleted"] as? NSNumber)?.boolValue == false && ($0["reminder_version"] as? NSNumber) == (row["generation"] as? NSNumber) }
         }.sorted { (($0["hold_until"] as? NSNumber)?.doubleValue ?? .infinity) < (($1["hold_until"] as? NSNumber)?.doubleValue ?? .infinity) }.first
@@ -190,6 +190,8 @@
     @objc(display:error:) func dsp(_ value: NSDictionary?, error: NSError?) {
         guard !stopped else { return }; loadViewIfNeeded(); let previous = id, wasPreview = previewing
         if value == nil, error != nil, mode != 0 { busy = false; done.isEnabled = true; sidebar.isEnabled = true; stt("重试打卡"); lay(); return }
+        let incoming = value?["occurrence_id"] as? String
+        if incoming != nil, incoming == previous, busy, error == nil { return }
         alert = value as? TaskFields; busy = false; sidebar.isEnabled = true; previewing = false; hld()
         if alert == nil, held == nil, wasPreview, error == nil { previewing = true; return }
         if previous != id {

@@ -2,7 +2,8 @@
 
 // 记录打卡核心断言。
 static NSUInteger ck_checks;
-static void ck_req(BOOL value) { if (!value) NSLog(@"Checkin断言失败：%lu",(unsigned long)(ck_checks+1)); assert(value); ck_checks++; }
+static void ck_at(BOOL value,int line) { if (!value) NSLog(@"Checkin断言失败：%lu，第%d行",(unsigned long)(ck_checks+1),line); assert(value); ck_checks++; }
+#define ck_req(...) ck_at((__VA_ARGS__),__LINE__)
 
 // 在隔离库模拟迁移和写入故障。
 static void ck_sql(NSString *path, NSString *sql) {
@@ -26,6 +27,15 @@ static NSDictionary *ck_clm(TaskStore *store, BOOL repeat) {
     for (NSDictionary *alert in plan[@"alerts"]) if ([alert[@"task_id"] isEqual:task[@"task_id"]])
         return [store claim:alert revision:[plan[@"revision"] longLongValue] at:NSDate.date.timeIntervalSince1970 error:nil];
     assert(NO); return nil;
+}
+
+// 恢复真实旧版Occurrence结构，供既有迁移用例降级隔离库。
+static void ck_old(NSString *path) {
+    NSString *fixture=[NSString stringWithContentsOfFile:@"Tests/Fixtures/occurrence-v8.sql" encoding:NSUTF8StringEncoding error:nil];
+    NSString *schema=nil;
+    for (NSString *line in [fixture componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"CREATE TABLE reminder_occurrences "]) schema=line;
+    ck_req(schema!=nil);
+    ck_sql(path,[NSString stringWithFormat:@"CREATE TEMP TABLE old_rows AS SELECT * FROM reminder_occurrences;DROP TABLE reminder_occurrences;%@ INSERT INTO reminder_occurrences SELECT occurrence_id,task_id,scheduled_at,triggered_at,handled_at,CASE status WHEN 'presented' THEN 'triggered' WHEN 'snoozed' THEN 'handled' WHEN 'resolved' THEN 'handled' WHEN 'completed' THEN 'handled' ELSE 'pending' END,action,CASE WHEN status='snoozed' THEN next_fire_at END,created_at,updated_at,generation,kind,cycle_at,defer_count,hold_reason,hold_until FROM old_rows;DROP TABLE old_rows;",schema]);
 }
 
 // 检查本次收起次数、图片原子提交与恢复。
@@ -93,14 +103,14 @@ static void ck_files(NSString *root) {
     for (NSNumber *fail in @[@NO,@YES]) {
         NSString *legacy=[root stringByAppendingPathComponent:fail.boolValue?@"v8-fail.sqlite3":@"v7-files.sqlite3"];__block NSString *oldID;
         @autoreleasepool {TaskStore *old=[[TaskStore alloc] initAt:legacy error:nil];NSDictionary *a=ck_clm(old,NO);oldID=a[@"occurrence_id"];ck_req([old chkOcc:oldID attachments:@[image,image] error:nil]);}
-        ck_sql(legacy,@"CREATE TABLE checkins_v7(occurrence_id TEXT NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 5),method TEXT NOT NULL CHECK(method IN ('camera','screenshot','image')),image BLOB NOT NULL CHECK(length(image)>0),created_at REAL NOT NULL,PRIMARY KEY(occurrence_id,position));INSERT INTO checkins_v7 SELECT occurrence_id,position,method,image,created_at FROM reminder_checkins;DROP TABLE reminder_checkins;ALTER TABLE checkins_v7 RENAME TO reminder_checkins;UPDATE store_meta SET schema_version=7;");
+        ck_old(legacy);ck_sql(legacy,@"CREATE TABLE checkins_v7(occurrence_id TEXT NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 5),method TEXT NOT NULL CHECK(method IN ('camera','screenshot','image')),image BLOB NOT NULL CHECK(length(image)>0),created_at REAL NOT NULL,PRIMARY KEY(occurrence_id,position));INSERT INTO checkins_v7 SELECT occurrence_id,position,method,image,created_at FROM reminder_checkins;DROP TABLE reminder_checkins;ALTER TABLE checkins_v7 RENAME TO reminder_checkins;UPDATE store_meta SET schema_version=7;");
         if (fail.boolValue) ck_sql(legacy,@"CREATE TRIGGER v8_failure BEFORE UPDATE ON store_meta WHEN NEW.schema_version=8 BEGIN SELECT RAISE(ABORT,'test');END;");
         TaskStore *migrated=[[TaskStore alloc] initAt:legacy error:nil];ck_req((migrated!=nil)!=fail.boolValue);
         if (fail.boolValue) {
             ck_req(ck_int(legacy,"SELECT schema_version FROM store_meta")==7 && ck_int(legacy,"SELECT count(*) FROM pragma_table_info('reminder_checkins') WHERE name='content_type'")==0 && ck_int(legacy,"SELECT count(*) FROM reminder_checkins")==2 && ck_int(legacy,"SELECT count(*) FROM sqlite_master WHERE name='reminder_checkins_v8'")==0);
             ck_sql(legacy,@"DROP TRIGGER v8_failure;");migrated=[[TaskStore alloc] initAt:legacy error:nil];
         }
-        NSArray *old=[migrated lsChk:oldID images:YES error:nil];ck_req([migrated schver:nil]==8 && old.count==2 && [old[1][@"image"] isEqual:png] && ck_int(legacy,"SELECT count(*) FROM pragma_foreign_key_check")==0);
+        NSArray *old=[migrated lsChk:oldID images:YES error:nil];ck_req([migrated schver:nil]==TS_SCH_VER && old.count==2 && [old[1][@"image"] isEqual:png] && ck_int(legacy,"SELECT count(*) FROM pragma_foreign_key_check")==0);
     }
     printf("Files: %lu checks passed; raw bytes, empty files, mixed batches, metadata, same DB handoff and migration rollback\n",(unsigned long)(ck_checks-before));
 }
@@ -151,11 +161,11 @@ static void ck_run(NSString *root) {
     for (NSData *bytes in @[[NSData data], [@"not an image" dataUsingEncoding:NSUTF8StringEncoding]])
         ck_req(![store chkOcc:bid method:@"camera" image:bytes error:nil]);
     ck_req(![store chkOcc:bid method:@"unknown" image:image error:nil]);
-    ck_req([store revision:nil]==revision && [[store lsOcc:bad[@"task_id"] error:nil].firstObject[@"status"] isEqual:@"triggered"]);
+    ck_req([store revision:nil]==revision && [[store lsOcc:bad[@"task_id"] error:nil].firstObject[@"status"] isEqual:@"presented"]);
     ck_sql(path,@"CREATE TRIGGER proof_failure BEFORE INSERT ON reminder_checkins BEGIN SELECT RAISE(ABORT,'test'); END;");
     ck_req(![store chkOcc:bid method:@"camera" image:image error:nil]);
     ck_req([[store rdTsk:bad[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"] && [store revision:nil]==revision);
-    ck_req([[store lsOcc:bad[@"task_id"] error:nil].firstObject[@"status"] isEqual:@"triggered"] && ![store rdChk:bid image:NO error:nil]);
+    ck_req([[store lsOcc:bad[@"task_id"] error:nil].firstObject[@"status"] isEqual:@"presented"] && ![store rdChk:bid image:NO error:nil]);
     ck_sql(path,@"DROP TRIGGER proof_failure;");
     ck_req([store chkOcc:bid method:@"camera" image:image error:nil]);
     NSDictionary *stale=ck_clm(store,NO);
@@ -175,7 +185,7 @@ static void ck_run(NSString *root) {
     for (NSNumber *fail in @[@NO,@YES]) {
         NSString *legacy=[root stringByAppendingPathComponent:fail.boolValue?@"failed.sqlite3":@"legacy.sqlite3"];
         @autoreleasepool { ck_req([[TaskStore alloc] initAt:legacy error:nil]!=nil); }
-        ck_sql(legacy,@"DROP TABLE capture_request; DROP TABLE reminder_checkins; ALTER TABLE reminder_occurrences DROP COLUMN defer_count; ALTER TABLE reminder_occurrences DROP COLUMN hold_reason; ALTER TABLE reminder_occurrences DROP COLUMN hold_until; UPDATE store_meta SET schema_version=4;");
+        ck_old(legacy);ck_sql(legacy,@"DROP TABLE capture_request; DROP TABLE reminder_checkins; ALTER TABLE reminder_occurrences DROP COLUMN defer_count; ALTER TABLE reminder_occurrences DROP COLUMN hold_reason; ALTER TABLE reminder_occurrences DROP COLUMN hold_until; UPDATE store_meta SET schema_version=4;");
         if (fail.boolValue) ck_sql(legacy,@"CREATE TRIGGER migration_failure BEFORE UPDATE ON store_meta WHEN NEW.schema_version=5 BEGIN SELECT RAISE(ABORT,'test'); END;");
         TaskStore *migrated=[[TaskStore alloc] initAt:legacy error:&error]; ck_req((migrated!=nil)!=fail.boolValue);
         if (fail.boolValue) { ck_sql(legacy,@"DROP TRIGGER migration_failure;"); migrated=[[TaskStore alloc] initAt:legacy error:nil]; }
@@ -196,7 +206,7 @@ static void ck_run(NSString *root) {
     ck_req([store revision:nil]==revision && [store lsChk:mid images:YES error:nil].count==0 && [[store rdTsk:multi[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"]);
     ck_sql(path,@"CREATE TRIGGER batch_failure BEFORE INSERT ON reminder_checkins WHEN NEW.position=3 BEGIN SELECT RAISE(ABORT,'test'); END;");
     ck_req(![store chkOcc:mid attachments:batch error:nil]);
-    ck_req([store revision:nil]==revision && [store lsChk:mid images:YES error:nil].count==0 && [[store lsOcc:multi[@"task_id"] error:nil].firstObject[@"status"] isEqual:@"triggered"] && [[store rdTsk:multi[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"]);
+    ck_req([store revision:nil]==revision && [store lsChk:mid images:YES error:nil].count==0 && [[store lsOcc:multi[@"task_id"] error:nil].firstObject[@"status"] isEqual:@"presented"] && [[store rdTsk:multi[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"]);
     ck_sql(path,@"DROP TRIGGER batch_failure;");ck_req([store chkOcc:mid attachments:batch error:nil]);
     NSArray *saved=[reopened lsChk:mid images:YES error:nil],*metadata=[store lsChk:mid images:NO error:nil];
     ck_req(saved.count==TS_ATT_MAX && metadata.count==TS_ATT_MAX && [[store rdTsk:multi[@"task_id"] error:nil][@"status"] isEqual:@"completed"]);
@@ -208,7 +218,7 @@ static void ck_run(NSString *root) {
         NSString *legacy=[root stringByAppendingPathComponent:fail.boolValue?@"v5-failed.sqlite3":@"v5.sqlite3"];
         __block NSDictionary *oldAlert;
         @autoreleasepool { TaskStore *old=[[TaskStore alloc] initAt:legacy error:nil];oldAlert=ck_clm(old,NO);ck_req([old chkOcc:oldAlert[@"occurrence_id"] method:@"camera" image:image error:nil]); }
-        ck_sql(legacy,@"CREATE TABLE checkins_v5(occurrence_id TEXT PRIMARY KEY NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,method TEXT NOT NULL CHECK(method IN ('camera','screenshot','image')),image BLOB NOT NULL CHECK(length(image)>0),created_at REAL NOT NULL);INSERT INTO checkins_v5 SELECT occurrence_id,method,image,created_at FROM reminder_checkins WHERE position=0;DROP TABLE capture_request; DROP TABLE reminder_checkins;ALTER TABLE checkins_v5 RENAME TO reminder_checkins;UPDATE store_meta SET schema_version=5;");
+        ck_old(legacy);ck_sql(legacy,@"CREATE TABLE checkins_v5(occurrence_id TEXT PRIMARY KEY NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,method TEXT NOT NULL CHECK(method IN ('camera','screenshot','image')),image BLOB NOT NULL CHECK(length(image)>0),created_at REAL NOT NULL);INSERT INTO checkins_v5 SELECT occurrence_id,method,image,created_at FROM reminder_checkins WHERE position=0;DROP TABLE capture_request; DROP TABLE reminder_checkins;ALTER TABLE checkins_v5 RENAME TO reminder_checkins;UPDATE store_meta SET schema_version=5;");
         if (fail.boolValue) ck_sql(legacy,@"CREATE TRIGGER v6_failure BEFORE UPDATE ON store_meta WHEN NEW.schema_version=6 BEGIN SELECT RAISE(ABORT,'test'); END;");
         TaskStore *migrated=[[TaskStore alloc] initAt:legacy error:&error];ck_req((migrated!=nil)!=fail.boolValue);
         if (fail.boolValue) {
@@ -223,7 +233,7 @@ static void ck_run(NSString *root) {
     for (NSNumber *fail in @[@NO,@YES]) {
         NSString *legacy=[root stringByAppendingPathComponent:fail.boolValue?@"v7failed.sqlite3":@"v6.sqlite3"];
         @autoreleasepool { TaskStore *old=[[TaskStore alloc] initAt:legacy error:nil];NSDictionary *a=ck_clm(old,NO);ck_req([old chkOcc:a[@"occurrence_id"] method:@"image" image:image error:nil]); }
-        ck_sql(legacy,@"DROP TABLE capture_request;UPDATE store_meta SET schema_version=6;");
+        ck_old(legacy);ck_sql(legacy,@"DROP TABLE capture_request;UPDATE store_meta SET schema_version=6;");
         if (fail.boolValue) ck_sql(legacy,@"CREATE TRIGGER v7_failure BEFORE UPDATE ON store_meta WHEN NEW.schema_version=7 BEGIN SELECT RAISE(ABORT,'test');END;");
         TaskStore *migrated=[[TaskStore alloc] initAt:legacy error:nil];ck_req((migrated!=nil)!=fail.boolValue);
         if (fail.boolValue) {

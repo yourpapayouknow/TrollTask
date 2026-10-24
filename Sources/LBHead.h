@@ -56,6 +56,19 @@ extern const char *lb_tstlock;
 
 extern char **environ;
 
+// 系统通知在隔离测试中使用工程命名空间。
+#ifdef LB_HOST_TEST
+#define TS_CLOCK_SET "com.iwmei.taskforiwmei.test.clock"
+#define TS_TIME_ZONE "com.iwmei.taskforiwmei.test.timezone"
+#define TS_DISPLAY_ON "com.iwmei.taskforiwmei.test.display"
+#define TS_SB_LAUNCH "com.iwmei.taskforiwmei.test.springboard"
+#else
+#define TS_CLOCK_SET "com.apple.system.clock_set"
+#define TS_TIME_ZONE "com.apple.system.timezone"
+#define TS_DISPLAY_ON "com.apple.iokit.hid.displayStatus"
+#define TS_SB_LAUNCH "SBSpringBoardDidLaunchNotification"
+#endif
+
 #if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
 // 声明现成原生应用激活入口。
 @interface LSApplicationWorkspace : NSObject
