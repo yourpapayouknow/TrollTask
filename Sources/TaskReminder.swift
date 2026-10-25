@@ -30,10 +30,16 @@
         if lock >= 0 { return true }
         guard !ended, (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true else { return err(error, ECANCELED, "提醒服务已关闭") }
         lock = lb_lckhud()
-        guard lock >= 0 else { return err(error, errno, "提醒服务锁不可用") }
+        guard lock >= 0 else {
+            let code = errno; if code != EWOULDBLOCK { lb_svstat("服务锁不可用", nil) }
+            return err(error, code, "提醒服务锁不可用")
+        }
+        lb_svstat("启动中", nil)
+        var stage = "数据库不可用"
         do {
             store = try TaskStore(at: path)
             try store?.delCap(nil)
+            stage = "服务通信失败"
             try reg(LB_STOP_NOTE) { [weak self] in self?.halt() }
             try reg(LB_CFG_NOTE) { [weak self] in if (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue != true { self?.halt(true) } }
             try reg(TS_SB_LAUNCH) { [weak self] in self?.halt(true) }
@@ -43,7 +49,7 @@
                 source.setEventHandler { [weak self] in self?.halt() }; signals.append(source); source.resume()
             }
             return true
-        } catch let issue { stp(); error?.pointee = issue as NSError; return false }
+        } catch let issue { lb_svstat(stage, nil); stp(); error?.pointee = issue as NSError; return false }
     }
     // 启动唯一调度核心并在窗口可用后确认就绪。
     @objc(start:) func strt(_ error: AutoreleasingUnsafeMutablePointer<NSError?>?) -> Bool {
@@ -51,7 +57,10 @@
         guard opn(error), let store else { return false }
         guard (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true else { stp(); return err(error, ECANCELED, "提醒服务已关闭") }
         let scheduler = TaskScheduler(store: store, handler: handler)
-        guard scheduler.strt(error) else { stp(); return false }
+        scheduler.onPlan = { next, active, error in
+            lb_svstat(error == nil ? (active ? "正在提醒" : "正在运行") : "调度读取失败", next.map { NSNumber(value: $0.timeIntervalSince1970) })
+        }
+        guard scheduler.strt(error) else { lb_svstat("调度启动失败", nil); stp(); return false }
         self.scheduler = scheduler; running = true; notify_post(LB_READY_NOTE); return true
     }
     // 转交当前提醒动作并复用事务后重排。

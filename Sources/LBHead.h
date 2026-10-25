@@ -192,6 +192,9 @@ int lb_lckhud(void);
 
 // 检查既有提醒服务的真实锁状态。
 BOOL lb_svcup(void);
+// 发布轻量诊断状态，读取时必须核对真实服务锁和PID。
+void lb_svstat(NSString *state, NSNumber *next);
+NSDictionary *lb_rdstat(void);
 // 使用现有persona方式幂等启动提醒服务。
 BOOL lb_spawn(void);
 

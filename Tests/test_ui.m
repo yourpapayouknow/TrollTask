@@ -359,10 +359,60 @@ static void ut_sttng(void) {
         [preview sendActionsForControlEvents:UIControlEventTouchUpInside];
         ut_req(!preview.enabled, @"等待HUD就绪禁用重复预览");
         notify_post(LB_READY_NOTE);
+        int handle = lb_lckhud(); ut_req(handle>=0,@"设置诊断使用真实隔离服务锁");
+        NSNumber *stamp = @(NSDate.date.timeIntervalSince1970+120);
+        lb_svstat(@"正在运行",stamp);
+        UIButton *status = (UIButton *)ut_find(controller.view,@"settings.status");
+        UIButton *next = (UIButton *)ut_find(controller.view,@"settings.next");
+        [status sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req([status.configuration.title isEqual:@"正在运行"] && next.configuration.subtitle.length>0,@"实际PID状态和下一提醒显示");
+        close(handle); [status sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req(![status.configuration.title isEqual:@"正在运行"] && next.configuration.subtitle==nil,@"服务死亡立即撤销正常状态和旧下一时间");
+        for (NSString *issue in @[@"数据库不可用",@"HUD启动失败",@"私有组件加载失败",@"窗口注册失败"]) {
+            lb_svstat(issue,nil); [status sendActionsForControlEvents:UIControlEventTouchUpInside];
+            ut_req([status.configuration.title isEqual:issue],[@"用户可见错误：" stringByAppendingString:issue]);
+        }
+        lb_svstat(@"服务已关闭",nil); [status sendActionsForControlEvents:UIControlEventTouchUpInside];
+        [controller setValue:@YES forKey:@"storeFailed"]; [status sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req([status.configuration.title isEqual:@"数据库不可用"],@"App自身数据库失败不会被健康HUD状态掩盖");
+        [controller setValue:@NO forKey:@"storeFailed"]; [status sendActionsForControlEvents:UIControlEventTouchUpInside];
     });
     ut_wait(^BOOL { return [(UIButton *)ut_find(ut_top().view, @"settings.preview") isEnabled]; }, @"Darwin就绪恢复预览入口");
     ut_shot(@"settings-large-320.png", 320, 850, YES);
     ut_ui(^{ [ut_nav popViewControllerAnimated:NO]; });
+}
+
+// 用真实HUD和同库服务验证内存测试轮次、正常数据库零变化与真提醒优先。
+static void ut_diag(void) {
+    __block TTTaskHUD *hud; __block TaskReminder *service; __block NSDictionary *before;
+    ut_ui(^{
+        hud=[TTTaskHUD new];
+        service=[[TaskReminder alloc] initAt:ut_store.path handler:^(NSDictionary *alert,NSError *issue) { [hud display:alert error:issue]; } cleanup:^{} finish:^(__unused BOOL restart){}];
+        ut_req([service start:nil],@"诊断测试连接真实唯一数据库服务"); hud.reminder=service;
+        [ut_nav pushViewController:hud animated:NO];
+    });
+    ut_wait(^BOOL { return [lb_rdstat()[@"running"] boolValue]; },@"生产调度器发布真实运行状态");
+    ut_ui(^{
+        before=[ut_store snapshot:nil]; [hud preview];
+        ut_req(hud.mode==1 && [hud.testOccurrence[@"status"] isEqual:@"presented"],@"测试创建内存Presented轮次");
+        NSString *identity=hud.testOccurrence[@"occurrence_id"];
+        for (int i=0;i<30;i++) [hud preview];
+        ut_req([identity isEqual:hud.testOccurrence[@"occurrence_id"]],@"重复预览通知不重复创建测试轮次");
+        ut_req(!ut_find(hud.view,@"hud.snooze").hidden && [(UIButton *)ut_find(hud.view,@"hud.snooze") isEnabled],@"测试提供正常延期退出按钮");
+    });
+    ut_shot(@"diagnostic-test-320.png",320,693,NO);
+    ut_ui(^{
+        [(UIButton *)ut_find(hud.view,@"hud.complete") sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req(hud.mode==0 && [hud.testOccurrence[@"status"] isEqual:@"resolved"],@"测试完成立即解除全屏");
+        NSString *old=hud.testOccurrence[@"occurrence_id"];[hud preview];
+        ut_req(![old isEqual:hud.testOccurrence[@"occurrence_id"]],@"下一次测试创建独立身份");
+        [(UIButton *)ut_find(hud.view,@"hud.snooze") sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req(hud.mode==0 && [hud.testOccurrence[@"status"] isEqual:@"snoozed"],@"测试延期立即退出且无边栏重弹");
+        ut_req([before isEqual:[ut_store snapshot:nil]],@"测试完成和延期不污染任务历史附件及数据库修订");
+        [hud display:@{@"occurrence_id":@"real",@"task":@{@"title":@"真实优先"},@"occurrence":@{}} error:nil];
+        [hud preview];ut_req(hud.mode==1 && [((UILabel *)ut_find(hud.view,@"hud.title")).text isEqual:@"真实优先"],@"测试不能覆盖真实待办");
+        [hud stop];[service stop];[ut_nav popViewControllerAnimated:NO];
+    });
 }
 
 // 用独立数据库连接运行生产调度器并记录真实回调。
@@ -676,7 +726,8 @@ static void ut_hdbg(BOOL seed) {
                 BOOL phase8 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase08"];
                 BOOL phase9 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase09"];
                 BOOL phase12 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase12"];
-                if (phase12) { ut_sttng(); ut_hud(); }
+                BOOL phase13 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase13"];
+                if (phase12 || phase13) { ut_sttng(); if (phase13) ut_diag(); ut_hud(); }
                 else {
                 if (!phase5 && !phase6 && !phase7 && !phase8 && !phase9) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
                 if (@available(iOS 16.0,*)) { if (!phase6 && !phase7 && !phase8 && !phase9) ut_edit(); if (!phase5 && !phase7 && !phase8 && !phase9) ut_rpt(); }

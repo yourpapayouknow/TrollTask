@@ -3,6 +3,8 @@
     @objc var reminder: TaskReminder?
     @objc var windowMode: ((Int) -> Void)?
     @objc private(set) var mode = 0
+    // 测试轮次仅保留在当前HUD内存，不进入TaskStore。
+    @objc private(set) var testOccurrence: NSDictionary?
     @objc var globalCapture = false
 #if LB_UI_TEST
     @objc var captureLaunch: (() -> Bool)?
@@ -151,7 +153,7 @@
     // 切换操作行、图标选择和图片确认的布局。
     private func lay() {
         choices.isHidden = !selecting; actions.isHidden = mode != 1 || selecting
-        delay.isHidden = previewing
+        delay.isHidden = false
         for (index, button) in attachmentButtons.enumerated() {
             button.isHidden = index >= proofs.count; button.isEnabled = !busy && !loading
             if index < proofs.count {
@@ -191,6 +193,7 @@
         guard !stopped else { return }; loadViewIfNeeded(); let previous = id, wasPreview = previewing
         if value == nil, error != nil, mode != 0 { busy = false; done.isEnabled = true; sidebar.isEnabled = true; stt("重试打卡"); lay(); return }
         let incoming = value?["occurrence_id"] as? String
+        if incoming != nil, wasPreview { testOccurrence = nil }
         if incoming != nil, incoming == previous, busy, error == nil { return }
         alert = value as? TaskFields; busy = false; sidebar.isEnabled = true; previewing = false; hld()
         if alert == nil, held == nil, wasPreview, error == nil { previewing = true; return }
@@ -224,7 +227,7 @@
     }
     // 选择打卡方式或原子提交已经确认的图片。
     @objc private func cmpl() {
-        if previewing { mdl(0); previewing = false; return }
+        if previewing { tstEnd("resolved"); return }
         guard let id, !busy, !loading else { return }
         if !proofs.isEmpty { busy = true; done.isEnabled = false; delay.isEnabled = false; lay(); reminder?.chk(id, attachments: proofs) }
         else { selecting = true; lay() }
@@ -235,6 +238,7 @@
     @objc private func sht() { hld("screenshot") }
     // 固定正在处理的轮次并等待事务后的回调。
     private func hld(_ mode: String) {
+        if previewing { tstEnd("snoozed"); return }
         guard let id, !busy else { return }; busy = true; done.isEnabled = false; delay.isEnabled = false; reminder?.hld(mode, occID: id)
     }
     // 无附件时返回提醒，有附件时通过原位对勾正式提交。
@@ -430,11 +434,19 @@
         if let token { do { try reminder?.captureStore?.delCap(token); notify_post(TS_CAPTURE_NOTE) } catch { NSLog("采集清理失败：%@", error as NSError) } }
         stt(issue ?? "提交"); selecting = choosing; lay(); windowMode?(mode)
     }
-    // 预览单独允许关闭，不覆盖真实提醒或边栏。
+    // 创建隔离的内存Occurrence，不覆盖真实提醒或边栏。
     @objc(preview) func prvw() {
-        guard !stopped, alert == nil, held == nil else { return }; loadViewIfNeeded(); previewing = true
-        titleText.text = "待办提醒"; planned.text = nil; notes.text = nil; notes.isHidden = true; selecting = false; proofs.removeAll()
-        done.isEnabled = true; stt("收起预览"); mdl(1)
+        guard !stopped, !previewing, alert == nil, held == nil else { return }; loadViewIfNeeded(); previewing = true
+        testOccurrence = ["occurrence_id": UUID().uuidString, "task_id": "test", "occurrence_at": Date().timeIntervalSince1970, "status": "presented"] as NSDictionary
+        titleText.text = "测试提醒"; planned.text = nil; notes.text = nil; notes.isHidden = true; selecting = false; proofs.removeAll()
+        done.isEnabled = true; delay.isEnabled = true; var config = done.configuration; config?.title = "完成"; done.configuration = config; mdl(1)
+    }
+    // 完成和延期均结束测试，状态只在内存改变且不安排重弹。
+    private func tstEnd(_ state: String) {
+        guard previewing, testOccurrence?["status"] as? String == "presented" else { return }
+        var value = testOccurrence as? TaskFields ?? [:]; value["status"] = state
+        value["handled_at"] = Date().timeIntervalSince1970; testOccurrence = value as NSDictionary
+        previewing = false; mdl(0)
     }
     // 停止后拒绝异步图片回调并释放计时与系统面板。
     @objc(stop) func stp() {

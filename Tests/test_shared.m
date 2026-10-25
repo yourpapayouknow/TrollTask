@@ -131,6 +131,37 @@ static void tstescape(void) {
     assert(!lb_svcup());
 }
 
+// 验证真实锁、下一时刻、启动阶段错误与异常死亡后的陈旧快照。
+static void tststat(void) {
+    assert(lb_svcfg(@{@"enabled":@YES}));
+    NSNumber *next = @(NSDate.date.timeIntervalSince1970+120);
+    lb_svstat(@"正在运行", next);
+    assert(![lb_rdstat()[@"running"] boolValue] && !lb_rdstat()[@"next_fire_at"]);
+    int handle = lb_lckhud(); assert(handle >= 0);
+    lb_svstat(@"正在运行", next);
+    assert([lb_rdstat()[@"running"] boolValue] && [lb_rdstat()[@"next_fire_at"] isEqual:next]);
+    NSString *path = [LB_PREF_PATH stringByAppendingString:@".status"];
+    NSMutableDictionary *wrong = [[NSDictionary dictionaryWithContentsOfFile:path] mutableCopy];
+    wrong[@"pid"] = @(getpid()+1); assert([wrong writeToFile:path atomically:YES]);
+    assert(![lb_rdstat()[@"running"] boolValue] && !lb_rdstat()[@"next_fire_at"]);
+    for (NSString *issue in @[@"数据库不可用",@"HUD启动失败",@"私有组件加载失败",@"窗口注册失败",@"调度读取失败"]) {
+        lb_svstat(issue, nil); assert([lb_rdstat()[@"state"] isEqual:issue] && ![lb_rdstat()[@"running"] boolValue]);
+    }
+    close(handle);
+    assert([lb_rdstat()[@"state"] isEqual:@"调度读取失败"]);
+    lb_svstat(@"正在运行", next); assert([lb_rdstat()[@"state"] isEqual:@"服务未运行"]);
+    pid_t child = fork(); assert(child >= 0);
+    if (!child) { int fd = lb_lckhud(); if (fd < 0) _exit(1); lb_svstat(@"正在运行", next); for (;;) pause(); }
+    for (int i=0;i<200 && ![lb_rdstat()[@"running"] boolValue];i++) usleep(10000);
+    assert([lb_rdstat()[@"running"] boolValue] && [lb_rdstat()[@"pid"] intValue] == child);
+    assert(kill(child,SIGKILL)==0); int status=0; assert(waitpid(child,&status,0)==child);
+    assert(![lb_rdstat()[@"running"] boolValue] && !lb_rdstat()[@"next_fire_at"]);
+    assert([lb_rdstat()[@"state"] isEqual:@"服务未运行"]);
+    assert(lb_svcfg(@{@"enabled":@NO})); lb_svstat(@"服务已关闭", nil);
+    assert([lb_rdstat()[@"state"] isEqual:@"服务已关闭"]);
+    puts("Service diagnostics: live PID/lock, next time, five failure states and SIGKILL stale-status rejection passed");
+}
+
 // 运行共享配置、进程通信和按钮触摸测试。
 int main(void) {
     @autoreleasepool {
@@ -144,6 +175,7 @@ int main(void) {
         tstipc();
         tstlock();
         tsttap();
+        tststat();
         tstescape();
         assert([NSFileManager.defaultManager removeItemAtPath:root error:nil]);
         puts("Shared configuration, Darwin IPC, single-instance lock and button tap tests passed");

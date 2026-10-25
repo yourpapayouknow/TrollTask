@@ -12,6 +12,12 @@
     private var observers: [NSObjectProtocol] = []
     private var displayedID: String?
     private var displayed: NSDictionary?
+    private var displayedEpoch = -1
+    private var publication: DispatchWorkItem?
+    // 只发布计划结果，前台不另建调度器或轮询数据库。
+    var onPlan: ((Date?, Bool, NSError?) -> Void)?
+    // 隔离测试可重排计时源并观察真实回调，生产默认不接管。
+    var onArm: ((DispatchSourceTimer) -> (() -> Void)?)?
 
     // 跨线程读取最近尚未触发的绝对时刻。
     @objc var nextFireAt: Date? { qsyn { fire } }
@@ -32,40 +38,52 @@
         let stamp = date.timeIntervalSince1970, seconds = floor(stamp)
         let deadline = DispatchWallTime(timespec: timespec(tv_sec: Int(seconds), tv_nsec: Int((stamp-seconds)*1_000_000_000)))
         let source = DispatchSource.makeTimerSource(queue: queue), expected = ticket
+        source.schedule(wallDeadline: deadline, repeating: .never, leeway: .milliseconds(100))
+        let observe = onArm?(source)
         source.setEventHandler { [weak self] in
+            observe?()
             guard let self, self.running, self.ticket == expected else { return }; self.rld()
         }
-        source.schedule(wallDeadline: deadline, repeating: .never, leeway: .milliseconds(100))
         timer = source; source.resume()
     }
-    // 展示前核对持久化轮次和运行代际，拦截已失效结果。
+    // 调度队列完成数据核验，主线程只接收尚未取消的呈现结果。
     private func pub(_ alert: TaskFields?, _ error: NSError? = nil) {
+        publication?.cancel()
+        guard running || alert == nil else { return }
         let expected = epoch
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.qsyn({ self.epoch == expected && (self.running || alert == nil) }) else { return }
-            guard let alert else {
-                if self.qsyn({ self.active == nil }) { self.displayedID = nil; self.displayed = nil; self.handler(nil, error) }; return
-            }
-            guard self.qsyn({ self.active?["occurrence_id"] as? String == alert["occurrence_id"] as? String }), let store = self.store else { return }
+        var fresh = alert, failure = error
+        if let alert, let store {
+            guard active?["occurrence_id"] as? String == alert["occurrence_id"] as? String else { return }
             do {
                 let snapshot = try store.snapshot() as? TaskFields ?? [:]
                 let task = (snapshot["tasks"] as? [TaskFields])?.first { $0["task_id"] as? String == alert["task_id"] as? String }
                 let occ = (snapshot["history"] as? [TaskFields])?.first { $0["occurrence_id"] as? String == alert["occurrence_id"] as? String }
-                guard let task, let occ, (task["deleted"] as? NSNumber)?.boolValue == false,
+                if let task, let occ, (task["deleted"] as? NSNumber)?.boolValue == false,
                     task["status"] as? String == "needsAction", (task["reminder_version"] as? NSNumber) == (alert["generation"] as? NSNumber),
-                    occ["status"] as? String == "presented" else { self.handler(nil, nil); self.rfrsh(); return }
-                // 先解除上一窗口，再展示已排队的下一轮。
-                let id = alert["occurrence_id"] as? String
-                if self.displayedID != nil && self.displayedID != id { self.handler(nil, nil) }
-                var fresh = alert; fresh["task"] = task; fresh["occurrence"] = occ
-                if error == nil && self.displayed?.isEqual(fresh as NSDictionary) == true { return }
-                self.displayedID = id; self.displayed = error == nil ? fresh as NSDictionary : nil
-                self.handler(fresh as NSDictionary, error)
-            } catch { self.handler(nil, error as NSError); self.rfrsh() }
+                    occ["status"] as? String == "presented" {
+                    fresh?["task"] = task; fresh?["occurrence"] = occ
+                } else { fresh = nil; req() }
+            } catch { fresh = nil; failure = error as NSError; req() }
         }
+        let value = fresh, issue = failure
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.displayedEpoch != expected {
+                if value != nil && self.displayedID != nil { self.handler(nil, nil) }
+                self.displayedID = nil; self.displayed = nil; self.displayedEpoch = expected
+            }
+            guard let value else { self.displayedID = nil; self.displayed = nil; self.handler(nil, issue); return }
+            let id = value["occurrence_id"] as? String
+            if self.displayedID != nil && self.displayedID != id { self.handler(nil, nil) }
+            if issue == nil && self.displayed?.isEqual(value as NSDictionary) == true { return }
+            self.displayedID = id; self.displayed = issue == nil ? value as NSDictionary : nil
+            self.handler(value as NSDictionary, issue)
+        }
+        publication = work; DispatchQueue.main.async(execute: work)
     }
     // 故障时清除旧提醒并采用独立有界退避恢复。
     private func err(_ error: NSError) {
+        onPlan?(nil, false, error)
         reminders.clr(); faults += 1; pub(nil, error)
         arm(Date(timeIntervalSinceNow: min(30, pow(2, Double(min(faults-1, 5))))))
     }
@@ -99,6 +117,7 @@
                 fire = Date(timeIntervalSince1970: stamp.doubleValue); arm(fire!)
             }
             faults = 0
+            onPlan?(fire, active != nil, nil)
         } catch { err(error as NSError) }
     }
     // 合并同一轮事件中的重复重读请求。
@@ -178,5 +197,5 @@
         }
     }
     // 释放实例时解除原生系统资源。
-    deinit { timer?.cancel(); tokens.forEach { notify_cancel($0) }; observers.forEach { NotificationCenter.default.removeObserver($0) } }
+    deinit { publication?.cancel(); timer?.cancel(); tokens.forEach { notify_cancel($0) }; observers.forEach { NotificationCenter.default.removeObserver($0) } }
 }

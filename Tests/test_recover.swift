@@ -1,15 +1,3 @@
-// 使用隔离时钟验证生产调度器，禁止改动系统时间。
-private final class TestClock {
-    private let lock = NSLock()
-    private var value: TimeInterval
-    // 设置测试绝对时间。
-    init(_ value: TimeInterval) { self.value = value }
-    // 跨调度线程读取同一绝对时间。
-    func rd() -> TimeInterval { lock.lock(); defer { lock.unlock() }; return value }
-    // 模拟前后跳时或挂起期间经过的时间。
-    func set(_ value: TimeInterval) { lock.lock(); self.value = value; lock.unlock() }
-}
-
 // 验证真实数据库身份、补弹和终态去重。
 @main struct RecoveryTests {
     private static var checks = 0
@@ -110,6 +98,58 @@ private final class TestClock {
         req((try rows(store, task)[0]["defer_count"] as? NSNumber)?.intValue == 1, "休眠恢复不重置延期额度")
         scheduler.act("complete", until: nil, occID: id);wt("延期任务完成") { shown == nil };scheduler.stp()
     }
+    // 让原生计时事件重复投递，不能用refresh替代timer覆盖。
+    private static func timers(_ store: TaskStore, _ clock: TestClock, _ base: TimeInterval) throws {
+        clock.set(base); let first = try mk(store, base-2), second = try mk(store, base-1), future = try mk(store, base+60)
+        let scheduler = TaskScheduler(store: store, clock: clock.rd, handler: evt)
+        var fired = 0, delivered = 0
+        scheduler.onArm = { timer in
+            if fired < 30 { timer.schedule(deadline: .now(), repeating: .never) }
+            return { fired += 1 }
+        }
+        scheduler.onPlan = { _, _, _ in
+            let count = fired; DispatchQueue.main.async { delivered = count }
+        }
+        req(scheduler.strt(nil), "原生timer风暴启动")
+        wt("三十次真实计时事件完成重算") { delivered >= 30 && shown?["task_id"] as? String == first }
+        req(delivered == 30, "直接统计三十次原生timer处理回调")
+        let rowsBefore = try rows(store, first), id = rowsBefore[0]["occurrence_id"] as! String, count = events
+        req(try rows(store, future).isEmpty, "早到timer必须重新核对真实时刻，不提前认领未来任务")
+        req(try rows(store, second).count == 1 && rowsBefore.count == 1, "重复timer只认领每个已到期轮次一次")
+        for _ in 0..<50 { post(store.changeNote) }
+        var settled = false; DispatchQueue.main.asyncAfter(deadline: .now()+0.15) { settled = true }
+        wt("timer后Darwin风暴处理完毕") { settled }
+        req(events == count && shown?["occurrence_id"] as? String == id, "timer与Darwin重放均不重复呈现")
+        req(try rows(store, first) as NSArray == rowsBefore as NSArray, "重复事件不改写原Occurrence")
+        scheduler.stp(); scheduler.onArm = nil
+        for task in [first,second,future] { try store.delTsk(task) }
+        print("Native timer: 30 actual deliveries, 50 Darwin posts; no early claim or duplicate occurrence")
+    }
+    // 主线程尚未消费呈现结果时，停止和完成必须取消旧结果。
+    private static func delivery(_ store: TaskStore, _ clock: TestClock, _ base: TimeInterval) throws {
+        clock.set(base); let task = try mk(store, base-1), before = events
+        let scheduler = TaskScheduler(store: store, clock: clock.rd, handler: evt)
+        req(scheduler.strt(nil), "排队呈现启动")
+        _ = scheduler.nextFireAt // 同步屏障保证调度已结束，主线程尚未消费呈现。
+        let id = try rows(store, task)[0]["occurrence_id"] as! String
+        scheduler.stp()
+        var stopped = false; DispatchQueue.main.async { stopped = true }
+        wt("停止后的主线程结果已消费") { stopped }
+        req(shown == nil && events == before, "停止必须取消尚未交付的旧提醒")
+        req(scheduler.strt(nil), "取消呈现后重新启动")
+        wt("恢复原先已认领的轮次") { shown?["occurrence_id"] as? String == id && events == before+1 }
+        scheduler.stp(); req(scheduler.strt(nil), "同一实例立即停止重启")
+        wt("重新启动必须重新交付相同轮次") { shown?["occurrence_id"] as? String == id && events == before+2 }
+        scheduler.stp(); req(scheduler.strt(nil), "完成前重新排队呈现")
+        _ = scheduler.nextFireAt
+        scheduler.act("complete", until: nil, occID: id)
+        _ = scheduler.nextFireAt // 等待完成事务取消旧呈现，仍不运行主线程队列。
+        var completed = false; DispatchQueue.main.async { completed = true }
+        wt("完成后的主线程结果已消费") { completed }
+        req(shown == nil && events == before+2, "完成必须取消尚未交付的提醒，不能闪回旧弹窗")
+        req(try rows(store, task).count == 1 && rows(store, task)[0]["status"] as? String == "resolved", "取消呈现仍只完成同一轮次一次")
+        scheduler.stp()
+    }
     // 仅使用临时数据库与受控时钟。
     static func main() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("trolltask-recover-" + UUID().uuidString)
@@ -117,7 +157,7 @@ private final class TestClock {
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try TaskStore(at: folder.appendingPathComponent("tasks.sqlite3").path)
         let base = floor(Date().timeIntervalSince1970) + 3600, clock = TestClock(base)
-        try jumps(store, clock, base);try pending(store, clock, base);try snoozed(store, clock)
+        try jumps(store, clock, base);try pending(store, clock, base);try snoozed(store, clock);try timers(store, clock, base);try delivery(store, clock, base)
         req(failures == 0, "生产回调无错误")
         print("Recovery: \(checks) checks passed; clock jumps, wake catch-up, persisted Pending/Snoozed and Resolved deduplication")
     }

@@ -97,6 +97,7 @@ static void rm_unit(void) {
     [service stop]; [service stop]; rm_req(!service.running && !lb_svcup() && cleanup==1,@"重复停止仅清理一次"); service=nil;
     TaskReminder *missing=[[TaskReminder alloc] initAt:@"relative.sqlite3" handler:^(__unused NSDictionary *a,__unused NSError *e){} cleanup:^{} finish:^(__unused BOOL r){}];
     rm_req(![missing start:&error] && !lb_svcup(),@"数据库失败清除已取得锁"); missing=nil;
+    rm_req([lb_rdstat()[@"state"] isEqual:@"数据库不可用"] && ![lb_rdstat()[@"running"] boolValue],@"真实数据库启动失败向App保留可理解状态");
     rm_req(lb_svcfg(@{@"enabled":@NO}),@"保存服务停用状态");
     TaskReminder *disabled=[[TaskReminder alloc] initAt:path handler:^(__unused NSDictionary *a,__unused NSError *e){} cleanup:^{} finish:^(__unused BOOL r){}];
     rm_req(![disabled start:&error] && error.code==ECANCELED && !lb_spawn(),@"服务禁用时拒绝创建后台进程"); disabled=nil;
@@ -141,6 +142,7 @@ static void rm_proc(NSString *path) {
     NSTimeInterval old=NSDate.date.timeIntervalSince1970+1;
     NSDictionary *future=[writer crtTsk:@{@"title":@"修改服务计划",@"due_at":@(old)} error:nil]; rm_req(future!=nil,@"服务运行时创建任务");
     rm_req([writer updTsk:future[@"task_id"] fields:@{@"due_at":@(old+60)} error:nil],@"临近提醒改时提交");
+    rm_wt(1,^BOOL { return [lb_rdstat()[@"running"] boolValue] && fabs([lb_rdstat()[@"next_fire_at"] doubleValue]-(old+60))<0.001; },@"独立生产调度器发布编辑后的真实下一提醒时间");
     while (NSDate.date.timeIntervalSince1970<old+0.2) CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.02,true);
     rm_req([writer lsOcc:future[@"task_id"] error:nil].count==0,@"独立服务跨过旧时刻没有旧触发");
     rm_req([writer updTsk:future[@"task_id"] fields:@{@"due_at":@(NSDate.date.timeIntervalSince1970-1)} error:nil],@"编辑为到期时刻");

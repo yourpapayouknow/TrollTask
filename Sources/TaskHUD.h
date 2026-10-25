@@ -5,6 +5,7 @@
 @property(nonatomic, strong) TaskReminder *reminder;
 @property(nonatomic, copy) void (^windowMode)(NSInteger mode);
 @property(nonatomic, readonly) NSInteger mode;
+@property(nonatomic, readonly) NSDictionary *testOccurrence;
 @property(nonatomic) BOOL globalCapture;
 #ifdef LB_UI_TEST
 @property(nonatomic, copy) BOOL (^captureLaunch)(void);

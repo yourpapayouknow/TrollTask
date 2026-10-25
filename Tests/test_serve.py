@@ -22,7 +22,8 @@ def tstsrv():
     files = {
         '/': b'<html>Installer</html>',
         '/install.mjs': (ROOT / 'Resources/Installer/install.mjs').read_bytes(),
-        '/' + name: (ROOT / 'build' / name).read_bytes(),
+        # 传输回归使用完整二进制夹具，不依赖先构建真机安装包。
+        '/' + name: bytes(range(256)) * 8192,
     }
     with TemporaryDirectory(prefix='trolltask-http-test-') as stage:
         for path, body in files.items():

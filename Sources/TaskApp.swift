@@ -7,7 +7,10 @@
     // 启动共享存储和已启用的独立HUD。
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         do { store = try TaskStore.shrd() } catch { NSLog("TaskStore初始化失败：%@", error as NSError) }
-        let home = TaskHome(store: store) { $0.pushViewController(TaskSettings(), animated: true) }
+        let failed = store == nil
+        let home = TaskHome(store: store) { navigation in
+            let settings = TaskSettings(); settings.storeFailed = failed; navigation.pushViewController(settings, animated: true)
+        }
         let navigation = UINavigationController(rootViewController: home); navigation.overrideUserInterfaceStyle = .dark
         let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = navigation; self.window = window; window.makeKeyAndVisible()
         let result = notify_register_dispatch(TS_CAPTURE_NOTE, &captureNote, .main) { [weak self] _ in self?.capStart() }
@@ -63,43 +66,87 @@
 
 // 通过原生Darwin通信控制既有独立HUD。
 @objc(LBSetCtl) final class TaskSettings: TaskScreen {
+    @objc var storeFailed = false
     private let monitor = UISwitch()
     private var preview: UIButton!, recovery: UIButton!
+    private var status: UIButton!, planned: UIButton!, timer: DispatchSourceTimer?, watcher: DispatchSourceProcess?
+    private var watched: pid_t = 0
     private var pending = false
     private var request = 0
     private var token: Int32 = -1
+    private var activation: NSObjectProtocol?
     // 创建服务控制与预览入口。
     override func viewDidLoad() {
         super.viewDidLoad(); title = "TrollTask"
         monitor.onTintColor = lb_acnt(); monitor.isOn = (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true
         monitor.accessibilityIdentifier = "settings.enabled"; monitor.addTarget(self, action: #selector(monChg), for: .valueChanged)
-        preview = lb_mkbtn("预览浮层", self, #selector(tst)); preview.accessibilityIdentifier = "settings.preview"
+        status = lb_mkbtn("正在检查", self, #selector(rfrsh)); status.accessibilityIdentifier = "settings.status"
+        planned = lb_mkbtn("下一提醒", self, #selector(rfrsh)); planned.accessibilityIdentifier = "settings.next"
+        for button in [status, planned] { button?.titleLabel?.numberOfLines = 0 }
+        var plan = planned.configuration
+        plan?.subtitleLineBreakMode = .byWordWrapping
+        plan?.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var result = attributes; result.font = lb_fnt(.subheadline, nil); return result
+        }; planned.configuration = plan
+        preview = lb_mkbtn("测试全屏提醒", self, #selector(tst)); preview.accessibilityIdentifier = "settings.preview"
         recovery = lb_mkbtn("整机重启后\n需打开一次App恢复提醒服务", self, #selector(rstr))
         recovery.accessibilityIdentifier = "settings.recovery"
         recovery.titleLabel?.numberOfLines = 0; recovery.titleLabel?.textAlignment = .center
-        let fields = tu_stk([tu_row("后台服务", monitor), preview, recovery]); view.addSubview(fields); tu_wdth(fields, view)
-        fields.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4).isActive = true
+        let fields = tu_stk([tu_row("后台服务", monitor), status, planned, preview, recovery])
+        _ = tu_form(self, fields, "settings.content")
         let result = notify_register_dispatch(LB_READY_NOTE, &token, .main) { [weak self] _ in
-            guard let self = self, self.pending else { return }; self.pending = false; self.stat("预览浮层"); self.sync(); notify_post(LB_TEST_NOTE)
+            guard let self = self, self.pending else { return }; self.pending = false; self.stat("测试全屏提醒"); self.sync(); notify_post(LB_TEST_NOTE)
         }
         if result != NOTIFY_STATUS_OK { token = -1 }; sync()
+        activation = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.rfrsh() }
     }
     // 更新唯一功能按钮文字。
     private func stat(_ title: String) { var config = preview.configuration; config?.title = title; preview.configuration = config }
+    // 页面可见时才检查共享快照，离开后停止前台诊断。
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated); rfrsh()
+        timer?.cancel(); let source = DispatchSource.makeTimerSource(queue: .main)
+        source.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(100))
+        source.setEventHandler { [weak self] in self?.rfrsh() }; timer = source; source.resume()
+    }
+    // 离开页面释放检查计时与进程退出观察。
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated); timer?.cancel(); timer = nil; watcher?.cancel(); watcher = nil; watched = 0
+    }
+    // 显示真实进程状态和服务计算的下一时刻，拒绝遗留正常记录。
+    @objc private func rfrsh() {
+        let value = storeFailed ? ["state":"数据库不可用"] : lb_rdstat() ?? [:]
+        let title = value["state"] as? String ?? "状态不可用"
+        var config = status.configuration; config?.title = title; status.configuration = config
+        var plan = planned.configuration; plan?.subtitle = nil
+        if let stamp = value["next_fire_at"] as? NSNumber {
+            let format = DateFormatter(); format.locale = Locale(identifier: "zh_CN"); format.dateFormat = "MM-dd HH:mm"
+            plan?.title = "下一提醒"; plan?.subtitle = format.string(from: Date(timeIntervalSince1970: stamp.doubleValue))
+        } else { plan?.title = (value["running"] as? NSNumber)?.boolValue == true ? "无后续提醒" : "下一提醒未就绪" }
+        planned.configuration = plan
+        let pid = (value["running"] as? NSNumber)?.boolValue == true ? (value["pid"] as? NSNumber)?.int32Value ?? 0 : 0
+        if pid != watched {
+            watcher?.cancel(); watcher = nil; watched = pid
+            if pid > 0 {
+                let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+                source.setEventHandler { [weak self] in self?.rfrsh() }; watcher = source; source.resume()
+            }
+        }
+    }
     // 同步服务和预览请求状态。
-    private func sync() { preview.isEnabled = monitor.isOn && !pending; recovery.isEnabled = monitor.isOn && !pending }
+    private func sync() { preview.isEnabled = monitor.isOn && !pending; recovery.isEnabled = monitor.isOn && !pending; rfrsh() }
     // 保持重启限制可见，并提供现有服务的手动恢复入口。
     @objc private func rstr() {
         guard monitor.isOn, !pending else { return }
-        stat(lb_spawn() ? "预览浮层" : "恢复失败"); sync()
+        stat(lb_spawn() ? "测试全屏提醒" : "恢复失败"); sync()
     }
     // 保存配置并启动或停止HUD。
     @objc private func monChg() {
         pending = false; request += 1
         if !lb_svcfg(["enabled": monitor.isOn]) { monitor.isOn.toggle(); stat("保存失败") }
         else if monitor.isOn {
-            if !lb_spawn() { monitor.isOn = false; _ = lb_svcfg(["enabled": false]); stat("启动失败") } else { stat("预览浮层") }
-        } else { stat("预览浮层") }
+            if !lb_spawn() { monitor.isOn = false; _ = lb_svcfg(["enabled": false]); stat("启动失败") } else { stat("测试全屏提醒") }
+        } else { lb_svstat("服务已关闭", nil); stat("测试全屏提醒") }
         sync()
     }
     // 请求预览并等待HUD就绪。
@@ -110,9 +157,9 @@
         notify_post(LB_TEST_NOTE)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self = self, self.pending, current == self.request else { return }
-            self.pending = false; self.stat("预览未响应"); self.sync()
+            self.pending = false; self.stat("测试未响应"); self.sync()
         }
     }
     // 注销系统通知。
-    deinit { if token >= 0 { notify_cancel(token) } }
+    deinit { timer?.cancel(); watcher?.cancel(); if let activation { NotificationCenter.default.removeObserver(activation) }; if token >= 0 { notify_cancel(token) } }
 }

@@ -162,7 +162,7 @@ static void sc_queue(ScStore *reader, TaskStore *writer) {
         [NSNotificationCenter.defaultCenter postNotificationName:NSSystemClockDidChangeNotification object:nil];
         [NSNotificationCenter.defaultCenter postNotificationName:NSSystemTimeZoneDidChangeNotification object:nil];
     }
-    sc_span(0.3);sc_req(sc_events.count==events,@"重复timer重读数据库和时钟事件不重复呈现HUD");
+    sc_span(0.3);sc_req(sc_events.count==events,@"重复refresh和Darwin时钟事件不重复呈现HUD");
     for (NSDictionary *task in tasks) sc_req([writer lsOcc:task[@"task_id"] error:nil].count==1,@"通知风暴不新增同次轮次");
     for (NSUInteger i=0;i<20;i++) [sc_sched hold:@"snooze" occID:first];
     sc_wait(1,^BOOL{return [sc_alert[@"task_id"] isEqual:tasks[1][@"task_id"]];},@"五分钟延后后立即展示下一项");

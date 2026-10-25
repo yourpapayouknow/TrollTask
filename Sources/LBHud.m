@@ -52,6 +52,9 @@ static void lb_hudclr(void);
 // 在释放服务资源后结束独立进程。
 static void lb_hudend(int code) { [lb_reminder stop]; lb_reminder = nil; exit(code); }
 
+// 在退出前把初始化失败阶段传给主App。
+static void lb_hudfail(NSString *message) { lb_svstat(message, nil); lb_hudend(EXIT_FAILURE); }
+
 // 动态加载无障碍底层事件解析类。
 static void lb_ldax(void) {
     static dispatch_once_t onceToken;
@@ -153,7 +156,7 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
 // 保持原服务启动及预览Darwin通知顺序。
 - (void)startMon {
     __weak typeof(self) weakSelf = self; NSError *error = nil;
-    if (notify_register_dispatch(LB_TEST_NOTE, &_testToken, dispatch_get_main_queue(), ^(__unused int token) { [weakSelf.content preview]; notify_post(LB_READY_NOTE); }) != NOTIFY_STATUS_OK) lb_hudend(EXIT_FAILURE);
+    if (notify_register_dispatch(LB_TEST_NOTE, &_testToken, dispatch_get_main_queue(), ^(__unused int token) { [weakSelf.content preview]; notify_post(LB_READY_NOTE); }) != NOTIFY_STATUS_OK) lb_hudfail(@"服务通信失败");
     if (![lb_reminder start:&error]) { NSLog(@"TaskReminder启动失败：%@",error); lb_hudend(EXIT_FAILURE); }
 }
 
@@ -195,11 +198,12 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     [[window _boundContext] setSecure:YES];
 
     Class hostClass = objc_getClass("SBSAccessibilityWindowHostingController");
-    if (!hostClass) { lb_hudend(EXIT_FAILURE); return NO; }
+    if (!hostClass) { lb_hudfail(@"窗口注册失败"); return NO; }
     _hostingController = [[hostClass alloc] init];
     SEL registerSelector = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
-    if (![_hostingController respondsToSelector:registerSelector]) { lb_hudend(EXIT_FAILURE); return NO; }
+    if (![_hostingController respondsToSelector:registerSelector]) { lb_hudfail(@"窗口注册失败"); return NO; }
     unsigned int contextId = [window _contextId];
+    if (!contextId) { lb_hudfail(@"窗口注册失败"); return NO; }
     double level = window.windowLevel;
     NSMethodSignature *signature = [NSMethodSignature signatureWithObjCTypes:"v@:Id"];
     NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
@@ -207,7 +211,7 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     [invocation setSelector:registerSelector];
     [invocation setArgument:&contextId atIndex:2];
     [invocation setArgument:&level atIndex:3];
-    [invocation invoke];
+    @try { [invocation invoke]; } @catch (__unused NSException *exception) { lb_hudfail(@"窗口注册失败"); return NO; }
 
     window.alpha = 1.0;
     window.hidden = YES;
@@ -270,7 +274,7 @@ static void lb_hudrun(UIApplication *app) {
     lb_ldax();
     void (*pBKSHID)(void (*)(void *, void *, void *, void *)) =
         (void (*)(void (*)(void *, void *, void *, void *)))dlsym(RTLD_DEFAULT, "BKSHIDEventRegisterEventCallback");
-    if (!pBKSHID || !s_lbaxcls) lb_hudend(EXIT_FAILURE);
+    if (!pBKSHID || !s_lbaxcls) lb_hudfail(@"触摸组件加载失败");
     pBKSHID(lb_onhidevt);
 #ifdef LB_HUD_PROBE
     lb_prblog(@"input.native.ready");
@@ -295,6 +299,6 @@ int lb_hudmain(int argc, char **argv) {
 
 
 
-    if (!lb_ldfw()) lb_hudend(EXIT_FAILURE);
+    if (!lb_ldfw()) lb_hudfail(@"私有组件加载失败");
     return UIApplicationMain(argc, argv, NSStringFromClass(LBHudApp.class), NSStringFromClass(LBHudDel.class));
 }

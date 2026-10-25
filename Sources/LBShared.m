@@ -72,6 +72,39 @@ BOOL lb_svcup(void) {
     close(handle); return held;
 }
 
+// 写入同一服务的诊断快照，不访问正常任务数据库。
+void lb_svstat(NSString *state, NSNumber *next) {
+    if (!LB_PREF_PATH.length) return;
+    NSString *path = [LB_PREF_PATH stringByAppendingString:@".status"];
+    NSMutableDictionary *value = [@{@"state":state, @"pid":@(getpid())} mutableCopy];
+    if (next) value[@"next_fire_at"] = next;
+    NSMutableDictionary *old = [[NSDictionary dictionaryWithContentsOfFile:path] mutableCopy];
+    [old removeObjectForKey:@"at"];
+    if ([old isEqual:value]) return;
+    value[@"at"] = @(NSDate.date.timeIntervalSince1970);
+    if (![value writeToFile:path atomically:YES]) NSLog(@"服务诊断状态保存失败");
+}
+
+// 真实锁优先于遗留正常记录，旧进程快照不能冒充新服务。
+NSDictionary *lb_rdstat(void) {
+    NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:[LB_PREF_PATH stringByAppendingString:@".status"]] ?: @{};
+    NSString *state = [saved[@"state"] isKindOfClass:NSString.class] ? saved[@"state"] : @"";
+    int handle = open(LB_LOCK_PATH, O_RDONLY | O_CLOEXEC); char text[64] = {0};
+    if (handle >= 0) { pread(handle, text, sizeof(text)-1, 0); close(handle); }
+    pid_t pid = (pid_t)atoi(text);
+    BOOL alive = pid > 0 && lb_svcup();
+    BOOL matches = alive && [saved[@"pid"] intValue] == pid;
+    BOOL healthy = [@[@"正在运行", @"正在提醒"] containsObject:state];
+    if (matches && healthy) {
+        NSMutableDictionary *result = saved.mutableCopy; result[@"running"] = @YES; return result;
+    }
+    if (state.length && !healthy && ![@[@"启动中", @"服务已关闭"] containsObject:state] && (!alive || matches))
+        return @{@"state":state, @"running":@NO};
+    BOOL enabled = [lb_ldcfg()[@"enabled"] boolValue];
+    BOOL starting = enabled && (alive || ([state isEqual:@"启动中"] && fabs(NSDate.date.timeIntervalSince1970-[saved[@"at"] doubleValue]) < 3));
+    return @{@"state": starting ? @"启动中" : enabled ? @"服务未运行" : @"服务已关闭", @"running":@NO};
+}
+
 // 记录按钮按下状态，并在有效松开后清除状态。
 BOOL lb_btntap(BOOL *active, BOOL inside, BOOL down) {
     BOOL fire = !down && *active && inside;
@@ -101,15 +134,19 @@ static const char *lb_exepath(void) {
     return path;
 }
 
+// 将启动失败传回前台诊断区域。
+static BOOL lb_spfail(void) { lb_svstat(@"HUD启动失败", nil); return NO; }
+
 // 启动独立系统HUD进程。
 BOOL lb_spawn(void) {
     if (![lb_ldcfg()[@"enabled"] boolValue]) return NO;
     if (lb_svcup()) return YES;
+    lb_svstat(@"启动中", nil);
     const char *path = lb_exepath();
-    if (!path[0]) return NO;
+    if (!path[0]) return lb_spfail();
 
     posix_spawnattr_t attr;
-    if (posix_spawnattr_init(&attr) != 0) return NO;
+    if (posix_spawnattr_init(&attr) != 0) return lb_spfail();
     int result = 0;
 #ifndef LB_HOST_TEST
     result = posix_spawnattr_set_persona_np(&attr, 99, LB_PERSONA_FLAGS);
@@ -122,7 +159,7 @@ BOOL lb_spawn(void) {
     // 仅保留标准流，避免新连接复用已关闭的日志描述符。
     posix_spawn_file_actions_t actions;
     int actionResult = posix_spawn_file_actions_init(&actions);
-    if (actionResult) { posix_spawnattr_destroy(&attr); return NO; }
+    if (actionResult) { posix_spawnattr_destroy(&attr); return lb_spfail(); }
     for (int descriptor = 0; descriptor < 3 && !result; descriptor++) {
         if (fcntl(descriptor, F_GETFD) >= 0) result = posix_spawn_file_actions_addinherit_np(&actions, descriptor);
         else result = posix_spawn_file_actions_addopen(&actions, descriptor, "/dev/null", descriptor == 0 ? O_RDONLY : O_WRONLY, 0);
@@ -137,7 +174,7 @@ BOOL lb_spawn(void) {
         int status = 0;
         waitpid(pid, &status, WNOHANG);
     }
-    return result == 0;
+    return result == 0 ? YES : lb_spfail();
 }
 #endif
 
