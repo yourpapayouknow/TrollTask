@@ -326,6 +326,13 @@ static void tstlst(NSString *path) {
     assert((![store cmplNxt:repeatID cycle:due generation:@1.5 error:&error] && [error.userInfo[@"kind"] isEqual:@"invalid_fields"]));
     assert(([store cmplNxt:repeatID error:nil] && [store lsOcc:repeatID error:nil].count == 4));
     assert(([store cmplTsk:repeatID error:nil] && [store rstrTsk:repeatID error:nil]));
+    // 已软删除的子任务不再阻止父任务使用重复规则。
+    NSDictionary *former = [store crtTsk:@{@"title":@"原父任务",@"due_at":due} error:nil];
+    NSDictionary *removed = [store crtTsk:@{@"title":@"已删子任务",@"parent_id":former[@"task_id"]} error:nil];
+    assert((![store updTsk:former[@"task_id"] fields:@{@"recurrence_type":@"daily"} error:nil]));
+    assert(([store delTsk:removed[@"task_id"] error:nil]));
+    assert(([store updTsk:former[@"task_id"] fields:@{@"recurrence_type":@"daily"} error:nil]));
+    assert(([[store rdTsk:removed[@"task_id"] error:nil][@"deleted"] boolValue]));
     assert(([tstval(path,"PRAGMA integrity_check") isEqual:@"ok"]));
 }
 

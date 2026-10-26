@@ -117,6 +117,13 @@ static void rr_act(void) {
         if ([item[@"cycle_at"] isEqual:rr_tm(@"2026-10-11 09:00:00",@"UTC")]) future = [item[@"remind_at"] isEqual:item[@"cycle_at"]];
     }
     rr_chk(pinned,@"稍后仅覆盖单次提醒时间"); rr_chk(future,@"稍后不污染下一轮"); rr_chk([task isEqual:original],@"计算不修改系列对象");
+    // 延期到期认领后，重读保持实际提醒时刻，原计划身份独立保留。
+    NSMutableDictionary *presented = [rr_hst(task,task[@"due_at"],@"snooze",until) mutableCopy];
+    presented[@"status"] = @"presented"; presented[@"action"] = NSNull.null;
+    NSArray *again = [TaskRule alerts:task history:@[presented] at:until.doubleValue error:nil];
+    BOOL stable = NO;
+    for (NSDictionary *item in again) if ([item[@"cycle_at"] isEqual:task[@"due_at"]]) stable = [item[@"remind_at"] isEqual:until] && [item[@"scheduled_at"] isEqual:task[@"due_at"]];
+    rr_chk(stable,@"延期重弹后的重复事件保持实际提醒时刻");
     next = [TaskRule alerts:task history:@[rr_hst(task,task[@"due_at"],@"snooze",until)] at:[rr_tm(@"2026-10-13 10:00:00",@"UTC") doubleValue] error:nil];
     pinned = NO; for (NSDictionary *item in next) if ([item[@"cycle_at"] isEqual:task[@"due_at"]]) pinned = YES;
     rr_chk(pinned,@"跨过后续日期也不丢失延后轮次");
@@ -148,6 +155,20 @@ static void rr_bad(void) {
         NSDictionary *task = rr_tsk(@"2026-10-01 08:15:30",@"UTC",@[line]); NSError *error = nil;
         rr_chk(![TaskRule vld:task error:&error] && [error.userInfo[@"kind"] isEqual:@"invalid_fields"],@"无效规则明确拒绝");
     }
+    // 结束边界早于计划起点会产生永远不会提醒的系列。
+    NSDictionary *empty = rr_tsk(@"2026-11-01 09:00:00",@"UTC",@[@"RRULE:FREQ=DAILY;UNTIL=20261025T235959Z"]);
+    NSError *range = nil;
+    rr_chk(![TaskRule vld:empty error:&range] && [range.userInfo[@"kind"] isEqual:@"invalid_fields"],@"拒绝结束早于起点的重复规则");
+    rr_chk([TaskRule vld:rr_tsk(@"2026-11-01 09:00:00",@"Asia/Shanghai",@[@"RRULE:FREQ=DAILY;UNTIL=20261101T010000Z"]) error:nil],@"跨时区相同绝对时刻允许最后一轮");
+    rr_chk([TaskRule vld:rr_tsk(@"2026-11-01 09:00:00",@"UTC",@[@"RRULE:FREQ=DAILY",@"EXRULE:FREQ=DAILY;UNTIL=20261025T235959Z"]) error:nil],@"过期例外不等于重复系列结束");
+    NSMutableDictionary *day = rr_tsk(@"2026-11-01 00:00:00",@"Asia/Shanghai",@[@"RRULE:FREQ=DAILY;UNTIL=20261031T155959Z"]); day[@"schedule_kind"] = @"date";
+    rr_chk(![TaskRule vld:day error:nil],@"仅日期按任务时区核对结束边界");
+    day[@"recurrence"] = @[@"RRULE:FREQ=DAILY;UNTIL=20261031T160000Z"];
+    rr_chk([TaskRule vld:day error:nil],@"仅日期结束与当地日界相同允许首轮");
+    NSMutableDictionary *legacy = [empty mutableCopy]; legacy[@"deleted"] = @1;
+    rr_chk([TaskRule vld:legacy error:nil],@"旧的无效边界记录仍可删除");
+    legacy[@"deleted"] = @0; legacy[@"status"] = @"completed";
+    rr_chk([TaskRule vld:legacy error:nil],@"旧的无效边界记录仍可完成");
     NSMutableDictionary *disabled = rr_tsk(@"2026-10-01 08:15:30",@"UTC",@[@"RRULE:FREQ=DAILY"]);
     disabled[@"status"] = @"completed"; rr_chk([TaskRule alerts:disabled history:@[] at:0 error:nil].count==0,@"完成整个系列停止提醒");
     disabled[@"status"] = @"needsAction"; disabled[@"deleted"] = @1; rr_chk([TaskRule alerts:disabled history:@[] at:0 error:nil].count==0,@"已删除系列停止提醒");

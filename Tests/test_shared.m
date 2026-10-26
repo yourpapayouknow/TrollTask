@@ -152,9 +152,15 @@ static void tststat(void) {
     lb_svstat(@"正在运行", next); assert([lb_rdstat()[@"state"] isEqual:@"服务未运行"]);
     pid_t child = fork(); assert(child >= 0);
     if (!child) { int fd = lb_lckhud(); if (fd < 0) _exit(1); lb_svstat(@"正在运行", next); for (;;) pause(); }
-    for (int i=0;i<200 && ![lb_rdstat()[@"running"] boolValue];i++) usleep(10000);
-    assert([lb_rdstat()[@"running"] boolValue] && [lb_rdstat()[@"pid"] intValue] == child);
+    // 等待指定子进程完成发布，旧父进程快照不能提前结束等待。
+    BOOL ready = NO;
+    for (int i=0;i<200;i++) {
+        NSDictionary *current = lb_rdstat();
+        ready = [current[@"running"] boolValue] && [current[@"pid"] intValue] == child;
+        if (ready) break; usleep(10000);
+    }
     assert(kill(child,SIGKILL)==0); int status=0; assert(waitpid(child,&status,0)==child);
+    assert(ready);
     assert(![lb_rdstat()[@"running"] boolValue] && !lb_rdstat()[@"next_fire_at"]);
     assert([lb_rdstat()[@"state"] isEqual:@"服务未运行"]);
     assert(lb_svcfg(@{@"enabled":@NO})); lb_svstat(@"服务已关闭", nil);

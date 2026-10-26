@@ -6,6 +6,7 @@
 #endif
 
 #ifdef LB_UI_TEST
+#import <AVFAudio/AVFAudio.h>
 #import "../Vendor/TrollSpeed/head.h"
 // 在原生模拟器验收同一UIKit触摸路由。
 @interface UIApplication (LBTouchSPI)

@@ -11,6 +11,7 @@
 #endif
     private let card = tu_gls(), scroll = UIScrollView(), titleText = tu_lbl(nil), notes = tu_lbl(nil), planned = tu_lbl(nil)
     private let barMaterial = tu_gls()
+    private let traits = tu_stk([]), signal = TaskSignal()
     private let attachmentSlot = UIScrollView(), footer = UIView(), sidebar = UIButton(type: .system)
     private var fullLayout: [NSLayoutConstraint] = []
     private var body: UIStackView!, cardWidth: NSLayoutConstraint!, cardHeight: NSLayoutConstraint!, footerHeight: NSLayoutConstraint!
@@ -32,8 +33,8 @@
         card.accessibilityIdentifier = "hud.card"
         card.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(card)
         titleText.font = lb_fnt(.title2, nil); titleText.numberOfLines = 0; titleText.adjustsFontSizeToFitWidth = false; titleText.accessibilityIdentifier = "hud.title"
-        notes.numberOfLines = 0; notes.adjustsFontSizeToFitWidth = false; notes.textColor = TaskTheme.muted; notes.accessibilityIdentifier = "hud.notes"
-        planned.font = lb_fnt(.subheadline, nil); planned.numberOfLines = 0; planned.adjustsFontSizeToFitWidth = false; planned.accessibilityIdentifier = "hud.planned"
+        notes.numberOfLines = 0; notes.adjustsFontSizeToFitWidth = false; notes.textColor = TaskTheme.ink; notes.accessibilityIdentifier = "hud.notes"
+        planned.textColor = TaskTheme.muted; planned.font = lb_fnt(.subheadline, nil); planned.numberOfLines = 0; planned.adjustsFontSizeToFitWidth = false; planned.accessibilityIdentifier = "hud.planned"
         done = tu_btn("提交", nil, self, #selector(cmpl)); done.accessibilityIdentifier = "hud.complete"
         delay = tu_btn("延后5分钟", nil, self, #selector(snz)); delay.accessibilityIdentifier = "hud.snooze"
         let shot = tu_ibtn("screenshot", "截图", "hud.screenshot", self, #selector(sht))
@@ -45,13 +46,15 @@
             tu_act("选取文件", "folder", "hud.source.file") { [weak self] in self?.fl() },
         ]); upload.showsMenuAsPrimaryAction = true
         let back = tu_ibtn("back", "返回", "hud.back", self, #selector(bck))
-        choiceButtons = [shot, upload, back]
+        tu_fill(done, primary: true); tu_fill(delay)
+        choiceButtons = [shot, upload, back]; choiceButtons.forEach { tu_fill($0) }
         choices = tu_stk(choiceButtons); choices.axis = .horizontal; choices.distribution = .fillEqually
         choices.accessibilityIdentifier = "hud.choices"; choices.isHidden = true
         // 固定一排六个图标位，极窄屏只横向滚动附件行。
         var slots: [UIView] = []
         for index in 0..<Int(TS_ATT_MAX) {
             let button = tu_ibtn("pic", "移除附件\(index + 1)", "hud.attachment.\(index)", self, #selector(rmv(_:)))
+            tu_fill(button)
             button.tag = index; button.isHidden = true; button.translatesAutoresizingMaskIntoConstraints = false
             let slot = UIView(); slot.addSubview(button); slots.append(slot); attachmentButtons.append(button)
             let close = UIImageView(image: lb_icon("close")); close.isUserInteractionEnabled = false; close.isAccessibilityElement = false
@@ -69,7 +72,8 @@
             grid.topAnchor.constraint(equalTo: attachmentSlot.contentLayoutGuide.topAnchor), grid.bottomAnchor.constraint(equalTo: attachmentSlot.contentLayoutGuide.bottomAnchor),
             grid.leadingAnchor.constraint(equalTo: attachmentSlot.contentLayoutGuide.leadingAnchor), grid.trailingAnchor.constraint(equalTo: attachmentSlot.contentLayoutGuide.trailingAnchor),
             attachmentSlot.contentLayoutGuide.heightAnchor.constraint(equalTo: attachmentSlot.frameLayoutGuide.heightAnchor)])
-        let content = tu_stk([titleText, planned, notes, attachmentSlot]); body = content; content.translatesAutoresizingMaskIntoConstraints = false
+        traits.accessibilityIdentifier = "hud.traits"; traits.isHidden = true
+        let content = tu_stk([titleText, planned, traits, notes, attachmentSlot]); body = content; content.translatesAutoresizingMaskIntoConstraints = false
         scroll.translatesAutoresizingMaskIntoConstraints = false; scroll.alwaysBounceVertical = true; scroll.accessibilityIdentifier = "hud.details"
         card.contentView.addSubview(scroll); scroll.addSubview(content)
         footer.translatesAutoresizingMaskIntoConstraints = false; card.contentView.addSubview(footer)
@@ -110,14 +114,28 @@
         observers = [UIApplication.significantTimeChangeNotification, .NSSystemClockDidChange].map { name in
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.tck() }
         }
+        // 首次操作立即静音，不拦截按钮、菜单或原生滚动。
+        for button in [done!, delay!, sidebar] + choiceButtons + attachmentButtons { button.addTarget(self, action: #selector(quiet), for: .touchDown) }
+        let touch = UITapGestureRecognizer(target: self, action: #selector(quiet)); touch.cancelsTouchesInView = false; view.addGestureRecognizer(touch)
+        scroll.panGestureRecognizer.addTarget(self, action: #selector(quiet))
     }
+
+    // 确认注意到只停止声振，不提交或解除当前提醒。
+    @objc private func quiet() { signal.quiet() }
+#if LB_UI_TEST
+    // 为模拟器验收暴露同一实例的只读状态和硬件输入。
+    @objc(signalState) func sigState() -> NSDictionary { signal.probe() as NSDictionary }
+    @objc(signalSample:) func sigSample(_ value: NSDictionary) { signal.probeSample(value as? TaskFields ?? [:]) }
+    @objc(signalAudio:) func sigAudio(_ value: Bool) { signal.probeAudio(value) }
+#endif
 
     // 按正文与动态字体确定稳定高度，状态切换共用底部操作区。
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         guard mode == 1 else { return }
         let safe = view.bounds.inset(by: view.safeAreaInsets)
-        let width = max(1, min(560, safe.width * 0.84))
+        let attachmentWidth = CGFloat(TS_ATT_MAX) * 44 + CGFloat(TS_ATT_MAX - 1) * 4 + 24
+        let width = max(1, min(560, max(safe.width * 0.9, min(attachmentWidth, safe.width - 8))))
         let textWidth = max(1, width - 24)
         let scaled = lb_fnt(.headline, traitCollection)!, font = scaled.withSize(min(32, scaled.pointSize))
         if controlSize != font.pointSize {
@@ -198,23 +216,29 @@
         alert = value as? TaskFields; busy = false; sidebar.isEnabled = true; previewing = false; hld()
         if alert == nil, held == nil, wasPreview, error == nil { previewing = true; return }
         if previous != id {
+            signal.stop()
             if captureToken != nil { capRestore(nil) }
             cncl()
             proofs.removeAll(); attachmentSlot.setContentOffset(.zero, animated: false); pickVersion += 1; loading = false; selecting = false; pickingID = nil; presentedViewController?.dismiss(animated: false)
         }
         guard let alert else {
+            signal.stop()
             if held != nil { mdl(2); tmr(); tck() } else { timer?.cancel(); timer = nil; mdl(0) }
             return
         }
         timer?.cancel(); timer = nil
         let task = alert["task"] as? TaskFields ?? [:], occurrence = alert["occurrence"] as? TaskFields ?? [:]
+        traits.arrangedSubviews.forEach { traits.removeArrangedSubview($0); $0.removeFromSuperview() }
+        for text in TaskTraits.labels(task) { let label = tu_lbl(text); label.font = lb_fnt(.subheadline, nil); label.textColor = TaskTheme.muted; label.numberOfLines = 0; traits.addArrangedSubview(label) }
+        traits.isHidden = traits.arrangedSubviews.isEmpty
         titleText.text = task["title"] as? String; notes.text = task["notes"] as? String; notes.isHidden = notes.text?.isEmpty != false
-        let formatter = DateFormatter(); formatter.dateStyle = .medium; formatter.timeStyle = task["schedule_kind"] as? String == "date" ? .none : .short; formatter.timeZone = .current
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "zh_CN"); formatter.dateFormat = task["schedule_kind"] as? String == "date" ? "yyyy-MM-dd" : "yyyy-MM-dd HH:mm"; formatter.timeZone = .current
         let stamp = (alert["cycle_at"] as? NSNumber)?.doubleValue ?? (alert["scheduled_at"] as? NSNumber)?.doubleValue ?? 0
         planned.text = "原计划：" + formatter.string(from: Date(timeIntervalSince1970: stamp))
         delay.isEnabled = (occurrence["defer_count"] as? NSNumber)?.intValue != 1
         done.isEnabled = true
         stt(error == nil ? "提交" : "重试打卡"); mdl(1)
+        signal.present(alert, store: reminder?.captureStore)
     }
     // 更新唯一主操作的功能反馈。
     private func stt(_ text: String) {
@@ -227,6 +251,7 @@
     }
     // 选择打卡方式或原子提交已经确认的图片。
     @objc private func cmpl() {
+        quiet()
         if previewing { tstEnd("resolved"); return }
         guard let id, !busy, !loading else { return }
         if !proofs.isEmpty { busy = true; done.isEnabled = false; delay.isEnabled = false; lay(); reminder?.chk(id, attachments: proofs) }
@@ -238,6 +263,7 @@
     @objc private func sht() { hld("screenshot") }
     // 固定正在处理的轮次并等待事务后的回调。
     private func hld(_ mode: String) {
+        quiet()
         if previewing { tstEnd("snoozed"); return }
         guard let id, !busy else { return }; busy = true; done.isEnabled = false; delay.isEnabled = false; reminder?.hld(mode, occID: id)
     }
@@ -438,19 +464,19 @@
     @objc(preview) func prvw() {
         guard !stopped, !previewing, alert == nil, held == nil else { return }; loadViewIfNeeded(); previewing = true
         testOccurrence = ["occurrence_id": UUID().uuidString, "task_id": "test", "occurrence_at": Date().timeIntervalSince1970, "status": "presented"] as NSDictionary
-        titleText.text = "测试提醒"; planned.text = nil; notes.text = nil; notes.isHidden = true; selecting = false; proofs.removeAll()
-        done.isEnabled = true; delay.isEnabled = true; var config = done.configuration; config?.title = "完成"; done.configuration = config; mdl(1)
+        titleText.text = "测试提醒"; planned.text = nil; notes.text = nil; notes.isHidden = true; traits.isHidden = true; selecting = false; proofs.removeAll()
+        done.isEnabled = true; delay.isEnabled = true; var config = done.configuration; config?.title = "完成"; done.configuration = config; mdl(1); signal.preview()
     }
     // 完成和延期均结束测试，状态只在内存改变且不安排重弹。
     private func tstEnd(_ state: String) {
         guard previewing, testOccurrence?["status"] as? String == "presented" else { return }
         var value = testOccurrence as? TaskFields ?? [:]; value["status"] = state
         value["handled_at"] = Date().timeIntervalSince1970; testOccurrence = value as NSDictionary
-        previewing = false; mdl(0)
+        previewing = false; signal.stop(); mdl(0)
     }
     // 停止后拒绝异步图片回调并释放计时与系统面板。
     @objc(stop) func stp() {
-        guard !stopped else { return }; stopped = true; timer?.cancel(); timer = nil
+        guard !stopped else { return }; stopped = true; timer?.cancel(); timer = nil; signal.stop()
         if captureToken != nil { capRestore(nil) }
         if captureNotify >= 0 { notify_cancel(captureNotify); captureNotify = -1 }; captureDone = nil
         observers.forEach { NotificationCenter.default.removeObserver($0) }; observers.removeAll()

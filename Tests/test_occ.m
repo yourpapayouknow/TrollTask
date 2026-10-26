@@ -29,7 +29,7 @@ static void oc_mgr(NSString *root) {
             oc_req(oc_int(path,"SELECT count(*) FROM sqlite_master WHERE name='occurrences_v9'")==0);
             oc_sql(path,@"DROP TRIGGER migration_failure;");store=[[TaskStore alloc] initAt:path error:nil];
         }
-        oc_req([store schver:nil]==9);
+        oc_req([store schver:nil]==TS_SCH_VER);
         NSArray *rows=[store snapshot:nil][@"history"];oc_req(rows.count==7);
         for (NSString *state in @[@"pending",@"presented",@"snoozed",@"resolved"]) {
             NSArray *items=[rows filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"status == %@",state]];

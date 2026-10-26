@@ -320,6 +320,12 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             "INSERT INTO reminder_checkins SELECT * FROM saved_checkins;INSERT INTO capture_request SELECT * FROM saved_capture;"
             "DROP TABLE saved_checkins;DROP TABLE saved_capture;"
             "UPDATE store_meta SET schema_version=9 WHERE singleton=1;" error:failure]) return NO;
+        // 声振确认与时限沿用唯一数据库，旧轮次默认尚未开始声振。
+        if (version <= 9 && ![self exec:
+            "ALTER TABLE reminder_occurrences ADD COLUMN signal_at REAL;"
+            "ALTER TABLE reminder_occurrences ADD COLUMN signal_uptime REAL;"
+            "ALTER TABLE reminder_occurrences ADD COLUMN signal_ack INTEGER NOT NULL DEFAULT 0 CHECK(signal_ack IN (0,1));"
+            "UPDATE store_meta SET schema_version=10 WHERE singleton=1;" error:failure]) return NO;
         return YES;
     } error:error];
 }
@@ -555,7 +561,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
                 values:@[task[@"updated_at"], task[@"updated_at"], taskID.lowercaseString] error:failure]) return NO;
         }
         if (![task[@"recurrence_type"] isEqual:@"none"]) {
-            NSArray *children = [self qry:"SELECT task_id FROM tasks WHERE parent_id=? LIMIT 1" values:@[taskID.lowercaseString] error:failure];
+            NSArray *children = [self qry:"SELECT task_id FROM tasks WHERE parent_id=? AND deleted=0 LIMIT 1" values:@[taskID.lowercaseString] error:failure];
             if (!children) return NO;
             if (children.count || ![old[@"list_id"] isEqual:task[@"list_id"]])
                 return [self dbErr:SQLITE_CONSTRAINT message:@"重复任务不能含子任务或更换清单" error:failure];
@@ -706,7 +712,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         NSDictionary *occ = rows.firstObject;
         if (!occ) return NO;
         if (![@[@"pending",@"presented",@"snoozed"] containsObject:occ[@"status"]]) return YES;
-        if (![occ[@"status"] isEqual:@"presented"] && ![self qry:"UPDATE reminder_occurrences SET status='presented',triggered_at=?,handled_at=NULL,action=NULL,next_fire_at=?,updated_at=? WHERE occurrence_id=?"
+        if (![occ[@"status"] isEqual:@"presented"] && ![self qry:"UPDATE reminder_occurrences SET status='presented',triggered_at=?,handled_at=NULL,action=NULL,next_fire_at=?,updated_at=?,signal_at=NULL,signal_uptime=NULL,signal_ack=0 WHERE occurrence_id=?"
             values:@[now, alert[@"remind_at"], now, occ[@"occurrence_id"]] error:failure]) return NO;
         NSMutableDictionary *item = [alert mutableCopy]; item[@"occurrence_id"] = occ[@"occurrence_id"]; item[@"task"] = task;
         result = item;
@@ -793,8 +799,35 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         if (!task || ![row[@"status"] isEqual:@"snoozed"] || ![row[@"action"] isEqual:@"snooze"] || row[@"hold_reason"]==NSNull.null
             || [task[@"deleted"] boolValue] || ![task[@"status"] isEqual:@"needsAction"] || ![task[@"reminder_version"] isEqual:row[@"generation"]])
             return [self dbErr:SQLITE_NOTFOUND message:@"边栏提醒已失效" error:failure];
-        return [self updOcc:occID fields:@{@"status":@"presented",@"triggered_at":@(NSDate.date.timeIntervalSince1970),@"handled_at":NSNull.null,@"action":NSNull.null,@"next_fire_at":@(NSDate.date.timeIntervalSince1970)} error:failure];
+        if (![self updOcc:occID fields:@{@"status":@"presented",@"triggered_at":@(NSDate.date.timeIntervalSince1970),@"handled_at":NSNull.null,@"action":NSNull.null,@"next_fire_at":@(NSDate.date.timeIntervalSince1970)} error:failure]) return NO;
+        // 用户主动展开已表示注意到提醒，不再启动新一轮声振。
+        return [self qry:"UPDATE reminder_occurrences SET signal_ack=1 WHERE occurrence_id=?" values:@[occID.lowercaseString] error:failure] != nil;
     } error:error];
+}
+
+// 只为真实显示的当前呈现建立时限，队列中的等待项不提前消耗。
+- (NSDictionary *)sigOcc:(NSString *)occID trigger:(NSNumber *)trigger ack:(BOOL)ack error:(NSError **)error {
+    __block NSDictionary *result = nil;
+    BOOL success = [self wrTxn:^BOOL(NSError **failure) {
+        if (!ts_uuid(occID) || !ts_num(trigger)) return [self dbErr:SQLITE_MISMATCH message:@"声振标识无效" error:failure];
+        NSDictionary *row = [self qry:"SELECT * FROM reminder_occurrences WHERE occurrence_id=?" values:@[occID.lowercaseString] error:failure].firstObject;
+        if (!row) { if (failure && *failure) return NO; return YES; }
+        NSDictionary *task = [self rdTsk:row[@"task_id"] error:failure];
+        if (!task) return NO;
+        if (![row[@"status"] isEqual:@"presented"] || ![row[@"triggered_at"] isEqual:trigger]
+            || [task[@"deleted"] boolValue] || ![task[@"status"] isEqual:@"needsAction"] || ![task[@"reminder_version"] isEqual:row[@"generation"]]) return YES;
+        BOOL fresh = row[@"signal_at"] == NSNull.null;
+        if (fresh) {
+            if (![self qry:"UPDATE reminder_occurrences SET signal_at=?,signal_uptime=?,signal_ack=MAX(signal_ack,?) WHERE occurrence_id=?"
+                values:@[@(NSDate.date.timeIntervalSince1970),@(NSProcessInfo.processInfo.systemUptime),@(ack),occID.lowercaseString] error:failure]) return NO;
+        } else if (ack && ![row[@"signal_ack"] boolValue]) {
+            if (![self qry:"UPDATE reminder_occurrences SET signal_ack=1 WHERE occurrence_id=?" values:@[occID.lowercaseString] error:failure]) return NO;
+        }
+        result = [self qry:"SELECT signal_at,signal_uptime,signal_ack FROM reminder_occurrences WHERE occurrence_id=?" values:@[occID.lowercaseString] error:failure].firstObject;
+        if (result) { NSMutableDictionary *state = [result mutableCopy]; state[@"signal_new"] = @(fresh); result = state; }
+        return result != nil;
+    } error:error];
+    return success ? result : nil;
 }
 
 // 保留单图入口并复用同一批次提交事务。

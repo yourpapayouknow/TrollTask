@@ -179,8 +179,14 @@ BOOL lb_spawn(void) {
 #endif
 
 #if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
-// 返回统一青绿强调色。
-UIColor *lb_acnt(void) { return [UIColor colorWithRed:28.0/255 green:209.0/255 blue:194.0/255 alpha:1]; }
+// 在明暗背景上保持可读的橙色强调色。
+UIColor *lb_acnt(void) {
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        return traits.userInterfaceStyle == UIUserInterfaceStyleDark
+            ? [UIColor colorWithRed:255/255.0 green:183/255.0 blue:124/255.0 alpha:1]
+            : [UIColor colorWithRed:166/255.0 green:68/255.0 blue:0 alpha:1];
+    }];
+}
 // 使用UIKit加载同库的多倍率模板图标。
 UIImage *lb_icon(NSString *name) {
     return [[UIImage imageNamed:[@"MingCute/" stringByAppendingString:name]] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
@@ -209,7 +215,7 @@ CGRect lb_hudfrm(CGRect screen, UIEdgeInsets insets, UIInterfaceOrientation orie
 
 // 读取统一大字与动态字体。
 UIFont *lb_fnt(UIFontTextStyle style, UITraitCollection *traits) {
-    CGFloat size = 20; UIFontWeight weight = UIFontWeightMedium;
+    CGFloat size = 20; UIFontWeight weight = UIFontWeightRegular;
     if ([style isEqual:UIFontTextStyleTitle1] || [style isEqual:UIFontTextStyleTitle2] || [style isEqual:UIFontTextStyleLargeTitle]) {
         size = 28; weight = UIFontWeightSemibold;
     } else if ([style isEqual:UIFontTextStyleHeadline]) {
@@ -222,17 +228,14 @@ UIFont *lb_fnt(UIFontTextStyle style, UITraitCollection *traits) {
 
 // 创建统一外观的功能按钮。
 UIButton *lb_mkbtn(NSString *title, id target, SEL action) {
-    UIButtonConfiguration *config = [UIButtonConfiguration filledButtonConfiguration];
+    UIButtonConfiguration *config = [UIButtonConfiguration plainButtonConfiguration];
     config.title = title;
-    config.baseBackgroundColor = [UIColor colorWithRed:37/255.0 green:51/255.0 blue:53/255.0 alpha:0.72];
-    config.baseForegroundColor = lb_acnt();
+    config.baseForegroundColor = UIColor.labelColor;
     config.cornerStyle = UIButtonConfigurationCornerStyleFixed;
-    config.background.cornerRadius = 20.0;
-    config.background.strokeColor = [UIColor colorWithWhite:1 alpha:0.12];
-    config.background.strokeWidth = 1.0 / UIScreen.mainScreen.scale;
+    config.background.cornerRadius = 12.0;
     config.contentInsets = NSDirectionalEdgeInsetsMake(8.0, 8.0, 8.0, 8.0);
     config.titleTextAttributesTransformer = ^NSDictionary<NSAttributedStringKey,id> *(NSDictionary<NSAttributedStringKey,id> *attributes) {
-        NSMutableDictionary *result = attributes.mutableCopy; result[NSFontAttributeName] = lb_fnt(UIFontTextStyleHeadline, nil); return result;
+        NSMutableDictionary *result = attributes.mutableCopy; UIFont *font = lb_fnt(UIFontTextStyleHeadline, nil); result[NSFontAttributeName] = [font fontWithSize:MIN(32.0, font.pointSize)]; return result;
     };
     UIButton *button = [UIButton buttonWithConfiguration:config primaryAction:nil];
     button.layer.cornerCurve = kCACornerCurveContinuous;

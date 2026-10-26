@@ -2,7 +2,7 @@
 
 #define TS_DB_PATH @"/var/mobile/Library/Application Support/com.iwmei.taskforiwmei/tasks.sqlite3"
 #define TS_DFLT_LST @"00000000-0000-4000-8000-000000000001"
-#define TS_SCH_VER 9
+#define TS_SCH_VER 10
 #define TS_ATT_MAX 6
 #define TS_DATA_NOTE "com.iwmei.taskforiwmei.data"
 #define TS_CAPTURE_NOTE "com.iwmei.taskforiwmei.capture"
@@ -72,6 +72,8 @@
 - (NSDictionary *)hldOcc:(NSString *)occID mode:(NSString *)mode error:(NSError **)error;
 // 主动展开尚未处理的边栏提醒。
 - (BOOL)rsmOcc:(NSString *)occID error:(NSError **)error;
+// 记录当前呈现的首次声振与静音，不转换任务状态。
+- (NSDictionary *)sigOcc:(NSString *)occID trigger:(NSNumber *)trigger ack:(BOOL)ack error:(NSError **)error;
 // 原子保存有效图片与当前轮次的完成记录。
 - (BOOL)chkOcc:(NSString *)occID method:(NSString *)method image:(NSData *)image error:(NSError **)error;
 // 校验并原子提交最多六个附件，全部成功后完成提醒。

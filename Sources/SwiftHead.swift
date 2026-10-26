@@ -4,5 +4,8 @@
 #if os(iOS)
 @_exported import PhotosUI
 @_exported import UniformTypeIdentifiers
+@_exported import AVFAudio
+@_exported import AudioToolbox
+@_exported import CoreMotion
 #endif
 typealias TaskFields = [String: Any]

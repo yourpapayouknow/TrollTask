@@ -113,6 +113,20 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
     @synchronized(self) {
         icalcomponent *component = tr_comp(task, error);
         if (!component) return NO;
+        // 活跃系列的结束边界不得早于起点，旧记录仍可完成或删除。
+        if (![task[@"deleted"] boolValue] && ![task[@"status"] isEqual:@"completed"]) {
+            for (icalproperty *property = icalcomponent_get_first_property(component, ICAL_RRULE_PROPERTY); property;
+                 property = icalcomponent_get_next_property(component, ICAL_RRULE_PROPERTY)) {
+                struct icalrecurrencetype *rule = icalproperty_get_rrule(property);
+                if (rule && !icaltime_is_null_time(rule->until)) {
+                    icaltimezone *zone = (icaltimezone *)(rule->until.zone ?: icalcomponent_get_dtstart(component).zone);
+                    if (!zone) zone = tr_zone(task[@"timezone_id"], error);
+                    if (icaltime_as_timet_with_zone(rule->until, zone) < floor([task[@"due_at"] doubleValue])) {
+                        icalcomponent_free(component); return tr_err(error, @"结束日期早于计划日期");
+                    }
+                }
+            }
+        }
         icalcomponent_free(component);
         return YES;
     }
@@ -266,7 +280,7 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
             for (NSDictionary *row in records) if ([row[@"cycle_at"] isEqual:cycle] && [row[@"kind"] isEqual:kind]) {
                 item[@"occurrence_id"] = row[@"occurrence_id"];
                 if ([row[@"status"] isEqual:@"resolved"]) handled = YES;
-                if ([row[@"status"] isEqual:@"snoozed"] && row[@"next_fire_at"] != NSNull.null) {
+                if ([@[@"pending",@"snoozed",@"presented"] containsObject:row[@"status"]] && row[@"next_fire_at"] != NSNull.null) {
                     item[@"remind_at"] = @(fmax([item[@"remind_at"] doubleValue], [row[@"next_fire_at"] doubleValue])); pinned = YES;
                 }
                 if ([@[@"pending",@"presented"] containsObject:row[@"status"]]) pinned = YES;

@@ -9,6 +9,9 @@
 @property(nonatomic) BOOL globalCapture;
 #ifdef LB_UI_TEST
 @property(nonatomic, copy) BOOL (^captureLaunch)(void);
+- (NSDictionary *)signalState;
+- (void)signalSample:(NSDictionary *)value;
+- (void)signalAudio:(BOOL)value;
 // 在隔离UIKit测试中核对原生采集整批交回。
 - (void)capOpen:(NSDictionary *)request completion:(void (^)(NSArray *, NSString *))completion;
 #endif

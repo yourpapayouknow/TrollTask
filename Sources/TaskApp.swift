@@ -1,4 +1,3 @@
-#if !LB_UI_TEST
 // 保留原生UIApplicationDelegate入口并用Swift创建主页。
 @objc(LBAppDel) final class TaskApp: UIResponder, UIApplicationDelegate {
     @objc var window: UIWindow?
@@ -7,11 +6,11 @@
     // 启动共享存储和已启用的独立HUD。
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         do { store = try TaskStore.shrd() } catch { NSLog("TaskStore初始化失败：%@", error as NSError) }
-        let failed = store == nil
-        let home = TaskHome(store: store) { navigation in
-            let settings = TaskSettings(); settings.storeFailed = failed; navigation.pushViewController(settings, animated: true)
+        let home = TaskHome(store: store) { [weak self] navigation in
+            let settings = TaskSettings(); settings.storeIssue = { [weak self] in self?.store == nil }; navigation.pushViewController(settings, animated: true)
         }
-        let navigation = UINavigationController(rootViewController: home); navigation.overrideUserInterfaceStyle = .dark
+        home.onStore = { [weak self] active in self?.store = active; self?.rstr(); self?.capStart() }
+        let navigation = UINavigationController(rootViewController: home); navigation.overrideUserInterfaceStyle = .unspecified
         let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = navigation; self.window = window; window.makeKeyAndVisible()
         let result = notify_register_dispatch(TS_CAPTURE_NOTE, &captureNote, .main) { [weak self] _ in self?.capStart() }
         if result != NOTIFY_STATUS_OK { captureNote = -1 }
@@ -33,7 +32,7 @@
         do {
             if let token = captureID {
                 let current = try store.rdCap(token)
-                if current["token"] == nil { capture?.capAbort() }
+                if current["token"] == nil { capDrop(token, store) }
                 return
             }
             guard capture == nil, lb_svcup() else { return }
@@ -41,16 +40,23 @@
             while let presented = host.presentedViewController { host = presented }
             let request = try store.rdCap(nil)
             guard (request["state"] as? NSNumber)?.intValue == 0, let token = request["token"] as? String else { return }
-            try store.ackCap(token)
+            guard !host.isBeingPresented, !host.isBeingDismissed, host.transitionCoordinator == nil else {
+                DispatchQueue.main.asyncAfter(deadline: .now()+0.3) { [weak self] in self?.capStart() }; return
+            }
             let picker = TaskHUD(); capture = picker; captureID = token; picker.modalPresentationStyle = .overFullScreen
             host.present(picker, animated: false) { [weak self, weak picker] in
-                guard let self, let picker else { return }
+                guard let self, let picker, self.captureID == token else { return }
+                do {
+                    guard UIApplication.shared.applicationState == .active else { self.capDrop(token, store); return }
+                    try store.ackCap(token)
+                } catch { NSLog("前台采集接管失败：%@", error as NSError); self.capDrop(token, store); return }
                 picker.capOpen(request as? TaskFields ?? [:]) { [weak self, weak picker] items, issue in
                     guard let self, self.captureID == token else { return }
                     do { let current = try store.rdCap(token); if current["token"] != nil { try store.finCap(token, attachments: items, issue: issue) } }
                     catch {
                         NSLog("前台采集交回失败：%@", error as NSError)
-                        do { try store.finCap(token, attachments: [], issue: "图片读取失败") } catch { NSLog("采集取消交回失败：%@", error as NSError) }
+                        do { try store.finCap(token, attachments: [], issue: "图片读取失败") }
+                        catch { NSLog("采集取消交回失败：%@", error as NSError); self.capDrop(token, store); return }
                     }
                     self.captureID = nil; self.capture = nil; notify_post(TS_CAPTURE_NOTE)
                     picker?.dismiss(animated: false) { [weak self] in picker?.stp(); self?.capStart() }
@@ -59,14 +65,23 @@
             }
         } catch { NSLog("前台采集启动失败：%@", error as NSError) }
     }
+    // 超时或交回失败清理同一采集，允许原HUD恢复后再次选择。
+    private func capDrop(_ token: String, _ store: TaskStore) {
+        guard captureID == token else { return }
+        let picker = capture; captureID = nil; capture = nil; picker?.capAbort()
+        do { try store.delCap(token) } catch { NSLog("前台采集清理失败：%@", error as NSError) }
+        notify_post(TS_CAPTURE_NOTE)
+        if picker?.presentingViewController != nil { picker?.dismiss(animated: false) { [weak self] in picker?.stp(); self?.capStart() } }
+        else { picker?.stp() }
+    }
     // 注销采集请求通知。
     deinit { if captureNote >= 0 { notify_cancel(captureNote) } }
 }
-#endif
 
 // 通过原生Darwin通信控制既有独立HUD。
 @objc(LBSetCtl) final class TaskSettings: TaskScreen {
     @objc var storeFailed = false
+    @objc var storeIssue: (() -> Bool)?
     private let monitor = UISwitch()
     private var preview: UIButton!, recovery: UIButton!
     private var status: UIButton!, planned: UIButton!, timer: DispatchSourceTimer?, watcher: DispatchSourceProcess?
@@ -82,7 +97,10 @@
         monitor.accessibilityIdentifier = "settings.enabled"; monitor.addTarget(self, action: #selector(monChg), for: .valueChanged)
         status = lb_mkbtn("正在检查", self, #selector(rfrsh)); status.accessibilityIdentifier = "settings.status"
         planned = lb_mkbtn("下一提醒", self, #selector(rfrsh)); planned.accessibilityIdentifier = "settings.next"
-        for button in [status, planned] { button?.titleLabel?.numberOfLines = 0 }
+        for (button, icon) in [(status!, "check_circle"), (planned!, "time")] {
+            var config = button.configuration; config?.image = lb_icon(icon); config?.imagePadding = 12; button.configuration = config
+            button.contentHorizontalAlignment = .leading; button.titleLabel?.numberOfLines = 0
+        }
         var plan = planned.configuration
         plan?.subtitleLineBreakMode = .byWordWrapping
         plan?.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
@@ -91,7 +109,13 @@
         preview = lb_mkbtn("测试全屏提醒", self, #selector(tst)); preview.accessibilityIdentifier = "settings.preview"
         recovery = lb_mkbtn("整机重启后\n需打开一次App恢复提醒服务", self, #selector(rstr))
         recovery.accessibilityIdentifier = "settings.recovery"
-        recovery.titleLabel?.numberOfLines = 0; recovery.titleLabel?.textAlignment = .center
+        recovery.titleLabel?.numberOfLines = 0; recovery.contentHorizontalAlignment = .leading
+        var restore = recovery.configuration; restore?.image = lb_icon("repeat"); restore?.imagePadding = 12
+        restore?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var result = attributes; result.font = lb_fnt(.subheadline, nil); result.foregroundColor = TaskTheme.muted; return result
+        }; recovery.configuration = restore
+        var test = preview.configuration; test?.image = lb_icon("list"); test?.imagePadding = 12; preview.configuration = test
+        tu_fill(preview, primary: true)
         let fields = tu_stk([tu_row("后台服务", monitor), status, planned, preview, recovery])
         _ = tu_form(self, fields, "settings.content")
         let result = notify_register_dispatch(LB_READY_NOTE, &token, .main) { [weak self] _ in
@@ -115,7 +139,9 @@
     }
     // 显示真实进程状态和服务计算的下一时刻，拒绝遗留正常记录。
     @objc private func rfrsh() {
-        let value = storeFailed ? ["state":"数据库不可用"] : lb_rdstat() ?? [:]
+        monitor.isOn = (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true
+        preview.isEnabled = monitor.isOn && !pending; recovery.isEnabled = monitor.isOn && !pending
+        let value = (storeIssue?() ?? storeFailed) ? ["state":"数据库不可用"] : lb_rdstat() ?? [:]
         let title = value["state"] as? String ?? "状态不可用"
         var config = status.configuration; config?.title = title; status.configuration = config
         var plan = planned.configuration; plan?.subtitle = nil
@@ -134,7 +160,7 @@
         }
     }
     // 同步服务和预览请求状态。
-    private func sync() { preview.isEnabled = monitor.isOn && !pending; recovery.isEnabled = monitor.isOn && !pending; rfrsh() }
+    private func sync() { rfrsh() }
     // 保持重启限制可见，并提供现有服务的手动恢复入口。
     @objc private func rstr() {
         guard monitor.isOn, !pending else { return }

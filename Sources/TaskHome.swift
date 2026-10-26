@@ -6,22 +6,27 @@ final class TaskCell: UITableViewCell {
     let check = tu_btn(nil), star = tu_btn(nil, "star")
     let titleLabelView = tu_lbl(nil), day = tu_lbl(nil), clock = tu_lbl(nil)
     private var heights: [NSLayoutConstraint] = []
+    private var metadata: UIStackView!
+    private let metadataSpace = UIView()
     // 创建单层透明待办行。
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier); backgroundColor = .clear; selectionStyle = .none
         check.translatesAutoresizingMaskIntoConstraints = false; star.translatesAutoresizingMaskIntoConstraints = false
+        check.contentHorizontalAlignment = .center; star.contentHorizontalAlignment = .center
         var config = check.configuration; config?.preferredSymbolConfigurationForImage = .init(pointSize: 20); check.configuration = config
         titleLabelView.numberOfLines = 0; titleLabelView.adjustsFontSizeToFitWidth = false
         for label in [day, clock] { label.textColor = TaskTheme.muted; label.font = lb_fnt(.subheadline, nil) }
         heights = [titleLabelView, day, clock].map { $0.heightAnchor.constraint(equalToConstant: 1) }
-        let labels = tu_stk([titleLabelView, day, clock]); labels.translatesAutoresizingMaskIntoConstraints = false
+        metadata = tu_stk([day, clock, metadataSpace]); metadata.axis = .horizontal; metadata.alignment = .center; metadata.distribution = .fill
+        day.setContentHuggingPriority(.required, for: .horizontal); clock.setContentHuggingPriority(.required, for: .horizontal)
+        let labels = tu_stk([titleLabelView, metadata]); labels.spacing = 8; labels.translatesAutoresizingMaskIntoConstraints = false
         [check, labels, star].forEach { contentView.addSubview($0) }
-        NSLayoutConstraint.activate([check.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 4),
-            check.centerYAnchor.constraint(equalTo: contentView.centerYAnchor), check.widthAnchor.constraint(equalToConstant: 44),
-            check.topAnchor.constraint(greaterThanOrEqualTo: contentView.topAnchor, constant: 4), check.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -4),
-            labels.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 4), labels.trailingAnchor.constraint(equalTo: star.leadingAnchor, constant: -4),
-            star.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -4), star.centerYAnchor.constraint(equalTo: check.centerYAnchor), star.widthAnchor.constraint(equalToConstant: 44),
-            labels.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4), labels.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4)] + heights)
+        NSLayoutConstraint.activate([check.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            check.widthAnchor.constraint(equalToConstant: 56),
+            check.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4), check.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -4),
+            labels.leadingAnchor.constraint(equalTo: check.trailingAnchor), labels.trailingAnchor.constraint(equalTo: star.leadingAnchor),
+            star.trailingAnchor.constraint(equalTo: contentView.trailingAnchor), star.centerYAnchor.constraint(equalTo: check.centerYAnchor), star.widthAnchor.constraint(equalToConstant: 56),
+            labels.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12), labels.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)] + heights)
     }
     // 禁用未使用的归档路径。
     required init?(coder: NSCoder) { fatalError("Use init(style:reuseIdentifier:)") }
@@ -29,11 +34,15 @@ final class TaskCell: UITableViewCell {
     func bnd(_ task: TaskFields, _ owner: TaskHome) {
         let complete = task["status"] as? String == "completed", starred = (task["starred"] as? NSNumber)?.boolValue == true
         let id = task["task_id"] as! String
+        let large = owner.traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        metadata.axis = large ? .vertical : .horizontal; metadata.alignment = large ? .fill : .center; metadataSpace.isHidden = large
         check.accessibilityIdentifier = "task." + id; check.accessibilityLabel = complete ? "恢复待办" : "完成待办"; check.accessibilityValue = task["status"] as? String
         objc_setAssociatedObject(check, &taskKey, task, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         check.setImage(lb_icon(complete ? "check_circle" : "round"), for: .normal)
+        var mark = check.configuration; mark?.baseForegroundColor = complete ? lb_acnt() : TaskTheme.muted; check.configuration = mark
         star.accessibilityIdentifier = "star." + id; star.accessibilityLabel = starred ? "取消星标" : "添加星标"; star.accessibilityValue = starred ? "1" : "0"
         star.setImage(lb_icon(starred ? "star_fill" : "star"), for: .normal)
+        var favorite = star.configuration; favorite?.baseForegroundColor = starred ? TaskTheme.orange : TaskTheme.muted; star.configuration = favorite
         check.removeTarget(nil, action: nil, for: .touchUpInside); star.removeTarget(nil, action: nil, for: .touchUpInside)
         check.addTarget(owner, action: #selector(TaskHome.tglTsk(_:)), for: .touchUpInside); star.addTarget(owner, action: #selector(TaskHome.tglStar(_:)), for: .touchUpInside)
         titleLabelView.text = task["title"] as? String; titleLabelView.accessibilityLabel = titleLabelView.text
@@ -42,7 +51,7 @@ final class TaskCell: UITableViewCell {
         titleLabelView.textColor = complete ? TaskTheme.muted : TaskTheme.ink
         indentationLevel = task["parent_id"] is NSNull ? 0 : 1; indentationWidth = 4
         let stamp = task[complete ? "completed_at" : "remind_at"] as? NSNumber ?? task["due_at"] as? NSNumber ?? task["deadline_at"] as? NSNumber
-        clock.isHidden = stamp == nil; day.text = "未设提醒"; clock.text = nil
+        day.isHidden = stamp == nil; clock.isHidden = stamp == nil; day.text = nil; clock.text = nil
         if let stamp = stamp {
             let format = DateFormatter(); format.locale = Locale(identifier: "zh_CN"); format.timeZone = .current; format.dateFormat = "yyyy-MM-dd"
             let date = Date(timeIntervalSince1970: stamp.doubleValue); day.text = format.string(from: date); format.dateFormat = "HH:mm"; clock.text = format.string(from: date)
@@ -50,17 +59,19 @@ final class TaskCell: UITableViewCell {
     }
     // 避免动态字体和小数像素产生歧义。
     func sz(_ width: CGFloat) {
-        heights[0].constant = max(1, ceil(titleLabelView.sizeThatFits(CGSize(width: max(1, width - 104), height: .greatestFiniteMagnitude)).height))
-        heights[1].constant = ceil(day.font.lineHeight); heights[2].constant = clock.isHidden ? 0 : ceil(clock.font.lineHeight)
+        heights[0].constant = max(1, ceil(titleLabelView.sizeThatFits(CGSize(width: max(1, width - 112), height: .greatestFiniteMagnitude)).height))
+        heights[1].constant = day.isHidden ? 0 : ceil(day.sizeThatFits(CGSize(width: max(1, width - 112), height: .greatestFiniteMagnitude)).height); heights[2].constant = clock.isHidden ? 0 : ceil(clock.sizeThatFits(CGSize(width: max(1, width - 112), height: .greatestFiniteMagnitude)).height)
     }
 }
 
 // 用原生Swift首页呈现共享数据库的两类任务。
 @objc(TaskHome) final class TaskHome: TaskScreen, UITableViewDataSource, UITableViewDelegate {
     private var store: TaskStore?
+    @objc var onStore: ((TaskStore?) -> Void)?
     private let settings: ((UINavigationController) -> Void)?
     private let table = UITableView(frame: .zero, style: .plain), tabs = tu_stk([])
-    private var tabHeight: NSLayoutConstraint!
+    private var tabHeight: NSLayoutConstraint!, headingHeight: NSLayoutConstraint!
+    private let heading = tu_lbl("待办")
     private var pending: [TaskFields] = [], completed: [TaskFields] = [], allPnd: [TaskFields] = [], allCmpl: [TaskFields] = [], lists: [TaskFields] = []
     private var listID = TS_DFLT_LST, sort = "date", busy: Set<String> = []
     private let queue = DispatchQueue(label: "com.iwmei.taskforiwmei.home")
@@ -75,28 +86,47 @@ final class TaskCell: UITableViewCell {
     // 创建横向清单、透明列表和底部功能入口。
     override func viewDidLoad() {
         super.viewDidLoad(); title = "待办"
-        navigationItem.rightBarButtonItem = UIBarButtonItem(customView: tu_ibtn("settings", "后台设置", "home.settings", self, #selector(sttng)))
-        let create = tu_ibtn("add", "新建待办", "home.create", self, #selector(crt)); var config = create.configuration; config?.baseBackgroundColor = lb_acnt(); config?.baseForegroundColor = .black; create.configuration = config
+        let header = UIView(); view.addSubview(header); tu_wdth(header, view, inset: 0)
+        heading.font = UIFontMetrics(forTextStyle: .title1).scaledFont(for: .systemFont(ofSize: 28, weight: .regular)); heading.accessibilityIdentifier = "home.title"
+        heading.translatesAutoresizingMaskIntoConstraints = false; header.addSubview(heading)
+        let settings = tu_ibtn("settings", "后台设置", "home.settings", self, #selector(sttng)); settings.translatesAutoresizingMaskIntoConstraints = false; header.addSubview(settings)
+        headingHeight = header.heightAnchor.constraint(equalToConstant: 64)
+        NSLayoutConstraint.activate([header.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), headingHeight,
+            heading.centerXAnchor.constraint(equalTo: header.centerXAnchor), heading.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            settings.trailingAnchor.constraint(equalTo: header.trailingAnchor), settings.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            settings.widthAnchor.constraint(equalToConstant: 56), settings.heightAnchor.constraint(equalToConstant: 56)])
+        let create = tu_ibtn("add", "新建待办", "home.create", self, #selector(crt)); tu_fill(create, primary: true)
+        var createStyle = create.configuration; createStyle?.background.cornerRadius = 28; create.configuration = createStyle
         let buttons = [tu_ibtn("menu", "选择清单", "home.lists", self, #selector(lstMenu)), create, tu_ibtn("more", "清单选项", "home.more", self, #selector(more))]
-        let slots = buttons.map { button -> UIView in
-            let slot = UIView(); button.translatesAutoresizingMaskIntoConstraints = false; slot.addSubview(button); let size: CGFloat = button === create ? 60 : 44
-            NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: size), button.heightAnchor.constraint(equalToConstant: size), button.centerXAnchor.constraint(equalTo: slot.centerXAnchor), button.centerYAnchor.constraint(equalTo: slot.centerYAnchor), slot.heightAnchor.constraint(equalToConstant: 60)]); return slot
-        }
-        let toolbar = tu_stk(slots); toolbar.axis = .horizontal; toolbar.distribution = .fillEqually; view.addSubview(toolbar); tu_wdth(toolbar, view)
-        let strip = UIScrollView(); strip.showsHorizontalScrollIndicator = false; strip.accessibilityIdentifier = "home.tabs"; view.addSubview(strip); tu_wdth(strip, view)
-        tabs.axis = .horizontal; tabs.translatesAutoresizingMaskIntoConstraints = false; strip.addSubview(tabs)
+        let toolbar = UIView(); view.addSubview(toolbar); tu_wdth(toolbar, view, inset: 0)
+        let bar = UIView(); bar.backgroundColor = TaskTheme.control; bar.translatesAutoresizingMaskIntoConstraints = false; toolbar.addSubview(bar)
+        NSLayoutConstraint.activate([bar.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor), bar.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor), bar.topAnchor.constraint(equalTo: toolbar.topAnchor, constant: 28), bar.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor)])
+        for button in buttons { button.translatesAutoresizingMaskIntoConstraints = false; toolbar.addSubview(button)
+            NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: 56), button.heightAnchor.constraint(equalToConstant: 56)]) }
+        NSLayoutConstraint.activate([toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -84), toolbar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            buttons[0].leadingAnchor.constraint(equalTo: toolbar.leadingAnchor), buttons[0].topAnchor.constraint(equalTo: bar.topAnchor),
+            buttons[2].trailingAnchor.constraint(equalTo: toolbar.trailingAnchor), buttons[2].topAnchor.constraint(equalTo: bar.topAnchor),
+            create.centerXAnchor.constraint(equalTo: toolbar.centerXAnchor), create.centerYAnchor.constraint(equalTo: bar.topAnchor)])
+        let strip = UIScrollView(); strip.showsHorizontalScrollIndicator = false; strip.accessibilityIdentifier = "home.tabs"; view.addSubview(strip); tu_wdth(strip, view, inset: 0)
+        tabs.axis = .horizontal; tabs.spacing = 0; tabs.translatesAutoresizingMaskIntoConstraints = false; strip.addSubview(tabs)
         NSLayoutConstraint.activate([tabs.leadingAnchor.constraint(equalTo: strip.contentLayoutGuide.leadingAnchor), tabs.trailingAnchor.constraint(equalTo: strip.contentLayoutGuide.trailingAnchor), tabs.topAnchor.constraint(equalTo: strip.contentLayoutGuide.topAnchor), tabs.bottomAnchor.constraint(equalTo: strip.contentLayoutGuide.bottomAnchor), tabs.heightAnchor.constraint(equalTo: strip.frameLayoutGuide.heightAnchor)])
         table.accessibilityIdentifier = "home.list"; table.backgroundColor = .clear; table.dataSource = self; table.delegate = self
         table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 84; table.sectionHeaderTopPadding = 0; table.separatorStyle = .none; table.keyboardDismissMode = .interactive
-        table.register(TaskCell.self, forCellReuseIdentifier: "task"); view.addSubview(table); tu_wdth(table, view)
-        tabHeight = strip.heightAnchor.constraint(equalToConstant: 52)
-        NSLayoutConstraint.activate([toolbar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4), strip.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4), tabHeight, table.topAnchor.constraint(equalTo: strip.bottomAnchor, constant: 4), table.bottomAnchor.constraint(equalTo: toolbar.topAnchor, constant: -4)])
+        table.register(TaskCell.self, forCellReuseIdentifier: "task"); view.addSubview(table); tu_wdth(table, view, inset: 0)
+        table.contentInset = .init(top: 12, left: 0, bottom: 32, right: 0)
+        tabHeight = strip.heightAnchor.constraint(equalToConstant: 56)
+        let rule = UIView(); rule.backgroundColor = .separator; rule.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(rule)
+        NSLayoutConstraint.activate([strip.topAnchor.constraint(equalTo: header.bottomAnchor), tabHeight,
+            table.topAnchor.constraint(equalTo: strip.bottomAnchor, constant: 1 / UIScreen.main.scale), table.bottomAnchor.constraint(equalTo: bar.topAnchor),
+            rule.leadingAnchor.constraint(equalTo: strip.leadingAnchor), rule.trailingAnchor.constraint(equalTo: strip.trailingAnchor), rule.bottomAnchor.constraint(equalTo: strip.bottomAnchor), rule.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale)])
+
+        view.bringSubviewToFront(toolbar)
         reg(); NotificationCenter.default.addObserver(self, selector: #selector(rfrsh), name: UIApplication.didBecomeActiveNotification, object: nil)
     }
     // 刷新共享数据。
-    override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); rfrsh() }
+    override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); navigationController?.setNavigationBarHidden(true, animated: false); rfrsh() }
     // 适应动态字体高度。
-    override func viewWillLayoutSubviews() { super.viewWillLayoutSubviews(); tabHeight.constant = max(52, ceil(lb_fnt(.headline, traitCollection).lineHeight) + 16) }
+    override func viewWillLayoutSubviews() { super.viewWillLayoutSubviews(); tabHeight.constant = max(56, ceil(lb_fnt(.headline, traitCollection).lineHeight) + 16); headingHeight.constant = max(64, ceil(heading.font.lineHeight) + 24) }
     // 注册跨进程数据通知。
     private func reg() {
         guard token < 0, let store = store else { return }
@@ -115,19 +145,23 @@ final class TaskCell: UITableViewCell {
             } catch { issue = error }
             DispatchQueue.main.async {
                 guard current == self.load else { return }; self.store = active; self.loaded = true; self.failed = issue != nil
+                self.onStore?(issue == nil ? active : nil)
                 if let error = issue { self.pending = []; self.completed = []; NSLog("读取待办失败：%@", error as NSError) }
-                else { self.allPnd = pnd; self.allCmpl = cmpl; self.lists = lists; self.fltr(); self.bldTabs(); self.reg() }
+                else {
+                    if let note = active?.changeNote { self.sort = UserDefaults.standard.string(forKey: "\(note).\(self.listID).sort") ?? "date" }
+                    self.allPnd = pnd; self.allCmpl = cmpl; self.lists = lists; self.fltr(); self.bldTabs(); self.reg()
+                }
                 self.table.reloadData()
             }
         }
     }
     // 打开服务设置。
-    @objc private func sttng() { if let nav = navigationController { settings?(nav) } }
+    @objc private func sttng() { if let nav = navigationController { nav.setNavigationBarHidden(false, animated: false); settings?(nav) } }
     // 创建快捷草稿。
     @objc private func crt() {
-        guard let store = store, presentedViewController == nil else { return }
+        guard let store = store else { rfrsh(); return }; guard presentedViewController == nil else { return }
         let editor = TaskEdit(store: store, task: nil, draft: ["list_id": listID == "starred" ? TS_DFLT_LST : listID, "starred": listID == "starred"], quick: true) { [weak self] in self?.rfrsh() }
-        let nav = UINavigationController(rootViewController: editor); nav.preferredContentSize = editor.preferredContentSize; tu_sheet(self, nav)
+        let nav = UINavigationController(rootViewController: editor); nav.preferredContentSize = editor.preferredContentSize; tu_sheet(self, nav, compact: true)
     }
     // 筛选当前清单和存储排序。
     private func fltr() {
@@ -135,15 +169,7 @@ final class TaskCell: UITableViewCell {
         if !star && !lists.contains(where: { $0["list_id"] as? String == listID }) { listID = TS_DFLT_LST }
         let filter: (TaskFields) -> Bool = { star ? ($0["starred"] as? NSNumber)?.boolValue == true : $0["list_id"] as? String == self.listID }
         pending = allPnd.filter(filter); completed = allCmpl.filter(filter)
-        if sort != "date" {
-            let key = sort == "star" ? "starred_at" : "position", reverse = sort == "star"
-            pending.sort { a, b in
-                let av = a[key] as? NSNumber, bv = b[key] as? NSNumber
-                if let av = av, let bv = bv, av != bv { return reverse ? av.doubleValue > bv.doubleValue : av.doubleValue < bv.doubleValue }
-                if av == nil && bv != nil { return false }; if av != nil && bv == nil { return true }
-                return (a["created_at"] as! NSNumber).doubleValue < (b["created_at"] as! NSNumber).doubleValue
-            }
-        }
+        pending = TaskTraits.order(pending, by: sort)
     }
     // 更新清单页签。
     private func bldTabs() {
@@ -151,65 +177,96 @@ final class TaskCell: UITableViewCell {
         let count = allPnd.filter { ($0["starred"] as? NSNumber)?.boolValue == true }.count
         for list in [["list_id":"starred", "title":String(count)]] + lists {
             let id = list["list_id"] as! String, selected = id == listID
-            let button = tu_btn(lb_shrt(list["title"] as? String), id == "starred" ? "star_fill" : nil, self, #selector(selLst(_:)))
+            let button = tu_btn(id == "starred" ? nil : lb_shrt(list["title"] as? String), id == "starred" ? "star_fill" : nil, self, #selector(selLst(_:)))
             button.accessibilityIdentifier = "list." + id; button.accessibilityLabel = id == "starred" ? "星标待办" : list["title"] as? String; button.accessibilityValue = selected ? "已选中" : "未选中"
-            var config = button.configuration; config?.baseForegroundColor = selected ? lb_acnt() : TaskTheme.muted; button.configuration = config
-            if selected { button.accessibilityTraits.insert(.selected) }; tabs.addArrangedSubview(button)
+            var config = button.configuration; config?.baseForegroundColor = selected ? lb_acnt() : TaskTheme.muted
+            config?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in var value = attributes; value.font = lb_fnt(.subheadline, nil); return value }
+            config?.contentInsets = .init(top: 8, leading: 12, bottom: 8, trailing: 12); button.configuration = config
+            if id == "starred" {
+                button.widthAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true; button.contentHorizontalAlignment = .leading
+                let badge = UILabel(); badge.text = String(count); badge.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(for: .systemFont(ofSize: 16, weight: .medium)); badge.textColor = TaskTheme.muted
+                badge.textAlignment = .center; badge.backgroundColor = TaskTheme.control; badge.layer.cornerRadius = 10; badge.clipsToBounds = true; badge.isAccessibilityElement = false; badge.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(badge)
+                NSLayoutConstraint.activate([badge.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 44), badge.centerYAnchor.constraint(equalTo: button.centerYAnchor), badge.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -12), badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 20), badge.heightAnchor.constraint(greaterThanOrEqualToConstant: 20)])
+            }
+            if selected {
+                button.accessibilityTraits.insert(.selected)
+                let line = UIView(); line.backgroundColor = lb_acnt(); line.layer.cornerRadius = 1; line.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(line)
+                NSLayoutConstraint.activate([line.heightAnchor.constraint(equalToConstant: 2), line.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 4), line.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -4), line.bottomAnchor.constraint(equalTo: button.bottomAnchor)])
+            }; tabs.addArrangedSubview(button)
         }
         let button = tu_btn("新建清单", "add", self, #selector(crtLst)); button.accessibilityIdentifier = "home.newlist"; tabs.addArrangedSubview(button)
     }
     // 切换当前清单。
     @objc private func selLst(_ button: UIButton) {
+        guard let store else { rfrsh(); return }
         listID = String(button.accessibilityIdentifier!.dropFirst(5)); expanded = false
-        sort = UserDefaults.standard.string(forKey: "\(store!.changeNote!).\(listID).sort") ?? "date"
+        sort = UserDefaults.standard.string(forKey: "\(store.changeNote!).\(listID).sort") ?? "date"
         table.setEditing(false, animated: false); fltr(); bldTabs(); table.reloadData()
     }
     // 提交事务后刷新，不作乐观显示。
-    private func wrt(_ work: @escaping (TaskStore) throws -> Void) {
+    private func wrt(_ work: @escaping (TaskStore) throws -> Void, done: ((Error?) -> Void)? = nil) {
         guard let store = store else { return }
         queue.async { var issue: Error?; do { try store.txn { try work(store) } } catch { issue = error }
-            DispatchQueue.main.async { self.rfrsh(); if let issue = issue { tu_err(self, issue) } }
+            DispatchQueue.main.async { self.rfrsh(); if let done { done(issue) } else if let issue { tu_err(self, issue) } }
         }
     }
     // 编辑清单名称。
     private func lstName(_ create: Bool) {
-        let alert = UIAlertController(title: create ? "新建清单" : "重命名清单", message: nil, preferredStyle: .alert), id = listID
-        alert.addTextField { field in field.placeholder = "清单名称"; field.accessibilityIdentifier = "list.name"; if !create { field.text = self.lists.first { $0["list_id"] as? String == id }?["title"] as? String } }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel)); alert.addAction(UIAlertAction(title: "保存", style: .default) { _ in
-            let name = alert.textFields?.first?.text ?? ""; self.wrt { store in if create { _ = try store.crtLst(name) } else { try store.updLst(id, title: name) } }
-        }); present(alert, animated: true)
+        guard store != nil else { rfrsh(); return }; let id = listID
+        let name = create ? "" : lists.first { $0["list_id"] as? String == id }?["title"] as? String ?? ""
+        let page = TaskName(title: create ? "新建任务列表" : "重命名任务列表", name: name) { [weak self] name, done in
+            self?.wrt({ store in
+                if create {
+                    let row = try store.crtLst(name) as! TaskFields
+                    DispatchQueue.main.async { self?.listID = row["list_id"] as! String; self?.sort = "date"; self?.expanded = false }
+                } else { try store.updLst(id, title: name) }
+            }, done: done)
+        }
+        navigationItem.backButtonTitle = "返回"; navigationController?.setNavigationBarHidden(false, animated: false); navigationController?.pushViewController(page, animated: true)
     }
     // 新建清单。
     @objc private func crtLst() { lstName(true) }
     // 展示清单切换菜单。
     @objc private func lstMenu() {
-        var actions = lists.map { list -> UIAction in
+        guard store != nil else { rfrsh(); return }
+        let starred = tu_act("已加星标", "star_fill", "list.starred") { [weak self] in let button = UIButton(); button.accessibilityIdentifier = "list.starred"; self?.selLst(button) }; starred.state = listID == "starred" ? .on : .off
+        var actions = [starred] + lists.map { list -> UIAction in
             let id = list["list_id"] as! String
-            let action = tu_act(lb_shrt(list["title"] as? String), "list", id) { [weak self] in let button = UIButton(); button.accessibilityIdentifier = "list." + id; self?.selLst(button) }
+            let action = tu_act(list["title"] as? String ?? "", nil, id) { [weak self] in let button = UIButton(); button.accessibilityIdentifier = "list." + id; self?.selLst(button) }
             action.state = id == listID ? .on : .off; return action
         }
-        actions.append(tu_act("新建清单", "add", "list.create") { [weak self] in self?.crtLst() }); tu_menu(self, "任务清单", actions)
+        actions.append(tu_act("新建任务列表", "add", "list.create") { [weak self] in self?.crtLst() }); tu_menu(self, "任务清单", actions, breaks: [actions.count - 1], lists: true)
     }
     // 展示排序及清单维护。
     @objc private func more() {
+        guard store != nil else { rfrsh(); return }
         var actions: [UIAction] = []
-        for (key, name) in zip(["manual", "date", "star"], ["我的顺序", "日期", "最近加星时间"]) {
-            let action = tu_act(name, "sort", "sort." + key) { [weak self] in
-                guard let self = self else { return }; self.sort = key; UserDefaults.standard.set(key, forKey: "\(self.store!.changeNote!).\(self.listID).sort")
-                self.table.setEditing(false, animated: false); self.fltr(); self.table.reloadData()
-            }; action.state = sort == key ? .on : .off; actions.append(action)
-        }
+        for (key, name) in zip(["manual", "date", "star"], ["我的顺序", "日期", "最近加注星标时间"]) { actions.append(srtAct(key, name)) }
+        let extra = ["urgency":"紧急优先", "difficulty":"困难优先", "effort":"短任务优先"][sort]
+        let header = tu_act(extra.map { "排序依据：" + $0 } ?? "排序依据", nil, "sort.more") { [weak self] in self?.srtMenu() }
+        let rename = tu_act("重命名任务列表", nil, "list.rename") { [weak self] in self?.lstName(false) }, id = listID
+        let remove = tu_act("删除任务列表", nil, "list.delete") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除清单及全部任务") { self.wrt { try $0.delLst(id) } } }; remove.attributes = .destructive
+        let clear = tu_act("删除所有已完成的任务", nil, "list.clear") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除完成项及子任务") { self.wrt { try $0.clrCmpl(id) } } }; clear.attributes = .destructive
+        if id == "starred" { rename.attributes = .disabled; remove.attributes = .disabled; clear.attributes = .disabled }
+        if id == TS_DFLT_LST { remove.attributes = .disabled }; if completed.isEmpty { clear.attributes.insert(.disabled) }
+        actions += [rename, remove, clear]; tu_menu(self, "清单选项", actions, breaks: [3], header: header)
+    }
+    // 共用持久化排序操作，入口分组不改变排序语义。
+    private func srtAct(_ key: String, _ name: String) -> UIAction {
+        let action = tu_act(name, nil, "sort." + key) { [weak self] in
+            guard let self, let store = self.store else { return }; self.sort = key; UserDefaults.standard.set(key, forKey: "\(store.changeNote!).\(self.listID).sort")
+            self.table.setEditing(false, animated: false); self.fltr(); self.table.reloadData()
+        }; action.state = sort == key ? .on : .off; return action
+    }
+    // 将已有评估排序和拖动入口保留在第二层。
+    private func srtMenu() {
+        var actions = zip(["urgency", "difficulty", "effort"], ["紧急优先", "困难优先", "短任务优先"]).map { srtAct($0, $1) }
         let reorder = tu_act("调整顺序", "list", "list.reorder") { [weak self] in
-            guard let self = self else { return }; self.sort = "manual"; UserDefaults.standard.set("manual", forKey: "\(self.store!.changeNote!).\(self.listID).sort")
+            guard let self, let store = self.store else { return }; self.sort = "manual"; UserDefaults.standard.set("manual", forKey: "\(store.changeNote!).\(self.listID).sort")
             self.fltr(); self.table.reloadData(); self.table.setEditing(!self.table.isEditing, animated: true)
         }
         if listID == "starred" || pending.isEmpty { reorder.attributes = .disabled }; actions.append(reorder)
-        let rename = tu_act("重命名清单", "notes", "list.rename") { [weak self] in self?.lstName(false) }, id = listID
-        let remove = tu_act("删除清单", "delete", "list.delete") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除清单及全部任务") { self.wrt { try $0.delLst(id) } } }; remove.attributes = .destructive
-        let clear = tu_act("删除所有已完成任务", "delete", "list.clear") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除完成项及子任务") { self.wrt { try $0.clrCmpl(id) } } }; clear.attributes = .destructive
-        if id == "starred" { rename.attributes = .disabled; remove.attributes = .disabled; clear.attributes = .disabled }
-        if id == TS_DFLT_LST { remove.attributes = .disabled }; if completed.isEmpty { clear.attributes.insert(.disabled) }
-        actions += [rename, remove, clear]; tu_menu(self, "清单选项", actions)
+        tu_menu(self, "更多排序", actions, breaks: [3], caption: "更多排序")
     }
     // 提交明确星标意图。
     @objc func tglStar(_ button: UIButton) {
@@ -219,6 +276,7 @@ final class TaskCell: UITableViewCell {
     // 进入完整详情。
     private func edt(_ task: TaskFields) {
         guard let store = store else { rfrsh(); return }
+        navigationController?.setNavigationBarHidden(false, animated: false)
         navigationController?.pushViewController(TaskEdit(store: store, task: task) { [weak self] in self?.rfrsh() }, animated: true)
     }
     // 限定手动排序的可移动行。
@@ -258,6 +316,7 @@ final class TaskCell: UITableViewCell {
         if path.section == 0 && pending.isEmpty {
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil); cell.backgroundColor = .clear; cell.selectionStyle = .none
             let empty = tu_btn(failed ? "读取失败" : (loaded ? "暂无待办" : "正在读取"), nil, self, #selector(empt)); empty.isEnabled = loaded; empty.accessibilityIdentifier = "home.empty"
+            empty.contentHorizontalAlignment = .center
             empty.translatesAutoresizingMaskIntoConstraints = false; cell.contentView.addSubview(empty)
             NSLayoutConstraint.activate([empty.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor, constant: 4), empty.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -4), empty.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: 4), empty.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -4)]); return cell
         }
@@ -280,4 +339,38 @@ final class TaskCell: UITableViewCell {
     }
     // 注销所有数据监听。
     deinit { if token >= 0 { notify_cancel(token) }; NotificationCenter.default.removeObserver(self) }
+}
+
+// 新建和重命名共用独立输入页，取消不保存。
+private final class TaskName: TaskScreen, UITextFieldDelegate {
+    private let initial: String, save: (String, @escaping (Error?) -> Void) -> Void
+    private let field = UITextField()
+    private var saving = false, done: UIButton!
+    // 接收当前名称与既有事务入口。
+    init(title: String, name: String, save: @escaping (String, @escaping (Error?) -> Void) -> Void) { initial = name; self.save = save; super.init(nibName: nil, bundle: nil); self.title = title }
+    // 禁用归档初始化。
+    required init?(coder: NSCoder) { fatalError("Use init(title:name:save:)") }
+    // 保持顶部标题、返回、完成与单行输入的原版层级。
+    override func viewDidLoad() {
+        super.viewDidLoad(); field.text = initial; field.placeholder = "输入列表标题"; field.font = lb_fnt(.body, traitCollection); field.textColor = TaskTheme.ink; field.adjustsFontForContentSizeCategory = true
+        field.accessibilityIdentifier = "list.name"; field.returnKeyType = .done; field.delegate = self; field.addTarget(self, action: #selector(chg), for: .editingChanged); field.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(field)
+        NSLayoutConstraint.activate([field.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), field.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16), field.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), field.heightAnchor.constraint(greaterThanOrEqualToConstant: max(64, lb_fnt(.body, traitCollection).lineHeight + 24))])
+        done = tu_btn("完成", nil, self, #selector(sv)); done.accessibilityIdentifier = "list.done"; var config = done.configuration; config?.baseForegroundColor = lb_acnt(); done.configuration = config; navigationItem.rightBarButtonItem = UIBarButtonItem(customView: done); chg()
+    }
+    // 进入页面即可输入。
+    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); field.becomeFirstResponder() }
+    // 空白名称不能提交。
+    @objc private func chg() { done.isEnabled = !saving && !(field.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    // 键盘完成复用同一提交入口。
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool { sv(); return false }
+    // 防重复提交，保存失败保留输入。
+    @objc private func sv() {
+        guard done.isEnabled, !saving else { return }; let name = field.text ?? ""
+        if name == initial { navigationController?.popViewController(animated: true); return }
+        saving = true; field.isEnabled = false; navigationItem.hidesBackButton = true; navigationController?.interactivePopGestureRecognizer?.isEnabled = false; chg()
+        save(name) { [weak self] error in
+            guard let self else { return }; self.saving = false; self.field.isEnabled = true; self.navigationItem.hidesBackButton = false; self.navigationController?.interactivePopGestureRecognizer?.isEnabled = true; self.chg()
+            if let error { tu_err(self, error) } else { self.navigationController?.popViewController(animated: true) }
+        }
+    }
 }

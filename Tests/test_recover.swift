@@ -149,6 +149,22 @@
         req(shown == nil && events == before+2, "完成必须取消尚未交付的提醒，不能闪回旧弹窗")
         req(try rows(store, task).count == 1 && rows(store, task)[0]["status"] as? String == "resolved", "取消呈现仍只完成同一轮次一次")
         scheduler.stp()
+        // 修改发生在主线程消费旧呈现之前，不能短暂交付失效快照。
+        let stale = try mk(store, base-2), count = events
+        let planned = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        var paused = false
+        scheduler.onPlan = { _, _, _ in
+            if !paused { paused = true; planned.signal(); release.wait() }
+        }
+        req(scheduler.strt(nil), "编辑前排队呈现")
+        req(planned.wait(timeout: .now()+2) == .success, "旧提醒已排队且重读通知尚未消费")
+        try store.updTsk(stale, fields: ["due_at":base+600])
+        var edited = false; DispatchQueue.main.async { edited = true }
+        wt("修改后的主线程结果已消费") { edited }
+        release.signal()
+        wt("编辑后重排未来时间") { scheduler.nextFireAt?.timeIntervalSince1970 == base+600 }
+        req(shown == nil && events == count, "主线程解除阻塞后必须重新核对修改，旧提醒不得交付")
+        scheduler.stp(); try store.delTsk(stale)
     }
     // 仅使用临时数据库与受控时钟。
     static func main() throws {

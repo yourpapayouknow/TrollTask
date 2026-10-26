@@ -14,6 +14,7 @@
     private var displayed: NSDictionary?
     private var displayedEpoch = -1
     private var publication: DispatchWorkItem?
+    private var delivery = 0
     // 只发布计划结果，前台不另建调度器或轮询数据库。
     var onPlan: ((Date?, Bool, NSError?) -> Void)?
     // 隔离测试可重排计时源并观察真实回调，生产默认不接管。
@@ -47,9 +48,21 @@
         timer = source; source.resume()
     }
     // 调度队列完成数据核验，主线程只接收尚未取消的呈现结果。
-    private func pub(_ alert: TaskFields?, _ error: NSError? = nil) {
+    private func pub(_ alert: TaskFields?, _ error: NSError? = nil, ready: Bool = false) {
         publication?.cancel()
         guard running || alert == nil else { return }
+        if !ready { delivery += 1 }
+        // 主线程开始消费后再异步核验，拦截阻塞期间提交的修改。
+        if !ready && alert != nil {
+            let sequence = delivery, expected = epoch
+            let work = DispatchWorkItem { [weak self] in
+                self?.queue.async { [weak self] in
+                    guard let self, self.delivery == sequence, self.epoch == expected else { return }
+                    self.pub(alert, error, ready: true)
+                }
+            }
+            publication = work; DispatchQueue.main.async(execute: work); return
+        }
         let expected = epoch
         var fresh = alert, failure = error
         if let alert, let store {

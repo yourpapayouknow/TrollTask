@@ -7,9 +7,21 @@ static UINavigationController *ut_nav;
 static TaskStore *ut_store;
 static NSString *ut_docs;
 static NSMutableArray *ut_checks;
+static NSArray<NSString *> *ut_args;
 static BOOL ut_spawn = YES;
 static TaskReminder *ut_sched;
 static NSMutableArray *ut_events;
+
+// 复现UIKit拒绝在当前宿主上呈现采集页。
+@interface UTHost : UIViewController
+@property(nonatomic) BOOL rejects;
+@end
+@implementation UTHost
+// 按夹具意图拒绝呈现，其余调用真实UIKit。
+- (void)presentViewController:(UIViewController *)controller animated:(BOOL)animated completion:(void (^)(void))completion {
+    if (!self.rejects) [super presentViewController:controller animated:animated completion:completion];
+}
+@end
 
 // 仅在独立模拟器测试中替代设备root启动。
 BOOL lb_spawn(void) { return ut_spawn; }
@@ -71,6 +83,12 @@ static void ut_tap(NSString *name) {
             [[UIButton buttonWithConfiguration:UIButtonConfiguration.plainButtonConfiguration primaryAction:action] sendActionsForControlEvents:UIControlEventTouchUpInside];
         }
     });
+}
+// 完整详情返回即保存，新建草稿使用保存按钮。
+static void ut_save(void) {
+    __block BOOL back=NO;
+    ut_ui(^{back=ut_find(ut_surface(),@"edit.save").hidden;});
+    ut_tap(back ? @"edit.back" : @"edit.save");
 }
 // 取得当前首页的原生列表。
 static UITableView *ut_table(void) { return (UITableView *)ut_find(ut_nav.viewControllers.firstObject.view, @"home.list"); }
@@ -140,6 +158,15 @@ static void ut_shot(NSString *name, CGFloat width, CGFloat height, BOOL large) {
             [container.layer renderInContext:context.CGContext];
         }];
         [png writeToFile:[ut_docs stringByAppendingPathComponent:[@"screens/" stringByAppendingString:name]] atomically:YES];
+        NSMutableArray *frames=[NSMutableArray array];
+        for (NSString *key in @[@"edit.form",@"edit.actions",@"edit.title",@"edit.notes",@"edit.save",@"edit.complete",@"calendar.form",@"calendar.month"]) {
+            UIView *item=ut_find(root.view,key); if(item) [frames addObject:@{@"id":key,@"frame":NSStringFromCGRect([item convertRect:item.bounds toView:root.view]),@"safe":NSStringFromUIEdgeInsets(item.safeAreaInsets)}];
+        }
+        [[NSJSONSerialization dataWithJSONObject:frames options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[ut_docs stringByAppendingPathComponent:[@"screens/" stringByAppendingString:[name stringByAppendingString:@".json"]]] atomically:YES];
+        if (![root isKindOfClass:TTTaskHUD.class]) ut_req(root.traitCollection.userInterfaceStyle==ut_nav.traitCollection.userInterfaceStyle,@"所有子页沿用首页明暗主题");
+        UIView *actions=ut_find(root.view,@"edit.actions"); if(actions) ut_req(actions.bounds.size.width>=width-26,@"编辑底部操作保留整行宽度");
+        UIButton *complete=(UIButton *)ut_find(root.view,@"edit.complete"); if(complete && !complete.hidden) ut_req(complete.titleLabel.bounds.size.height<=complete.titleLabel.font.lineHeight+1,@"详情完成操作保持单行文字");
+        UIView *month=ut_find(root.view,@"calendar.month"); if(month) ut_req(month.bounds.size.width>=width-34,@"原生月历保留完整七列宽度");
         ut_bounds(root.view, root.view);
         if (root.parentViewController == nav) [nav setOverrideTraitCollection:nil forChildViewController:root]; container.frame = originalFrame;
         [container setNeedsLayout]; [container layoutIfNeeded]; [ut_table() reloadData]; [ut_table() layoutIfNeeded];
@@ -157,7 +184,7 @@ static void ut_home(void) { ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskH
 // 验证原生月历、完整字段、排序、星标和子任务入口。
 static void ut_refs(void) API_AVAILABLE(ios(16.0));
 static void ut_refs(void) {
-    ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil]; }); ut_tap(@"edit.cancel"); ut_home();
+    __block BOOL editing;ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil];editing=[ut_top() isKindOfClass:TaskEdit.class]; }); if(editing)ut_tap(@"edit.cancel");ut_home();
     ut_ui(^{ for (NSString *name in @[@"round",@"star",@"star_fill",@"time",@"calendar",@"add",@"settings"])
         ut_req(lb_icon(name) && lb_icon(name).size.width == 24,@"MingCute原生资源加载"); });
     NSDictionary *list = [ut_store crtLst:@"学习清单" error:nil]; NSString *listID = list[@"list_id"];
@@ -173,19 +200,22 @@ static void ut_refs(void) {
         NSDateComponents *parts = [NSDateComponents new]; parts.year = 2026; parts.month = 11; parts.day = 1;
         UICalendarSelectionSingleDate *selection = (UICalendarSelectionSingleDate *)calendar.selectionBehavior;
         [selection setSelectedDate:parts animated:NO]; [(TaskCalendar *)ut_top() dateSelection:selection didSelectDate:parts];
-        UISwitch *toggle = (UISwitch *)ut_find(ut_window,@"calendar.timed"); toggle.on = YES; [toggle sendActionsForControlEvents:UIControlEventValueChanged];
+        UIButton *toggle = (UIButton *)ut_find(ut_window,@"calendar.timed"); [toggle sendActionsForControlEvents:UIControlEventTouchUpInside];
         UIDatePicker *time = (UIDatePicker *)ut_find(ut_window,@"calendar.time");
         NSDateFormatter *format = [NSDateFormatter new]; format.timeZone = time.timeZone; format.dateFormat = @"yyyy-MM-dd HH:mm";
         time.date = [format dateFromString:@"2026-11-01 10:30"]; });
     ut_tap(@"calendar.repeat"); ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskRepeat.class]; },@"日期面板可设置重复");
-    ut_tap(@"repeat.type.weekly"); ut_tap(@"repeat.day.MO"); ut_tap(@"repeat.day.WE"); ut_tap(@"repeat.end.count");
-    ut_ui(^{ UITextField *interval = (UITextField *)ut_find(ut_window,@"repeat.interval"); interval.text = @"2"; [interval sendActionsForControlEvents:UIControlEventEditingChanged];
-        UITextField *count = (UITextField *)ut_find(ut_window,@"repeat.count"); count.text = @"7"; [count sendActionsForControlEvents:UIControlEventEditingChanged]; });
+    ut_tap(@"repeat.type.custom");
+    ut_wait(^BOOL{return ut_find(ut_surface(),@"repeat.picker")!=nil;},@"自定义进入独立滚轮页");
+    ut_ui(^{UIPickerView *picker=(UIPickerView *)ut_find(ut_surface(),@"repeat.picker");[picker selectRow:1 inComponent:0 animated:NO];[picker.delegate pickerView:picker didSelectRow:1 inComponent:0];[picker selectRow:1 inComponent:1 animated:NO];[picker.delegate pickerView:picker didSelectRow:1 inComponent:1];});
+    ut_tap(@"repeat.day.MO"); ut_tap(@"repeat.day.WE"); ut_tap(@"repeat.end"); ut_tap(@"repeat.end.count");
+    ut_ui(^{UITextField *count=(UITextField *)ut_find(ut_surface(),@"repeat.count");count.text=@"7";[count sendActionsForControlEvents:UIControlEventEditingChanged];});ut_tap(@"repeat.end.done");
+    ut_wait(^BOOL{return ut_find(ut_surface(),@"repeat.picker")!=nil;},@"结束条件交回自定义页");
     ut_shot(@"repeat-320.png",320,850,NO); ut_shot(@"repeat-768.png",768,1024,NO);
     ut_tap(@"repeat.done"); ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskCalendar.class] && !ut_top().presentedViewController; },@"重复返回日期面板");
     ut_ui(^{ ut_req([[(UIButton *)ut_find(ut_window,@"calendar.repeat") titleForState:UIControlStateNormal] isEqual:@"每2周"],@"日期面板同步重复状态"); });
     ut_tap(@"calendar.done"); ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"月历返回快捷草稿");
-    ut_tap(@"edit.deadline"); ut_tap(@"calendar.done"); ut_tap(@"edit.save"); ut_home();
+    ut_tap(@"edit.deadline"); ut_ui(^{ut_req(ut_find(ut_surface(),@"calendar.clockRow").hidden && ut_find(ut_surface(),@"calendar.repeat").hidden,@"截止日期仅显示月历，不混入计划时间及重复");}); ut_tap(@"calendar.done"); ut_save(); ut_home();
     NSArray *pending = [ut_store lsPnd:nil]; NSDictionary *task = pending.firstObject; NSString *uuid = task[@"task_id"];
     ut_req([task[@"list_id"] isEqual:listID] && [task[@"timezone_id"] isEqual:@"America/New_York"]
         && [task[@"notes"] isEqual:@"跨天完成记录"] && [task[@"starred"] boolValue]
@@ -197,28 +227,42 @@ static void ut_refs(void) {
     ut_tap([@"list." stringByAppendingString:listID]); ut_tap(@"home.more");
     ut_shot(@"sort-320.png",320,850,NO); ut_tap(@"sort.star");
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskHome.class]; },@"选择最近加星排序");
+    NSDictionary *shortTask=[ut_store crtTsk:@{@"title":@"排序联动夹具",@"list_id":listID,@"urgency":@1,@"difficulty":@3,@"planned_duration":@60} error:nil];
+    ut_wait(^BOOL{return ut_find(ut_table(),[@"task." stringByAppendingString:shortTask[@"task_id"]])!=nil;},@"字段排序夹具刷新");
+    for(NSString *key in @[@"urgency",@"difficulty",@"effort"]) {
+        ut_tap(@"home.more");ut_tap(@"sort.more");ut_tap([@"sort." stringByAppendingString:key]);
+        NSString *expected=[key isEqual:@"urgency"]?uuid:shortTask[@"task_id"];
+        ut_wait(^BOOL { return ut_find([ut_table() cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]],[@"task." stringByAppendingString:expected])!=nil; },[@"清单实际应用字段排序：" stringByAppendingString:key]);
+    }
+    ut_req([ut_store delTsk:shortTask[@"task_id"] error:nil],@"清理排序联动夹具");
+    ut_wait(^BOOL{return ut_find(ut_table(),[@"task." stringByAppendingString:shortTask[@"task_id"]])==nil;},@"字段排序清理刷新");
     ut_tap(@"home.more"); ut_tap(@"sort.date"); ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskHome.class]; },@"恢复日期排序");
     // 旧画面的重复完成意图不能跳到下一轮。
+    __block NSArray *afterFirstCycle;
     ut_ui(^{ UIButton *button = (UIButton *)ut_find(ut_table(),[@"task." stringByAppendingString:uuid]);
-        ut_req([ut_store cmplNxt:uuid error:nil],@"后台先完成重复轮次"); [button sendActionsForControlEvents:UIControlEventTouchUpInside]; });
-    ut_wait(^BOOL { return [ut_store lsOcc:uuid error:nil].count == 1 && [(UIButton *)ut_find(ut_table(),[@"task." stringByAppendingString:uuid]) isEnabled]; },@"过时重复勾选不推进下一轮");
+        ut_req([ut_store cmplNxt:uuid error:nil],@"后台先完成重复轮次"); afterFirstCycle = [ut_store lsOcc:uuid error:nil]; [button sendActionsForControlEvents:UIControlEventTouchUpInside]; });
+    ut_wait(^BOOL { return [[ut_store lsOcc:uuid error:nil] isEqual:afterFirstCycle] && [(UIButton *)ut_find(ut_table(),[@"task." stringByAppendingString:uuid]) isEnabled]; },@"过时重复勾选不推进下一轮");
     NSDictionary *plain = [ut_store crtTsk:@{@"title":@"子任务父级",@"list_id":listID} error:nil];
     ut_wait(^BOOL { return [ut_table() numberOfRowsInSection:0] == 2; },@"新父任务刷新首页");
     ut_ui(^{ NSArray *rows = [ut_store lsPnd:nil]; NSUInteger index = [rows indexOfObjectPassingTest:^BOOL(NSDictionary *row,NSUInteger idx,BOOL *stop) { (void)idx;(void)stop; return [row[@"task_id"] isEqual:plain[@"task_id"]]; }];
         [ut_table().delegate tableView:ut_table() didSelectRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]]; });
-    ut_tap(@"edit.subtask"); ut_title(@"真实子任务"); ut_tap(@"edit.date");
-    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskCalendar.class]; },@"子任务也使用系统月历");
-    ut_ui(^{ ut_req(![(UIButton *)ut_find(ut_surface(),@"calendar.repeat") isEnabled],@"子任务原生月历禁用重复"); });
-    ut_tap(@"calendar.clear"); ut_tap(@"edit.save");
-    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && [((UITextView *)ut_find(ut_top().view,@"edit.title")).text isEqual:@"子任务父级"]
-        && !ut_top().presentedViewController; },@"子任务保存后回到父级详情");
+    ut_tap(@"edit.subtask");
+    ut_ui(^{UITextField *field=(UITextField *)ut_find(ut_surface(),@"edit.childTitle");field.text=@"真实子任务";[field.delegate textFieldShouldReturn:field];[field.delegate textFieldShouldReturn:field];});
+    ut_wait(^BOOL{return [[ut_store lsTsks:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"parent_id == %@",plain[@"task_id"]]].count==1;},@"内联子任务完成后回到父级详情");
     NSArray *children = [[ut_store lsTsks:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"parent_id == %@",plain[@"task_id"]]];
     ut_req(children.count == 1 && [children.firstObject[@"list_id"] isEqual:listID],@"子任务保持父级和清单");
-    ut_tap([@"child." stringByAppendingString:children.firstObject[@"task_id"]]); ut_title(@"修改子任务"); ut_tap(@"edit.save");
+    ut_wait(^BOOL{return ut_find(ut_surface(),[@"child." stringByAppendingString:children.firstObject[@"task_id"]])!=nil;},@"新子任务显示在父级详情");
+    ut_tap([@"child." stringByAppendingString:children.firstObject[@"task_id"]]); ut_title(@"修改子任务"); ut_tap(@"edit.date");
+    ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskCalendar.class];},@"子任务也使用系统月历");
+    ut_ui(^{ut_req(![(UIButton *)ut_find(ut_surface(),@"calendar.repeat") isEnabled],@"子任务月历禁用重复");[ut_top() dismissViewControllerAnimated:NO completion:nil];});ut_save();
     ut_wait(^BOOL { UIButton *entry = (UIButton *)ut_find(ut_surface(),[@"child." stringByAppendingString:children.firstObject[@"task_id"]]);
         return [entry.titleLabel.text isEqual:@"修改子任务"] && !ut_nav.transitionCoordinator; },@"编辑子任务后父级即时显示新标题");
+    ut_tap(@"edit.subtask");ut_ui(^{((UITextField *)ut_find(ut_top().view,@"edit.childTitle")).text=@"返回保存子任务";});
     ut_tap(@"edit.back"); ut_home();
-    ut_tap(@"home.more"); ut_tap(@"list.reorder"); ut_wait(^BOOL { return ut_table().editing; },@"我的顺序启用原生拖动");
+    NSArray *backChildren=[[ut_store lsTsks:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"parent_id == %@ AND title == %@",plain[@"task_id"],@"返回保存子任务"]];
+    ut_req(backChildren.count==1,@"返回详情接续未按键盘完成的子任务且只保存一次");ut_req([ut_store delTsk:backChildren.firstObject[@"task_id"] error:nil],@"清理返回保存子任务夹具");
+    ut_wait(^BOOL{return ut_find(ut_table(),[@"task." stringByAppendingString:backChildren.firstObject[@"task_id"]])==nil;},@"返回保存夹具清理后刷新");
+    ut_tap(@"home.more"); ut_tap(@"sort.more"); ut_tap(@"list.reorder"); ut_wait(^BOOL { return ut_table().editing; },@"我的顺序启用原生拖动");
     ut_ui(^{ NSIndexPath *from = [NSIndexPath indexPathForRow:0 inSection:0], *to = [NSIndexPath indexPathForRow:1 inSection:0];
         if ([[ut_table().delegate tableView:ut_table() targetIndexPathForMoveFromRowAtIndexPath:from toProposedIndexPath:to] isEqual:to])
             [ut_table().dataSource tableView:ut_table() moveRowAtIndexPath:from toIndexPath:to]; });
@@ -228,29 +272,42 @@ static void ut_refs(void) {
 // 运行真实首页、编辑和事务刷新验收。
 static void ut_run(void) {
     ut_wait(^BOOL { return ut_find(ut_window, @"home.empty") != nil && [(UIButton *)ut_find(ut_window, @"home.empty") isEnabled]; }, @"空状态可新建");
-    // 验证原生渐变覆盖页面、生命周期停止以及恢复动画。
+    // 验证中性背景、明暗对比及实际图标与触摸尺寸。
     ut_ui(^{
-        UIView *background = ut_find(ut_top().view, @"theme.gradient");
-        ut_req([ut_find(background,@"theme.material") isKindOfClass:UIVisualEffectView.class], @"App渐变沿用同一原生磨砂底层");
-        ut_req(lb_fnt(UIFontTextStyleBody,nil).pointSize>=20 && lb_fnt(UIFontTextStyleTitle2,nil).pointSize>=28, @"正文和标题采用统一大字");
-        ut_req([background.layer isKindOfClass:CAGradientLayer.class] && !background.userInteractionEnabled, @"原生渐变不拦截触摸");
-        CAGradientLayer *gradient = (CAGradientLayer *)background.layer;
-        ut_req(gradient.colors.count == 3 && CGRectEqualToRect(background.frame, ut_top().view.bounds), @"压暗青橙覆盖页面边界");
-        [NSNotificationCenter.defaultCenter postNotificationName:UIApplicationDidBecomeActiveNotification object:nil];
-        BOOL reduced = UIAccessibilityIsReduceMotionEnabled();
-        ut_req(([[gradient animationKeys] containsObject:@"teal-orange"]) == !reduced, @"缓动遵循系统减少动态效果");
-        [NSNotificationCenter.defaultCenter postNotificationName:UIApplicationWillResignActiveNotification object:nil];
-        ut_req(![gradient animationForKey:@"teal-orange"], @"退入后台停止渐变动画");
-        [NSNotificationCenter.defaultCenter postNotificationName:UIApplicationDidBecomeActiveNotification object:nil];
-        ut_req(([[gradient animationKeys] containsObject:@"teal-orange"]) == !reduced, @"返回前台恢复合规动画");
-        [background removeFromSuperview];
-        ut_req(![gradient animationForKey:@"teal-orange"], @"离开窗口停止渐变动画");
-        [ut_top().view insertSubview:background atIndex:0];
+        UIView *background = ut_find(ut_top().view, @"theme.surface");
+        ut_req(background != nil && !background.userInteractionEnabled && CGRectEqualToRect(background.frame,ut_top().view.bounds), @"中性背景覆盖页面且不拦触摸");
+        ut_req(![background.layer isKindOfClass:CAGradientLayer.class] && background.layer.animationKeys.count==0, @"主App不再叠加渐变或装饰动画");
+        ut_req(lb_fnt(UIFontTextStyleBody,nil).pointSize>=20 && lb_fnt(UIFontTextStyleTitle2,nil).pointSize>=28, @"正文和标题保留可读大字");
+        UIButton *create=(UIButton *)ut_find(ut_top().view,@"home.create");
+        UIButton *label=(UIButton *)ut_find(ut_top().view,@"home.newlist");
+        CGFloat (^luma)(UIColor *)=^CGFloat(UIColor *color) {
+            CGFloat r=0,g=0,b=0,a=0;[color getRed:&r green:&g blue:&b alpha:&a];
+            CGFloat rgb[3]={r,g,b};for (int i=0;i<3;i++)rgb[i]=rgb[i]<=0.04045?rgb[i]/12.92:pow((rgb[i]+0.055)/1.055,2.4);
+            return 0.2126*rgb[0]+0.7152*rgb[1]+0.0722*rgb[2];
+        };
+        for (NSNumber *style in @[@(UIUserInterfaceStyleLight),@(UIUserInterfaceStyleDark)]) {
+            UITraitCollection *traits=[UITraitCollection traitCollectionWithUserInterfaceStyle:style.integerValue];
+            CGFloat paper=luma([background.backgroundColor resolvedColorWithTraitCollection:traits]);
+            CGFloat ink=luma([label.configuration.baseForegroundColor resolvedColorWithTraitCollection:traits]);
+            CGFloat fill=luma([create.configuration.background.backgroundColor resolvedColorWithTraitCollection:traits]);
+            CGFloat text=luma([create.configuration.baseForegroundColor resolvedColorWithTraitCollection:traits]);
+            ut_req((MAX(ink,paper)+0.05)/(MIN(ink,paper)+0.05)>=4.5,@"明暗普通文字对比达4.5");
+            ut_req((MAX(text,fill)+0.05)/(MIN(text,fill)+0.05)>=4.5,@"明暗主要按钮对比达4.5");
+        }
+        for (NSNumber *offset in @[@8,@28,@48]) {
+            CGPoint point=[create convertPoint:CGPointMake(28,offset.doubleValue) toView:ut_window]; UIView *hit=[ut_window hitTest:point withEvent:nil];
+            ut_req(hit==create || [hit isDescendantOfView:create],@"上浮创建按钮全区域实际可触摸");
+        }
+        ut_req(create.configuration.image.size.width==24 && create.bounds.size.width>=44 && create.bounds.size.height>=44,@"MingCute保持24pt图形与至少44pt触摸区");
     });
+    ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;});ut_shot(@"empty-light-320.png",320,568,NO);
+    ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleDark;});
     ut_shot(@"empty-320.png", 320, 568, NO); ut_tap(@"home.empty");
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class]; }, @"空态进入编辑");
     ut_tap(@"edit.cancel"); ut_home(); ut_req([ut_store lsTsks:nil].count == 0, @"取消不创建数据");
     ut_tap(@"home.create"); ut_wait(^BOOL { return ut_find(ut_window, @"edit.title") != nil; }, @"固定新建入口");
+    ut_wait(^BOOL { UIViewController *page=ut_top(); UINavigationController *nav=page.navigationController; CGRect frame=[nav.view convertRect:nav.view.bounds toView:ut_window]; return page.view.window && !nav.isBeingPresented && !nav.transitionCoordinator && frame.size.height<=200 && CGRectGetMaxY(frame)<ut_window.bounds.size.height-100; },@"快捷新增贴键盘且没有整页空白");
+    ut_ui(^{ UIGraphicsImageRenderer *capture=[[UIGraphicsImageRenderer alloc] initWithSize:ut_window.bounds.size]; [[capture PNGDataWithActions:^(__unused UIGraphicsImageRendererContext *context){[ut_window drawViewHierarchyInRect:ut_window.bounds afterScreenUpdates:YES];}] writeToFile:[ut_docs stringByAppendingPathComponent:@"screens/quick-keyboard.png"] atomically:YES]; });
     ut_title(@"新建真实任务");
     ut_tap(@"edit.more");
     ut_ui(^{ UISwitch *toggle = (UISwitch *)ut_find(ut_window, @"plan.enabled"); toggle.on = YES; [toggle sendActionsForControlEvents:UIControlEventValueChanged];
@@ -258,7 +315,7 @@ static void ut_run(void) {
         toggle = (UISwitch *)ut_find(ut_window, @"deadline.enabled"); toggle.on = YES; [toggle sendActionsForControlEvents:UIControlEventValueChanged];
     });
     ut_shot(@"new-320.png", 320, 568, NO); ut_shot(@"new-375.png", 375, 667, NO);
-    ut_tap(@"edit.save"); ut_home();
+    ut_save(); ut_home();
     NSDictionary *created = [ut_store lsPnd:nil].firstObject;
     ut_req([created[@"title"] isEqual:@"新建真实任务"] && [created[@"schedule_kind"] isEqual:@"timed"] && [created[@"deadline_kind"] isEqual:@"date"], @"界面创建日期和独立截止");
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
@@ -275,6 +332,8 @@ static void ut_run(void) {
     });
     for (NSNumber *width in @[@320, @375, @390, @768, @1024, @1366]) ut_shot([NSString stringWithFormat:@"home-%@.png", width], width.doubleValue, 850, NO);
     ut_shot(@"home-large-320.png", 320, 850, YES);
+    ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;});ut_shot(@"home-light-375.png",375,850,NO);
+    ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleDark;});
     ut_tap([@"task." stringByAppendingString:early[@"task_id"]]);
     ut_wait(^BOOL { return [ut_store lsCmpl:nil].count == 1 && [ut_table() numberOfRowsInSection:1] == 0 && ut_find(ut_table(), @"home.completed") != nil; }, @"勾选提交后移动到折叠完成区");
     ut_tap(@"home.completed");
@@ -299,7 +358,7 @@ static void ut_run(void) {
         return root.view.keyboardLayoutGuide.layoutFrame.size.height > 100; }, @"实际键盘已显示");
     ut_ui(^{ UIViewController *root = ut_top(); UIScrollView *form = (UIScrollView *)ut_find(ut_window, @"edit.form");
         ut_req(CGRectGetMaxY(form.frame) <= CGRectGetMinY(root.view.keyboardLayoutGuide.layoutFrame) + 1, @"编辑滚动区避让键盘"); });
-    ut_tap(@"edit.save"); ut_home();
+    ut_save(); ut_home();
     NSDictionary *changed = [ut_store rdTsk:late[@"task_id"] error:nil];
     ut_req([changed[@"title"] isEqual:@"修改后保留高级字段"] && [changed[@"starred"] isEqual:late[@"starred"]]
         && [changed[@"recurrence"] isEqual:late[@"recurrence"]] && [changed[@"urgency"] isEqual:late[@"urgency"]]
@@ -308,7 +367,7 @@ static void ut_run(void) {
     ut_tap(@"home.create"); ut_wait(^BOOL { return ut_find(ut_window, @"edit.save") != nil; }, @"再次新建");
     ut_title(@"  ");
     ut_ui(^{ ut_req(![(UIButton *)ut_find(ut_window,@"edit.save") isEnabled],@"空标题禁用快捷保存"); });
-    ut_title([@"a" stringByPaddingToLength:1025 withString:@"a" startingAtIndex:0]); ut_tap(@"edit.save");
+    ut_title([@"a" stringByPaddingToLength:1025 withString:@"a" startingAtIndex:0]); ut_save();
     ut_wait(^BOOL { return [ut_top() isKindOfClass:UIAlertController.class]; }, @"非法标题明确报错");
     ut_req([ut_store lsTsks:nil].count == 3, @"字段非法未写入数据库");
     ut_ui(^{ ut_req([[(UITextView *)ut_find(ut_window, @"edit.title") text] length] == 1025, @"失败保留编辑输入");
@@ -332,7 +391,7 @@ static void ut_run(void) {
     ut_wait(^BOOL { return ut_find(ut_window, @"edit.title") != nil && !ut_nav.transitionCoordinator; }, @"打开将被后台删除的任务");
     ut_title(@"不应写入已删除任务");
     ut_req([ut_store delTsk:late[@"task_id"] error:nil], @"编辑期间后台删除");
-    ut_tap(@"edit.save");
+    ut_save();
     ut_wait(^BOOL { return [ut_nav.topViewController.presentedViewController isKindOfClass:UIAlertController.class]; }, @"已删除任务保存被拒绝");
     NSDictionary *deleted = [ut_store rdTsk:late[@"task_id"] error:nil];
     ut_req([deleted[@"deleted"] boolValue] && [deleted[@"title"] isEqual:changed[@"title"]], @"失败未复活任务或覆盖标题");
@@ -343,7 +402,7 @@ static void ut_sttng(void) {
     ut_ui(^{
         UIViewController *controller = [NSClassFromString(@"LBSetCtl") new];
         ut_req(controller != nil, @"Swift后台设置运行类型存在");
-        [ut_nav pushViewController:controller animated:NO];
+        [ut_nav setNavigationBarHidden:NO animated:NO]; [ut_nav pushViewController:controller animated:NO];
         UISwitch *monitor = (UISwitch *)ut_find(controller.view, @"settings.enabled");
         UIButton *preview = (UIButton *)ut_find(controller.view, @"settings.preview");
         UIButton *recovery = (UIButton *)ut_find(controller.view, @"settings.recovery");
@@ -378,6 +437,13 @@ static void ut_sttng(void) {
         [controller setValue:@NO forKey:@"storeFailed"]; [status sendActionsForControlEvents:UIControlEventTouchUpInside];
     });
     ut_wait(^BOOL { return [(UIButton *)ut_find(ut_top().view, @"settings.preview") isEnabled]; }, @"Darwin就绪恢复预览入口");
+    ut_ui(^{
+        UISwitch *monitor=(UISwitch *)ut_find(ut_top().view,@"settings.enabled"); UIButton *status=(UIButton *)ut_find(ut_top().view,@"settings.status");
+        ut_req(lb_svcfg(@{@"enabled":@NO}),@"外部提交关闭配置");[status sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req(!monitor.on && ![(UIButton *)ut_find(ut_top().view,@"settings.preview") isEnabled],@"状态刷新同步关闭意图和操作可用性");
+        ut_req(lb_svcfg(@{@"enabled":@YES}),@"外部提交启用配置");[status sendActionsForControlEvents:UIControlEventTouchUpInside];
+        ut_req(monitor.on && [(UIButton *)ut_find(ut_top().view,@"settings.preview") isEnabled],@"状态刷新同步启用意图，开关不保留旧值");
+    });
     ut_shot(@"settings-large-320.png", 320, 850, YES);
     ut_ui(^{ [ut_nav popViewControllerAnimated:NO]; });
 }
@@ -429,7 +495,7 @@ static void ut_mon(void) {
 }
 // 通过原生导航打开统一新建或已有详情。
 static void ut_edt(NSDictionary *task) {
-    ut_ui(^{ [ut_nav pushViewController:[[TaskEdit alloc] initWithStore:ut_store task:task saved:nil] animated:NO]; });
+    ut_ui(^{ [ut_nav setNavigationBarHidden:NO animated:NO]; [ut_nav pushViewController:[[TaskEdit alloc] initWithStore:ut_store task:task saved:nil] animated:NO]; });
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && ut_find(ut_top().view,@"edit.title"); },@"统一编辑页面就绪");
 }
 // 从系统月历和时刻控件修改草稿。
@@ -444,13 +510,75 @@ static void ut_date(NSDate *date) {
         NSDateComponents *parts = [calendar.calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay fromDate:date];
         UICalendarSelectionSingleDate *selection = (UICalendarSelectionSingleDate *)calendar.selectionBehavior;
         [selection setSelectedDate:parts animated:NO]; [(TaskCalendar *)ut_top() dateSelection:selection didSelectDate:parts];
-        UISwitch *toggle = (UISwitch *)ut_find(ut_top().view,@"calendar.timed"); toggle.on = YES; [toggle sendActionsForControlEvents:UIControlEventValueChanged];
+        UIButton *toggle = (UIButton *)ut_find(ut_top().view,@"calendar.timed"); [toggle sendActionsForControlEvents:UIControlEventTouchUpInside];
         picker.date = date;
     });
     ut_tap(@"calendar.done");
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"日期选择回到同一草稿");
 }
 // 验证统一编辑校验、完整回填和真实计时失效链路。
+// 取消重复与月历必须保留原草稿，互斥入口按草稿实时更新。
+static void ut_clsr(void) API_AVAILABLE(ios(16.0));
+static void ut_clsr(void) {
+    for (NSDictionary *task in [ut_store lsTsks:nil]) if (![task[@"deleted"] boolValue]) [ut_store delTsk:task[@"task_id"] error:nil];
+    ut_edt(nil); ut_title(@"取消重复验证"); ut_tap(@"edit.more"); ut_tap(@"edit.repeat");
+    ut_tap(@"repeat.type.custom"); ut_ui(^{[ut_top().navigationController popViewControllerAnimated:NO];}); ut_tap(@"repeat.cancel");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"取消重复回到原草稿");
+    ut_ui(^{ ut_req(![(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn],@"取消重复不能启用原本没有的日期"); });
+    ut_tap(@"edit.date"); ut_tap(@"calendar.repeat"); ut_tap(@"repeat.type.weekly");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskCalendar.class] && !ut_top().presentedViewController; },@"重复修改暂存在月历内");
+    ut_ui(^{ [ut_top() dismissViewControllerAnimated:YES completion:nil]; });
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"取消月历回到草稿");
+    ut_ui(^{ ut_req(![(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn] && [[(UIButton *)ut_find(ut_top().view,@"edit.repeat") titleForState:UIControlStateNormal] isEqual:@"不重复"],@"取消月历同时放弃其中日期与重复修改"); });
+    ut_save(); ut_home();
+    NSDictionary *plain = [ut_store lsPnd:nil].firstObject;
+    ut_req([plain[@"schedule_kind"] isEqual:@"none"] && [plain[@"recurrence"] count]==0,@"取消后保存不产生隐藏提醒");
+    ut_edt(plain); ut_tap(@"edit.more"); ut_tap(@"edit.repeat"); ut_tap(@"repeat.type.daily");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"确认重复回到详情");
+    ut_ui(^{ ut_req([(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn] && ![(UIButton *)ut_find(ut_top().view,@"edit.subtask") isEnabled],@"确认重复自动补日期并立即禁用子任务"); });
+    ut_ui(^{ UISwitch *enabled=(UISwitch *)ut_find(ut_top().view,@"plan.enabled"); enabled.on=NO; [enabled sendActionsForControlEvents:UIControlEventValueChanged];
+        ut_req([[(UIButton *)ut_find(ut_top().view,@"edit.repeat") titleForState:UIControlStateNormal] isEqual:@"不重复"] && [(UIButton *)ut_find(ut_top().view,@"edit.subtask") isEnabled],@"高级开关清除日期同步清除重复，不留下无法保存的草稿"); });
+    ut_tap(@"edit.repeat"); ut_tap(@"repeat.type.daily");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"清除日期后可再次设置重复");
+    ut_tap(@"edit.repeat"); ut_tap(@"repeat.type.none");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"清除重复返回详情");
+    ut_ui(^{ ut_req([(UIButton *)ut_find(ut_top().view,@"edit.subtask") isEnabled],@"清除重复立即恢复子任务入口"); });
+    ut_tap(@"edit.cancel"); ut_home();
+    [ut_store delTsk:plain[@"task_id"] error:nil];
+    // 首页重试必须同步连接状态，存储未就绪时菜单不能强制解包。
+    __block BOOL fail = YES; __block TaskStore *loaded; __block NSUInteger attempts = 0;
+    Method method = class_getClassMethod(TaskStore.class,@selector(shrd:)); IMP original = method_getImplementation(method);
+    IMP replacement = imp_implementationWithBlock(^TaskStore *(__unused id receiver, NSError **error) {
+        if (fail) { if (error) *error = [NSError errorWithDomain:@"closure" code:SQLITE_CANTOPEN userInfo:nil]; return nil; } return ut_store;
+    });
+    __block TaskHome *probe; __block NSArray *controllers;
+    ut_ui(^{ method_setImplementation(method,replacement); controllers = ut_nav.viewControllers;
+        probe = [[TaskHome alloc] initWithStore:nil settings:nil]; probe.onStore = ^(TaskStore *store) { loaded=store; attempts++; };
+        [ut_nav setViewControllers:@[probe] animated:NO];
+    });
+    ut_wait(^BOOL { return attempts>0 && [[(UIButton *)ut_find(probe.view,@"home.empty") configuration].title isEqual:@"读取失败"]; },@"数据库首次失败可见且有重试入口");
+    ut_tap(@"home.more"); ut_tap(@"home.lists");
+    ut_ui(^{ ut_req(!probe.presentedViewController && loaded==nil,@"存储缺失时排序与清单入口不崩溃、不进入无效表单"); fail=NO; });
+    ut_tap(@"home.empty");
+    ut_wait(^BOOL { return loaded==ut_store && [[(UIButton *)ut_find(probe.view,@"home.empty") configuration].title isEqual:@"暂无待办"]; },@"重试恢复连接并通知采集与服务共用同一库");
+    ut_ui(^{ method_setImplementation(method,original); [ut_nav setViewControllers:controllers animated:NO]; }); imp_removeBlock(replacement);
+    // 设置状态实时读取故障标志，不能保留首次启动的失败快照。
+    __block UIViewController *settings; __block BOOL unavailable=YES;
+    ut_ui(^{ settings=[objc_getClass("LBSetCtl") new]; [settings setValue:[^BOOL{return unavailable;} copy] forKey:@"storeIssue"]; [ut_nav pushViewController:settings animated:NO]; });
+    ut_tap(@"settings.status"); ut_ui(^{ ut_req([[(UIButton *)ut_find(settings.view,@"settings.status") configuration].title isEqual:@"数据库不可用"],@"设置显示当前数据库故障"); unavailable=NO; });
+    ut_tap(@"settings.status"); ut_ui(^{ ut_req(![[(UIButton *)ut_find(settings.view,@"settings.status") configuration].title isEqual:@"数据库不可用"],@"数据库恢复后设置撤销旧故障"); [ut_nav popViewControllerAnimated:NO]; });
+    // 冷启动必须读取先前已保存的排序，不能重新退回日期排序。
+    NSDictionary *first=[ut_store crtTsk:@{@"title":@"顺序甲",@"position":@0,@"due_at":@(NSDate.date.timeIntervalSince1970+7200)} error:nil];
+    NSDictionary *second=[ut_store crtTsk:@{@"title":@"顺序乙",@"position":@1,@"due_at":@(NSDate.date.timeIntervalSince1970+3600)} error:nil];
+    NSString *key=[NSString stringWithFormat:@"%@.%@.sort",ut_store.changeNote,TS_DFLT_LST];
+    ut_ui(^{ [NSUserDefaults.standardUserDefaults setObject:@"manual" forKey:key];
+        TaskHome *fresh=[[TaskHome alloc] initWithStore:ut_store settings:nil]; [ut_nav setViewControllers:@[fresh] animated:NO];
+    });
+    ut_wait(^BOOL { UITableViewCell *cell=[ut_table() cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]];
+        return ut_find(cell,[@"task." stringByAppendingString:first[@"task_id"]])!=nil; },@"重新创建首页沿用已保存的手动排序");
+    ut_ui(^{ [NSUserDefaults.standardUserDefaults removeObjectForKey:key]; [ut_nav setViewControllers:controllers animated:NO]; });
+    ut_req([ut_store delTsk:first[@"task_id"] error:nil] && [ut_store delTsk:second[@"task_id"] error:nil],@"排序验证夹具清理");
+}
 static void ut_edit(void) API_AVAILABLE(ios(16.0));
 static void ut_edit(void) {
     for (NSDictionary *task in [ut_store lsTsks:nil]) if (![task[@"deleted"] boolValue]) [ut_store delTsk:task[@"task_id"] error:nil];
@@ -459,18 +587,18 @@ static void ut_edit(void) {
     ut_title(@"   \n ");
     ut_ui(^{ ut_req(![(UIButton *)ut_find(ut_top().view,@"edit.save") isEnabled],@"统一编辑纯空白标题不可保存"); });
     ut_title([@"a" stringByPaddingToLength:1025 withString:@"a" startingAtIndex:0]);
-    long long revision = [ut_store revision:nil]; ut_tap(@"edit.save");
+    long long revision = [ut_store revision:nil]; ut_save();
     ut_wait(^BOOL { return [ut_top() isKindOfClass:UIAlertController.class]; },@"标题过长在保存前报错");
     ut_req([ut_store revision:nil] == revision && [ut_store lsPnd:nil].count == 0,@"文本校验失败不提交或产生提醒");
     ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil]; });
     ut_title(@"统一页面保存"); ut_tap(@"edit.details");
     ut_ui(^{ UITextView *notes = (UITextView *)ut_find(ut_top().view,@"edit.notes"); notes.text = [@"a" stringByPaddingToLength:8193 withString:@"a" startingAtIndex:0]; [notes.delegate textViewDidChange:notes]; });
-    ut_tap(@"edit.save"); ut_wait(^BOOL { return [ut_top() isKindOfClass:UIAlertController.class]; },@"说明超限保存前校验");
+    ut_save(); ut_wait(^BOOL { return [ut_top() isKindOfClass:UIAlertController.class]; },@"说明超限保存前校验");
     ut_req([ut_store revision:nil] == revision,@"说明校验失败没有提交修订");
     ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil]; });
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"错误弹窗关闭后继续原草稿");
     ut_ui(^{ UITextView *notes = (UITextView *)ut_find(ut_top().view,@"edit.notes"); notes.text = @"第一行\n第二行"; [notes.delegate textViewDidChange:notes]; });
-    NSDate *now = NSDate.date; ut_date(now); ut_tap(@"edit.save"); ut_home();
+    NSDate *now = NSDate.date; ut_date(now); ut_save(); ut_home();
     NSDictionary *task = [ut_store lsPnd:nil].firstObject; NSString *uuid = task[@"task_id"];
     ut_req([task[@"title"] isEqual:@"统一页面保存"] && [task[@"notes"] isEqual:@"第一行\n第二行"] && [task[@"schedule_kind"] isEqual:@"timed"],@"标题说明及具体时刻一次写入");
     ut_wait(^BOOL { return [ut_events.lastObject[@"alert"] isKindOfClass:NSDictionary.class] && [ut_events.lastObject[@"alert"][@"task_id"] isEqual:uuid]; },@"页面保存立即通知真实调度器触发");
@@ -478,10 +606,10 @@ static void ut_edit(void) {
     ut_ui(^{ ut_req([[(UITextView *)ut_find(ut_top().view,@"edit.title") text] isEqual:task[@"title"]]
         && [[(UITextView *)ut_find(ut_top().view,@"edit.notes") text] isEqual:task[@"notes"]],@"已有任务标题说明完整回填"); });
     ut_title(@" \n "); ut_ui(^{ ut_req(![(UIButton *)ut_find(ut_top().view,@"edit.save") isEnabled],@"已有任务清空标题也禁用保存"); }); ut_title(task[@"title"]);
-    ut_date([NSDate dateWithTimeIntervalSinceNow:3600]); ut_tap(@"edit.save"); ut_home();
+    ut_date([NSDate dateWithTimeIntervalSinceNow:3600]); ut_save(); ut_home();
     ut_wait(^BOOL { return ut_events.lastObject[@"alert"] == NSNull.null; },@"改为未来时刻立即撤下旧提醒");
     NSDictionary *history = [ut_store lsOcc:uuid error:nil].firstObject;
-    ut_req([history[@"action"] isEqual:@"invalidated"] && [history[@"status"] isEqual:@"handled"],@"旧提醒处理记录永久失效");
+    ut_req([history[@"action"] isEqual:@"invalidated"] && [history[@"status"] isEqual:@"resolved"],@"旧提醒处理记录永久失效");
     NSDictionary *future = [ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil];
     ut_req([future[@"alerts"] count] == 1 && [future[@"alerts"][0][@"remind_at"] doubleValue] > NSDate.date.timeIntervalSince1970 + 3500,@"后台计划仅保留新时刻");
     // 旧候选已经进入展示队列时，提交后也不能显示。
@@ -507,7 +635,7 @@ static void ut_edit(void) {
         UIDatePicker *plan = (UIDatePicker *)ut_find(ut_top().view,@"plan.time"), *ddl = (UIDatePicker *)ut_find(ut_top().view,@"deadline.time");
         ut_req(fabs(plan.date.timeIntervalSince1970-oldTime)<1 && fabs(ddl.date.timeIntervalSince1970-oldTime-7200)<1,@"计划截止保留原始绝对时刻精度");
     });
-    ut_date([NSDate dateWithTimeIntervalSinceNow:3600]); ut_tap(@"edit.save"); ut_home();
+    ut_date([NSDate dateWithTimeIntervalSinceNow:3600]); ut_save(); ut_home();
     ut_req(NSDate.date.timeIntervalSince1970 < oldTime,@"修改在旧计时到期之前提交");
     while (NSDate.date.timeIntervalSince1970 < oldTime + 1) usleep(20000);
     ut_req([ut_store lsOcc:pendingID error:nil].count == 0,@"修改后跨过旧时间仍无触发记录");
@@ -525,6 +653,7 @@ static void ut_edit(void) {
 }
 
 // 验证原生重复设置、单次延后及连续提前完成。
+static void ut_hdue(NSString *path, NSString *id);
 static void ut_rpt(void) API_AVAILABLE(ios(16.0));
 static void ut_rpt(void) {
     for (NSDictionary *task in [ut_store lsTsks:nil]) if (![task[@"deleted"] boolValue]) [ut_store delTsk:task[@"task_id"] error:nil];
@@ -533,9 +662,9 @@ static void ut_rpt(void) {
         ut_edt(nil); ut_title(@"重复链路验证"); ut_date(NSDate.date);
         ut_tap(@"edit.more"); ut_tap(@"edit.repeat");
         ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskRepeat.class]; },@"原生重复规则页面就绪");
-        ut_tap([@"repeat.type." stringByAppendingString:type]); ut_tap(@"repeat.done");
+        ut_tap([@"repeat.type." stringByAppendingString:type]);
         ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"重复规则返回统一编辑");
-        ut_tap(@"edit.save"); ut_home();
+        ut_save(); ut_home();
         NSString *uuid = [ut_store lsPnd:nil].firstObject[@"task_id"];
         NSDictionary *task = [ut_store rdTsk:uuid error:nil];
         BOOL repeated = ![type isEqual:@"none"];
@@ -544,14 +673,18 @@ static void ut_rpt(void) {
         __block NSDictionary *current;
         ut_ui(^{ current = [ut_events.lastObject[@"alert"] copy]; });
         if ([type isEqual:@"daily"]) {
-            NSNumber *until = @(NSDate.date.timeIntervalSince1970 + 3);
-            ut_ui(^{ [ut_sched act:@"snooze" until:until occID:current[@"occurrence_id"]]; });
+            NSTimeInterval start = NSDate.date.timeIntervalSince1970;
+            ut_ui(^{ [ut_sched hold:@"snooze" occID:current[@"occurrence_id"]]; });
             ut_wait(^BOOL { return ut_events.lastObject[@"alert"] == NSNull.null; },@"单次延后立即撤下当前提醒");
-            ut_req([[ut_store rdTsk:uuid error:nil] isEqual:task],@"稍后提醒不修改任务或整个重复规则");
+            ut_req([[ut_store rdTsk:uuid error:nil] isEqual:task],@"单次延期不修改任务或整个重复规则");
             NSDictionary *plan = [ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil];
             NSDictionary *snoozed = [plan[@"alerts"] firstObject];
+            NSNumber *until = snoozed[@"remind_at"];
             ut_req([snoozed[@"occurrence_id"] isEqual:current[@"occurrence_id"]] && [snoozed[@"cycle_at"] isEqual:current[@"cycle_at"]]
-                && [snoozed[@"scheduled_at"] isEqual:current[@"scheduled_at"]] && [snoozed[@"remind_at"] isEqual:until],@"延后仅替换当前Occurrence提醒时刻");
+                && [snoozed[@"scheduled_at"] isEqual:current[@"scheduled_at"]] && until.doubleValue-start>=300 && until.doubleValue-start<302,@"五分钟延期仅替换当前Occurrence提醒时刻");
+            // 缩短隔离库期限，生产入口仍严格校验一次五分钟。
+            ut_hdue(ut_store.path,current[@"occurrence_id"]);
+            until = [ut_store lsOcc:uuid error:nil].firstObject[@"hold_until"]; notify_post(ut_store.changeNote.UTF8String);
             ut_wait(^BOOL { for (NSDictionary *event in ut_events) {
                 NSDictionary *alert = event[@"alert"];
                 if ([alert isKindOfClass:NSDictionary.class] && [alert[@"occurrence_id"] isEqual:current[@"occurrence_id"]]
@@ -582,7 +715,9 @@ static void ut_rpt(void) {
                 }
                 NSArray *history = [ut_store lsOcc:uuid error:nil]; NSMutableSet *ids = [NSMutableSet set];
                 for (NSDictionary *item in history) [ids addObject:item[@"occurrence_id"]];
-                ut_req(history.count == 9 && ids.count == 9,@"同一任务的九次完成保留九个独立Occurrence");
+                NSArray *resolved = [history filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"status == 'resolved' AND action == 'complete'"]];
+                NSArray *nextPending = [history filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"status == 'pending'"]];
+                ut_req(resolved.count == 9 && nextPending.count == 1 && history.count == 10 && ids.count == 10,@"九次完成各一终态且只有一个下一轮待提醒");
                 ut_shot(@"phase06-next-cycle-320.png",320,850,NO);
             }
         } else {
@@ -607,7 +742,7 @@ static void ut_schd(void) {
     for (NSDictionary *task in tasks) {
         NSDictionary *occ = [ut_store lsOcc:task[@"task_id"] error:nil].firstObject; [occurrences addObject:occ];
         NSTimeInterval delay = [occ[@"triggered_at"] doubleValue] - [task[@"due_at"] doubleValue];
-        ut_req(delay >= 0 && delay < 2 && [occ[@"status"] isEqual:@"triggered"],@"iPhone到期误差小于两秒且不提前触发");
+        ut_req(delay >= 0 && delay < 2 && [occ[@"status"] isEqual:@"presented"],@"iPhone到期误差小于两秒且不提前触发");
     }
     for (NSUInteger index = 0; index < tasks.count; index++) {
         ut_wait(^BOOL { return [ut_events.lastObject[@"alert"] isKindOfClass:NSDictionary.class] && [ut_events.lastObject[@"alert"][@"task_id"] isEqual:tasks[index][@"task_id"]]; },@"到期队列按提醒顺序展示");
@@ -659,6 +794,55 @@ static void ut_svc(void) {
 }
 
 #include "test_hud.inc"
+#include "test_signal.inc"
+#include "test_parity.inc"
+
+// 前台呈现失败保持待接管状态，超时取消后可再次打开采集。
+static void ut_bridge(void) {
+    __block id<UIApplicationDelegate> delegate; __block UIWindow *window; __block UTHost *host;
+    Method method=class_getClassMethod(TaskStore.class,@selector(shrd:)); IMP original=method_getImplementation(method);
+    IMP replacement=imp_implementationWithBlock(^TaskStore *(__unused id receiver,__unused NSError **error){return ut_store;});
+    __block int lock=-1;
+    ut_ui(^{
+        method_setImplementation(method,replacement); ut_req(lb_svcfg(@{@"enabled":@YES}),@"采集夹具启用独立配置");
+        lock=lb_lckhud();ut_req(lock>=0,@"采集夹具持有真实服务锁");
+        delegate=[objc_getClass("LBAppDel") new]; [delegate application:UIApplication.sharedApplication didFinishLaunchingWithOptions:nil];
+        window=[(id)delegate valueForKey:@"window"]; host=[UTHost new];host.rejects=YES;window.rootViewController=host;[window makeKeyAndVisible];
+    });
+    @try {
+        NSDictionary *task=[ut_store crtTsk:@{@"title":@"采集闭环",@"due_at":@(NSDate.date.timeIntervalSince1970-1)} error:nil];
+        NSDictionary *plan=[ut_store planAt:NSDate.date.timeIntervalSince1970 error:nil];
+        NSDictionary *candidate=[plan[@"alerts"] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"task_id == %@",task[@"task_id"]]].firstObject;
+        NSDictionary *alert=[ut_store claim:candidate revision:[plan[@"revision"] longLongValue] at:NSDate.date.timeIntervalSince1970 error:nil];
+        NSDictionary *request=[ut_store reqCap:alert[@"occurrence_id"] source:@"file" limit:1 error:nil];NSString *token=request[@"token"];
+        ut_ui(^{ [delegate applicationDidBecomeActive:UIApplication.sharedApplication]; });
+        ut_ui(^{ ut_req([[ut_store rdCap:token error:nil][@"state"] intValue]==0 && !host.presentedViewController,@"宿主拒绝呈现时不得提前确认接管并永久隐藏HUD"); });
+        ut_req([ut_store delCap:token error:nil],@"模拟HUD已有超时撤销请求");
+        ut_ui(^{ [delegate applicationDidBecomeActive:UIApplication.sharedApplication];host.rejects=NO; });
+        request=[ut_store reqCap:alert[@"occurrence_id"] source:@"file" limit:1 error:nil];token=request[@"token"];
+        ut_ui(^{ [delegate applicationDidBecomeActive:UIApplication.sharedApplication]; });
+        ut_wait(^BOOL{return [[ut_store rdCap:token error:nil][@"state"] intValue]==1 && [host.presentedViewController.presentedViewController isKindOfClass:UIDocumentPickerViewController.class];},@"超时后清除旧采集并可再次呈现原生文件面板");
+        ut_ui(^{ UIViewController *picker=host.presentedViewController; [(id<UIDocumentPickerDelegate>)picker documentPickerWasCancelled:(UIDocumentPickerViewController *)picker.presentedViewController]; });
+        ut_wait(^BOOL{return [[ut_store rdCap:token error:nil][@"state"] intValue]==2 && !host.presentedViewController;},@"取消文件面板完成交回并解除前台采集页");
+        ut_req([ut_store delCap:token error:nil],@"取消交回清理临时结果");
+        // 连续交回失败也必须撤销请求，不能让活着的App永久占住采集。
+        Method finish=class_getInstanceMethod(TaskStore.class,@selector(finCap:attachments:issue:error:)); IMP normal=method_getImplementation(finish);
+        IMP failure=imp_implementationWithBlock(^BOOL(__unused id receiver,__unused NSString *key,__unused NSArray *items,__unused NSString *issue,NSError **error){
+            if(error)*error=[NSError errorWithDomain:@"capture-fault" code:SQLITE_IOERR userInfo:nil];return NO;
+        });
+        ut_ui(^{ method_setImplementation(finish,failure); });
+        @try {
+            request=[ut_store reqCap:alert[@"occurrence_id"] source:@"file" limit:1 error:nil];token=request[@"token"];
+            ut_ui(^{ [delegate applicationDidBecomeActive:UIApplication.sharedApplication]; });
+            ut_wait(^BOOL{return [[ut_store rdCap:token error:nil][@"state"] intValue]==1 && [host.presentedViewController.presentedViewController isKindOfClass:UIDocumentPickerViewController.class];},@"再次采集使用同一有效轮次");
+            ut_ui(^{ UIViewController *picker=host.presentedViewController; [(id<UIDocumentPickerDelegate>)picker documentPickerWasCancelled:(UIDocumentPickerViewController *)picker.presentedViewController]; });
+            ut_wait(^BOOL{return [ut_store rdCap:token error:nil].count==0 && !host.presentedViewController;},@"连续交回失败仍撤销采集并释放原生面板");
+        } @finally { ut_ui(^{method_setImplementation(finish,normal);});imp_removeBlock(failure); }
+        ut_req([[ut_store rdTsk:task[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"] && [ut_store delTsk:task[@"task_id"] error:nil],@"采集测试不完成任务且可清理");
+    } @finally {
+        ut_ui(^{ method_setImplementation(method,original);window.hidden=YES;window.rootViewController=nil;[(id)delegate setValue:nil forKey:@"window"];delegate=nil;[ut_window makeKeyAndVisible];if(lock>=0)close(lock); });imp_removeBlock(replacement);
+    }
+}
 
 // 在普通模拟器窗口内持续操作生产HUD及真实提醒服务。
 static void ut_hdbg(BOOL seed) {
@@ -683,7 +867,9 @@ static void ut_hdbg(BOOL seed) {
     ut_req([ut_sched start:nil], @"启动同一生产提醒服务");
     if (seed) {
         NSString *notes = [@"调试正文\n" stringByPaddingToLength:600 withString:@"检查长正文滚动与按钮位置。\n" startingAtIndex:0];
-        ut_req([ut_store crtTsk:@{@"title":@"调试待办", @"notes":notes, @"due_at":@(NSDate.date.timeIntervalSince1970 + 1), @"schedule_kind":@"timed"} error:nil] != nil, @"创建独立调试待办");
+        NSMutableDictionary *fields=[@{@"title":@"调试待办", @"notes":notes, @"due_at":@(NSDate.date.timeIntervalSince1970 + 1), @"schedule_kind":@"timed"} mutableCopy];
+        if ([ut_args containsObject:@"--signal-inspect"]) [fields addEntriesFromDictionary:@{@"title":@"声振联动验收",@"notes":@"检查字段、提交和附件操作。",@"urgency":@3,@"difficulty":@3,@"planned_duration":@1500}];
+        ut_req([ut_store crtTsk:fields error:nil] != nil, @"创建独立调试待办");
     }
     [ut_store.path writeToFile:[ut_docs stringByAppendingPathComponent:@"HUDInspectStore.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
@@ -699,9 +885,10 @@ static void ut_hdbg(BOOL seed) {
     ut_docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     [NSFileManager.defaultManager createDirectoryAtPath:[ut_docs stringByAppendingPathComponent:@"screens"] withIntermediateDirectories:YES attributes:nil error:nil];
     lb_tstpath = [ut_docs stringByAppendingPathComponent:@"test.plist"]; lb_tstlock = "/tmp/trolltask-ui.lock";
-    BOOL hudInspect = [NSProcessInfo.processInfo.arguments containsObject:@"--hud-inspect"];
+    BOOL signalInspect = [ut_args containsObject:@"--signal-inspect"];
+    BOOL hudInspect = signalInspect || [ut_args containsObject:@"--hud-inspect"];
     if (hudInspect) { lb_tstpath = [ut_docs stringByAppendingPathComponent:@"hud-inspect.plist"]; lb_tstlock = "/tmp/trolltask-hud-inspect.lock"; }
-    NSString *path = [ut_docs stringByAppendingPathComponent:hudInspect ? @"HUDInspect.sqlite3" : [NSUUID.UUID.UUIDString stringByAppendingString:@".sqlite3"]];
+    NSString *path = [ut_docs stringByAppendingPathComponent:hudInspect ? (signalInspect ? @"SignalInspect.sqlite3" : @"HUDInspect.sqlite3") : [NSUUID.UUID.UUIDString stringByAppendingString:@".sqlite3"]];
     BOOL seed = hudInspect && ![NSFileManager.defaultManager fileExistsAtPath:path];
     ut_store = [[TaskStore alloc] initAt:path error:nil]; ut_checks = [NSMutableArray array];
     TaskHome *home = [[TaskHome alloc] initWithStore:ut_store settings:nil];
@@ -712,7 +899,7 @@ static void ut_hdbg(BOOL seed) {
     [host.view addSubview:ut_nav.view]; [ut_nav didMoveToParentViewController:host];
     [self.window makeKeyAndVisible]; ut_nav.view.frame = self.window.bounds;
     if (hudInspect) { ut_hdbg(seed); return YES; }
-    if ([NSProcessInfo.processInfo.arguments containsObject:@"--inspect"]) {
+    if ([ut_args containsObject:@"--inspect"]) {
         [ut_store.path writeToFile:[ut_docs stringByAppendingPathComponent:@"InspectStore.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{ ut_mon(); }); return YES;
     }
@@ -720,32 +907,50 @@ static void ut_hdbg(BOOL seed) {
         @autoreleasepool {
             BOOL passed = YES; NSString *failure = @"";
             @try {
-                BOOL phase5 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase05"];
-                BOOL phase6 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase06"];
-                BOOL phase7 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase07"];
-                BOOL phase8 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase08"];
-                BOOL phase9 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase09"];
-                BOOL phase12 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase12"];
-                BOOL phase13 = [NSProcessInfo.processInfo.arguments containsObject:@"--phase13"];
-                if (phase12 || phase13) { ut_sttng(); if (phase13) ut_diag(); ut_hud(); }
+                BOOL phase5 = [ut_args containsObject:@"--phase05"];
+                BOOL phase6 = [ut_args containsObject:@"--phase06"];
+                BOOL phase7 = [ut_args containsObject:@"--phase07"];
+                BOOL phase8 = [ut_args containsObject:@"--phase08"];
+                BOOL phase9 = [ut_args containsObject:@"--phase09"];
+                BOOL phase12 = [ut_args containsObject:@"--phase12"];
+                BOOL phase13 = [ut_args containsObject:@"--phase13"];
+                BOOL visual = [ut_args containsObject:@"--ui-refresh"];
+                BOOL pages = [ut_args containsObject:@"--ui-pages"];
+                BOOL closure = [ut_args containsObject:@"--closure"];
+                BOOL bridge = [ut_args containsObject:@"--capture-bridge"];
+                BOOL settingsOnly = [ut_args containsObject:@"--settings-only"];
+                BOOL signalOnly = [ut_args containsObject:@"--signal"];
+                BOOL parityOnly = [ut_args containsObject:@"--parity"];
+                if (parityOnly) { ut_prty(); if (@available(iOS 16.0,*)) { ut_refs(); ut_clsr(); ut_edit(); } }
+                else if (signalOnly) { ut_signal(); }
+                else if (settingsOnly) { ut_sttng(); }
+                else if (bridge) { ut_bridge(); }
+                else if (closure) { if (@available(iOS 16.0,*)) ut_clsr(); }
+                else if (visual || pages) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); if(!pages) { ut_diag(); ut_hud(); } }
+                else if (phase12 || phase13) { ut_sttng(); if (phase13) ut_diag(); ut_hud(); }
                 else {
                 if (!phase5 && !phase6 && !phase7 && !phase8 && !phase9) { ut_run(); if (@available(iOS 16.0,*)) ut_refs(); ut_sttng(); }
-                if (@available(iOS 16.0,*)) { if (!phase6 && !phase7 && !phase8 && !phase9) ut_edit(); if (!phase5 && !phase7 && !phase8 && !phase9) ut_rpt(); }
+                if (@available(iOS 16.0,*)) { if (!phase6 && !phase7 && !phase8 && !phase9) { ut_clsr(); ut_edit(); } if (!phase5 && !phase7 && !phase8 && !phase9) ut_rpt(); }
                 if (!phase5 && !phase6 && !phase8 && !phase9) ut_schd();
                 if (!phase5 && !phase6 && !phase7 && !phase9) ut_svc();
                 if (!phase5 && !phase6 && !phase7 && !phase8) ut_hud();
+                if (!phase5 && !phase6 && !phase7 && !phase8 && !phase9) ut_bridge();
+                if (!phase5 && !phase6 && !phase7 && !phase8 && !phase9) ut_signal();
+                if (!phase5 && !phase6 && !phase7 && !phase8 && !phase9) ut_prty();
                 }
             } @catch (NSException *exception) { passed = NO; failure = exception.reason; }
             __block NSString *device, *runtime;
             ut_ui(^{ device = UIDevice.currentDevice.model; runtime = UIDevice.currentDevice.systemVersion; });
             NSDictionary *report = @{@"passed": @(passed), @"failure": failure, @"checks": ut_checks,
-                @"device": device, @"runtime": runtime};
+                @"device": device, @"runtime": runtime, @"arguments": ut_args, @"finished_at": @([NSDate date].timeIntervalSince1970)};
             NSData *data = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil];
             [data writeToFile:[ut_docs stringByAppendingPathComponent:@"UITestReport.json"] atomically:YES];
+            // 在独立验收界面提供当前报告，避免取报告时重启测试。
+            ut_ui(^{ UILabel *result = [UILabel new]; result.text = passed ? @"验收通过" : @"验收失败"; result.textColor = UIColor.whiteColor; result.backgroundColor = UIColor.blackColor; result.frame = CGRectMake(0,60,ut_window.bounds.size.width,44); result.accessibilityIdentifier = @"ui.report"; result.accessibilityValue = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]; [ut_window addSubview:result]; });
             NSLog(@"UITest passed=%d %@", passed, failure);
         }
     }); return YES;
 }
 @end
 // 启动原生UIKit测试，不运行生产HUD或访问共享生产路径。
-int main(int argc, char **argv) { @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(UITestDel.class)); } }
+int main(int argc, char **argv) { @autoreleasepool { NSMutableArray *args = [NSMutableArray array]; for (int index = 0; index < argc; index++) [args addObject:@(argv[index])]; ut_args = args.copy; return UIApplicationMain(argc, argv, nil, NSStringFromClass(UITestDel.class)); } }
