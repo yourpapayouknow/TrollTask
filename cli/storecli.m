@@ -14,6 +14,26 @@ static id ts_json(NSString *text, NSError **error) {
     return value ?: ts_bad(error);
 }
 
+// 转义非ASCII字符，避免设备控制台分块截断UTF8序列。
+static NSData *ts_jdata(id object, NSError **error) {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:object options:NSJSONWritingSortedKeys error:error];
+    if (!data) return nil;
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSMutableData *output = [NSMutableData dataWithCapacity:data.length];
+    for (NSUInteger index = 0; index < text.length; index++) {
+        unichar character = [text characterAtIndex:index];
+        if (character < 128) {
+            uint8_t byte = character;
+            [output appendBytes:&byte length:1];
+        } else {
+            char escape[7];
+            snprintf(escape, sizeof(escape), "\\u%04x", character);
+            [output appendBytes:escape length:6];
+        }
+    }
+    return output;
+}
+
 // 分派薄命令入口到存储模块。
 static id ts_cmd(TaskStore *store, NSArray *args, NSError **error) {
     if (!args.count) return ts_bad(error);
@@ -23,7 +43,68 @@ static id ts_cmd(TaskStore *store, NSArray *args, NSError **error) {
         NSInteger version = [store schver:error];
         return version >= 0 ? @{@"schema_version": @(version), @"path": store.path, @"sqlite_version": @(sqlite3_libversion())} : nil;
     }
+    if ([command isEqual:@"snapshot"] && args.count == 1) return [store snapshot:error];
+    if ([command isEqual:@"day-order"] && args.count==2){id at=ts_json(args[1],error);return ts_num(at) ? [TaskDayOrder context:store at:[at doubleValue] error:error] : ts_bad(error);}
+    if ([command isEqual:@"apply-order"] && args.count==4){id context=ts_json(args[1],error),result=ts_json(args[2],error),at=ts_json(args[3],error);return [context isKindOfClass:NSDictionary.class] && [result isKindOfClass:NSDictionary.class] && ts_num(at) ? ([TaskDayOrder apply:store context:context result:result at:[at doubleValue] error:error] ? @{@"applied":@YES}:nil) : ts_bad(error);}
+    // 核对原轮次后通知唯一调度器，不能直接完成任务。
+    if ([command isEqual:@"retry"] && args.count == 3) {
+        id task=ts_json(args[1],error),stamp=ts_json(args[2],error);
+        if(![task isKindOfClass:NSDictionary.class] || !ts_num(stamp))return ts_bad(error);
+        NSDictionary *alert=[TaskToday reminder:store task:task at:[stamp doubleValue] error:error];
+        if(alert)notify_post([TaskToday note:store].UTF8String);return alert;
+    }
+    if ([command isEqual:@"today"] && args.count==3) {id at=ts_json(args[1],error);return ts_num(at) ? [TaskToday rows:store at:[at doubleValue] zone:args[2] error:error] : ts_bad(error);}
+    if ([command isEqual:@"intake"] && args.count==4) {
+        id fields=ts_json(args[1],error),parts=ts_json(args[2],error),at=ts_json(args[3],error);
+        return [fields isKindOfClass:NSDictionary.class] && [parts isKindOfClass:NSArray.class] && ts_num(at) ? [TaskIntake context:store fields:fields parts:parts at:[at doubleValue] error:error] : ts_bad(error);
+    }
+    if ([command isEqual:@"verdict"] && args.count==5) {
+        id context=ts_json(args[1],error),estimate=ts_json(args[2],error),effort=ts_json(args[3],error),ddl=ts_json(args[4],error);
+        return [context isKindOfClass:NSDictionary.class] && [estimate isKindOfClass:NSDictionary.class] && ts_num(effort) && [ddl isKindOfClass:NSNumber.class] ? [TaskIntake verdict:context estimate:estimate effort:[effort doubleValue] ddl:[ddl boolValue] error:error] : ts_bad(error);
+    }
+    if ([command isEqual:@"admit"] && args.count==6) {
+        id context=ts_json(args[1],error),estimate=ts_json(args[2],error),effort=ts_json(args[3],error),ddl=ts_json(args[4],error),at=ts_json(args[5],error);
+        return [context isKindOfClass:NSDictionary.class] && [estimate isKindOfClass:NSDictionary.class] && ts_num(effort) && ts_num(at) && [ddl isKindOfClass:NSNumber.class] ? [TaskIntake commit:store context:context estimate:estimate effort:[effort doubleValue] ddl:[ddl boolValue] at:[at doubleValue] error:error] : ts_bad(error);
+    }
+    if ([command isEqual:@"review"] && args.count==2)return [TaskIntake review:store task:args[1] error:error];
+    if ([command isEqual:@"split-draft"] && args.count == 2) return [TaskDivision draft:store task:args[1] error:error];
+    if ([command isEqual:@"split"] && args.count == 4) {
+        id parts=ts_json(args[2],error), expected=ts_json(args[3],error);
+        if (![parts isKindOfClass:NSArray.class] || ![expected isKindOfClass:NSDictionary.class]) return ts_bad(error);
+        return [TaskDivision apply:store task:args[1] parts:parts expected:expected error:error];
+    }
+    if ([command isEqual:@"ai"] && args.count == 3) {
+        NSData *configData=[NSData dataWithContentsOfFile:args[1] options:0 error:error];
+        NSData *inputData=configData ? [NSData dataWithContentsOfFile:args[2] options:0 error:error] : nil;
+        id config=configData ? [NSJSONSerialization JSONObjectWithData:configData options:0 error:error] : nil;
+        id input=inputData ? [NSJSONSerialization JSONObjectWithData:inputData options:0 error:error] : nil;
+        if (![config isKindOfClass:NSDictionary.class] || ![input isKindOfClass:NSDictionary.class]) return ts_bad(error);
+        __block NSDictionary *value=nil; __block NSError *failure=nil; dispatch_semaphore_t done=dispatch_semaphore_create(0);
+        NSURLSessionDataTask *task=[TaskAI gen:input config:config completion:^(NSDictionary *result,NSError *issue) {value=result;failure=issue;dispatch_semaphore_signal(done);}];
+        if (dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,135*NSEC_PER_SEC))) { [task cancel];failure=[NSError errorWithDomain:@"com.iwmei.taskforiwmei.assistant" code:2 userInfo:@{NSLocalizedDescriptionKey:@"服务暂不可达",@"kind":@"assistant_failure"}]; }
+        if (!value && error) *error=failure; return value;
+    }
     if ([command isEqual:@"lists"] && args.count == 1) return [store lsLsts:error];
+    if (([command isEqual:@"day"] || [command isEqual:@"timeline"]) && args.count >= 2 && args.count <= 4) {
+        if (args.count==4 && ![args[3] isEqual:@"drafts"]) return ts_bad(error);
+        id stamp=ts_json(args[1],error);if(!ts_num(stamp))return ts_bad(error);
+        NSString *zone=args.count>=3 ? args[2] : NSTimeZone.localTimeZone.name;
+        NSDictionary *plan=args.count==4 && [args[3] isEqual:@"drafts"] ? [store draftDay:[stamp doubleValue] zone:zone now:NSDate.date.timeIntervalSince1970 error:error]
+            : [store dayAt:[stamp doubleValue] zone:zone now:NSDate.date.timeIntervalSince1970 error:error];
+        return plan && [command isEqual:@"timeline"] ? [TaskTimeMap map:plan width:320 scale:6 error:error] : plan;
+    }
+    // 正式周表通过同一核心事务写入，不在CLI中实现排程。
+    if ([command isEqual:@"routine-apply"] && args.count==4) {
+        NSData *data=[NSData dataWithContentsOfFile:args[1] options:0 error:error];
+        id document=data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:error] : nil;
+        id stamp=ts_json(args[2],error);
+        return [document isKindOfClass:NSDictionary.class] && ts_num(stamp) ? [TaskRoutineImport formal:store document:document anchor:[NSDate dateWithTimeIntervalSince1970:[stamp doubleValue]] zone:args[3] error:error] : ts_bad(error);
+    }
+    if ([command isEqual:@"routine-import"] && (args.count==2 || args.count==3)) {
+        NSDictionary *document=[TaskRoutineImport parse:args[1] source:args.count==3 ? args[2] : @"时间表.md" anchor:NSDate.date zone:NSTimeZone.localTimeZone.name error:error];
+        NSDictionary *result=document ? [store importRtns:document error:error] : nil;
+        if(!result)return nil;NSMutableDictionary *value=result.mutableCopy;value[@"warnings"]=document[@"warnings"];return value;
+    }
     if ([command isEqual:@"new-list"] && args.count == 2) return [store crtLst:args[1] error:error];
     if ([command isEqual:@"rename-list"] && args.count == 3)
         return [store updLst:args[1] title:args[2] error:error] ? @{@"updated": @YES} : nil;
@@ -119,22 +200,21 @@ int ts_cli(int argc, char *argv[], NSString *path) {
     for (int index = 0; index < argc; index++) [args addObject:@(argv[index])];
     if (store && args.count == 1 && [args[0] isEqual:@"watch"]) {
         TaskScheduler *scheduler = [[TaskScheduler alloc] initStore:store handler:^(NSDictionary *alert, NSError *failure) {
-            NSData *line = [NSJSONSerialization dataWithJSONObject:@{@"alert": alert ?: (id)NSNull.null, @"error": failure.localizedDescription ?: (id)NSNull.null}
-                options:NSJSONWritingSortedKeys error:nil];
+            NSData *line = ts_jdata(@{@"alert": alert ?: (id)NSNull.null, @"error": failure.localizedDescription ?: (id)NSNull.null}, nil);
             fwrite(line.bytes, 1, line.length, stdout); putchar('\n'); fflush(stdout);
         }];
         if ([scheduler start:&error]) { CFRunLoopRun(); [scheduler stop]; return EXIT_SUCCESS; }
     }
     id result = store ? ts_cmd(store, args, &error) : nil;
-    NSData *data = result ? [NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingSortedKeys error:&error] : nil;
+    NSData *data = result ? ts_jdata(result, &error) : nil;
     if (!data) {
         NSDictionary *failure = @{@"domain": error.domain ?: @"com.iwmei.taskforiwmei.store", @"code": @(error.code),
             @"kind": error.userInfo[@"kind"] ?: @"database_failure", @"message": error.localizedDescription ?: @"存储操作失败"};
-        NSData *line = [NSJSONSerialization dataWithJSONObject:failure options:NSJSONWritingSortedKeys error:nil];
+        NSData *line = ts_jdata(failure, nil);
         fwrite(line.bytes, 1, line.length, stderr); fputc('\n', stderr); return EXIT_FAILURE;
     }
     fwrite(data.bytes, 1, data.length, stdout);
-    putchar('\n');
+    putchar('\n'); fflush(stdout);
     return EXIT_SUCCESS;
 }
 

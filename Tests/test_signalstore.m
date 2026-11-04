@@ -3,6 +3,8 @@
 // 在隔离数据库模拟九版迁移失败并核验事务回滚。
 static void sig_mgr(NSString *path) {
     sqlite3 *db=NULL;assert(sqlite3_open(path.fileSystemRepresentation,&db)==SQLITE_OK);
+    NSString *downgrade=[NSString stringWithContentsOfFile:@"Tests/Fixtures/agenda-v10.sql" encoding:NSUTF8StringEncoding error:nil];
+    assert(sqlite3_exec(db,downgrade.UTF8String,NULL,NULL,NULL)==SQLITE_OK);
     const char *fixture="ALTER TABLE reminder_occurrences DROP COLUMN signal_at;ALTER TABLE reminder_occurrences DROP COLUMN signal_uptime;"
         "ALTER TABLE reminder_occurrences DROP COLUMN signal_ack;UPDATE store_meta SET schema_version=9;"
         "CREATE TRIGGER signal_migration_failure BEFORE UPDATE ON store_meta WHEN NEW.schema_version=10 BEGIN SELECT RAISE(ABORT,'test');END;";

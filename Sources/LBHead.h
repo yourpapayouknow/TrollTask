@@ -45,9 +45,11 @@
 extern NSString *lb_tstpath;
 extern const char *lb_tstlock;
 #define LB_PREF_PATH lb_tstpath
+#define LB_OLD_PREF_PATH [lb_tstpath stringByAppendingString:@".legacy"]
 #define LB_LOCK_PATH lb_tstlock
 #else
-#define LB_PREF_PATH @"/var/mobile/Library/Preferences/com.iwmei.taskforiwmei.plist"
+#define LB_PREF_PATH @"/var/mobile/Library/Preferences/com.iwmei.taskforiwmei.hudservice.plist"
+#define LB_OLD_PREF_PATH @"/var/mobile/Library/Preferences/com.iwmei.taskforiwmei.plist"
 #define LB_LOCK_PATH "/var/tmp/com.iwmei.taskforiwmei.hud.lock"
 #endif
 #define LB_CFG_NOTE "com.iwmei.taskforiwmei.config"
@@ -208,6 +210,11 @@ NSString *lb_shrt(NSString *text);
 // 集中声明待办存储模块。
 #import "TaskStore.h"
 #import "TaskRule.h"
+#ifndef TT_SWIFT_BRIDGE
+#import "TaskRoutine.h"
+#import "TaskAssistant.h"
+#import "TaskTimeMap.h"
+#endif
 #ifndef TT_SWIFT_BRIDGE
 #import "TaskScheduler.h"
 #import "TaskReminder.h"

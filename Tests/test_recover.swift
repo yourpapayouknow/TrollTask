@@ -64,8 +64,9 @@
         for id in ids + [extra] { req(try rows(store, id).count == 1 && rows(store, id)[0]["status"] as? String == "resolved", "已处理轮次不能复活") }
         req(shown == nil, "已Resolved无窗口"); scheduler.stp()
     }
-    // 跨过多天后保留既有Pending，不被最近重复周期吞掉。
-    private static func pending(_ store: TaskStore, _ clock: TestClock, _ base: TimeInterval) throws {
+    // 跨过多天后按02:00丢弃积压，恢复当天轮次。
+    private static func pending(_ store: TaskStore, _ clock: TestClock) throws {
+        let base = Calendar.current.date(bySettingHour:12,minute:0,second:0,of:Date())!.timeIntervalSince1970
         clock.set(base + 2); let task = try mk(store, base + 1, true)
         let scheduler = TaskScheduler(store: store, clock: clock.rd, handler: evt)
         req(scheduler.strt(nil), "重复恢复启动"); wt("首轮呈现") { shown?["task_id"] as? String == task }
@@ -73,13 +74,13 @@
         wt("下一轮Pending已持久化") { (try? rows(store, task).contains { $0["status"] as? String == "pending" }) == true && shown == nil }
         let next = try rows(store, task).first { $0["status"] as? String == "pending" }!["occurrence_id"] as! String
         scheduler.stp(); clock.set(base + 5 * 86400 + 100); req(scheduler.strt(nil), "跨休眠天数重新启动")
-        wt("恢复最早未处理Pending而非丢弃") { shown?["occurrence_id"] as? String == next }
-        for day in 1...5 {
-            wt("积压重复轮次逐日处理") { (shown?["scheduled_at"] as? NSNumber)?.doubleValue == base + 1 + Double(day) * 86400 }
-            scheduler.act("complete", until: nil, occID: shown?["occurrence_id"] as! String)
-        }
-        wt("积压清空后等待下一未来轮次") { shown == nil }
-        req(try rows(store, task).filter { $0["status"] as? String == "resolved" }.count == 6, "六轮各完成一次")
+        wt("跨过02:00后只恢复当天到期的重复轮次") { (shown?["scheduled_at"] as? NSNumber)?.doubleValue == base + 1 + 5 * 86400 }
+        let old = try rows(store, task).first { $0["occurrence_id"] as? String == next }
+        req(old?["status"] as? String == "resolved" && old?["action"] as? String == "expire", "过期Pending原地结束")
+        let current = shown?["occurrence_id"] as! String
+        scheduler.act("complete", until: nil, occID: current)
+        wt("当日完成后直接等待下一未来轮次") { shown == nil }
+        req(try rows(store, task).filter { $0["action"] as? String == "complete" }.count == 2, "旧积压没有伪造完成")
         scheduler.stp(); try store.delTsk(task)
     }
     // Snoozed跨过休眠期限仍用原身份补弹并保留单次额度。
@@ -166,14 +167,61 @@
         req(shown == nil && events == count, "主线程解除阻塞后必须重新核对修改，旧提醒不得交付")
         scheduler.stp(); try store.delTsk(stale)
     }
+    // 工作时段没有提醒时仍在当地日界重算，诊断不伪报提醒。
+    private static func agenda(_ store: TaskStore, _ clock: TestClock) throws {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = .current
+        let day = calendar.startOfDay(for: Date()), start = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: day)!
+        let id = (try store.crtTsk(["title":"日界工作时段","list_id":TS_RTN_LST,"routine_kind":"work","routine_end":540,"due_at":start.timeIntervalSince1970,"recurrence_type":"daily"]))["task_id"] as! String
+        clock.set(day.timeIntervalSince1970); var armed = 0, planned = false
+        let scheduler = TaskScheduler(store: store, clock: clock.rd, handler: evt)
+        scheduler.onArm = { _ in armed += 1; return nil }
+        scheduler.onPlan = { _, _, _ in DispatchQueue.main.async { planned = true } }
+        req(scheduler.strt(nil), "常律日界调度启动")
+        wt("空工作时段仍安装一次日界唤醒") { planned }
+        req(armed == 1 && scheduler.nextFireAt == nil && shown == nil, "日界维护计时不冒充任务提醒")
+        let next = calendar.date(byAdding: .day, value: 1, to: day)!
+        clock.set(next.timeIntervalSince1970)
+        let task = try store.crtTsk(["title":"次日自动填空","planned_duration":600])["task_id"] as! String
+        post(TS_DISPLAY_ON)
+        let target = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: next)!.timeIntervalSince1970
+        let end = Date(timeIntervalSinceNow: 2)
+        while scheduler.nextFireAt?.timeIntervalSince1970 != target && end.timeIntervalSinceNow > 0 { _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) }
+        if scheduler.nextFireAt?.timeIntervalSince1970 != target {
+            let plan = try store.plan(at: clock.rd()) as! TaskFields
+            let report: TaskFields = ["target": target, "next": scheduler.nextFireAt?.timeIntervalSince1970 ?? -1, "clock": clock.rd(), "calendar": calendar.timeZone.identifier, "plan": plan]
+            try JSONSerialization.data(withJSONObject: report, options: .prettyPrinted).write(to: URL(fileURLWithPath: "build/routines/recovery-agenda-failure.json"))
+        }
+        req(scheduler.nextFireAt?.timeIntervalSince1970 == target, "跨日恢复把普通任务放进次日常律")
+        scheduler.stp(); try store.delTsk(task); try store.delTsk(id)
+    }
     // 仅使用临时数据库与受控时钟。
+    // 主动补弹重发当前队首，不重置身份、不抢占或完成。
+    private static func retry(_ store:TaskStore,_ clock:TestClock,_ base:Double)throws {
+        clock.set(base);let a=try mk(store,base-2),b=try mk(store,base-1),future=try mk(store,base+60)
+        let row=try store.rdTsk(a) as! TaskFields;let intent:TaskFields=["task_id":a,"next_cycle_at":base-2,"reminder_version":row["reminder_version"]!]
+        let before=try store.snapshot();_ = try TaskToday.alrt(store,task:intent as NSDictionary,at:base);req(NSDictionary(dictionary:before).isEqual(to:try store.snapshot()),"补弹校验不写任务或轮次")
+        let scheduler=TaskScheduler(store:store,clock:clock.rd,handler:evt);req(scheduler.strt(nil),"主动补弹启动原调度器");wt("补弹前已显示队首"){shown?["task_id"] as? String==a}
+        let id=shown!["occurrence_id"] as! String,original=try rows(store,a),count=events
+        let planned=DispatchSemaphore(value:0);scheduler.onPlan={_,_,_ in planned.signal()}
+        post(TaskToday.note(store));req(planned.wait(timeout:.now()+2) == .success,"补弹已排队但主线程尚未消费")
+        scheduler.rfrsh();req(planned.wait(timeout:.now()+2) == .success,"普通刷新在补弹交付前到达");scheduler.onPlan=nil
+        wt("独立补弹通知重新交付原窗口"){events>count && shown?["manual_reopen"] as? Bool==true}
+        req(shown?["occurrence_id"] as? String==id,"补弹沿用同一轮次");req(try rows(store,a) as NSArray==original as NSArray,"补弹不改原状态、次数或触发时刻");req(try rows(store,b).count==1,"下一到期项仍只有一个轮次")
+        let f=try store.rdTsk(future) as! TaskFields
+        for invalid in [["task_id":future,"next_cycle_at":base+60,"reminder_version":f["reminder_version"]!],["task_id":a,"next_cycle_at":base-3,"reminder_version":row["reminder_version"]!],["task_id":a,"next_cycle_at":base-2,"reminder_version":999]] as [TaskFields] {
+            do{_ = try TaskToday.alrt(store,task:invalid as NSDictionary,at:base);req(false,"应拒绝未到期或旧版本补弹")}catch{req(true,"未到期、旧轮次或旧版本不能补弹")}
+        }
+        scheduler.act("complete",until:nil,occID:id);wt("原队首完成后才交接"){shown?["task_id"] as? String==b}
+        do{_ = try TaskToday.alrt(store,task:intent as NSDictionary,at:base);req(false,"已完成不应可补弹")}catch{req(true,"Resolved不能通过补弹复活")}
+        scheduler.stp();for task in [a,b,future]{try store.delTsk(task)}
+    }
     static func main() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("trolltask-recover-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = try TaskStore(at: folder.appendingPathComponent("tasks.sqlite3").path)
         let base = floor(Date().timeIntervalSince1970) + 3600, clock = TestClock(base)
-        try jumps(store, clock, base);try pending(store, clock, base);try snoozed(store, clock);try timers(store, clock, base);try delivery(store, clock, base)
+        try jumps(store, clock, base);try pending(store, clock);try snoozed(store, clock);try timers(store, clock, base);try delivery(store, clock, base);try agenda(store, clock);try retry(store,clock,base)
         req(failures == 0, "生产回调无错误")
         print("Recovery: \(checks) checks passed; clock jumps, wake catch-up, persisted Pending/Snoozed and Resolved deduplication")
     }

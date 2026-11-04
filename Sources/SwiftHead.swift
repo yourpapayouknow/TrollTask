@@ -7,5 +7,8 @@
 @_exported import AVFAudio
 @_exported import AudioToolbox
 @_exported import CoreMotion
+@_exported import QuickLook
+@_exported import ImageIO
+@_exported import Security
 #endif
 typealias TaskFields = [String: Any]

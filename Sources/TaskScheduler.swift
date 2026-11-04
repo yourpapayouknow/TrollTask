@@ -9,6 +9,7 @@
     private var active: TaskFields? { reminders.current }
     private var tokens: [Int32] = [], epoch = 0, ticket = 0, faults = 0
     private var running = false, queued = false
+    private var reopening = false
     private var observers: [NSObjectProtocol] = []
     private var displayedID: String?
     private var displayed: NSDictionary?
@@ -48,7 +49,7 @@
         timer = source; source.resume()
     }
     // 调度队列完成数据核验，主线程只接收尚未取消的呈现结果。
-    private func pub(_ alert: TaskFields?, _ error: NSError? = nil, ready: Bool = false) {
+    private func pub(_ alert: TaskFields?, _ error: NSError? = nil, ready: Bool = false, reopen: Bool = false) {
         publication?.cancel()
         guard running || alert == nil else { return }
         if !ready { delivery += 1 }
@@ -58,7 +59,7 @@
             let work = DispatchWorkItem { [weak self] in
                 self?.queue.async { [weak self] in
                     guard let self, self.delivery == sequence, self.epoch == expected else { return }
-                    self.pub(alert, error, ready: true)
+                    self.pub(alert, error, ready: true, reopen: reopen)
                 }
             }
             publication = work; DispatchQueue.main.async(execute: work); return
@@ -88,9 +89,11 @@
             guard let value else { self.displayedID = nil; self.displayed = nil; self.handler(nil, issue); return }
             let id = value["occurrence_id"] as? String
             if self.displayedID != nil && self.displayedID != id { self.handler(nil, nil) }
-            if issue == nil && self.displayed?.isEqual(value as NSDictionary) == true { return }
+            if !reopen && issue == nil && self.displayed?.isEqual(value as NSDictionary) == true { return }
             self.displayedID = id; self.displayed = issue == nil ? value as NSDictionary : nil
-            self.handler(value as NSDictionary, issue)
+            var output=value;if reopen{output["manual_reopen"]=true};self.handler(output as NSDictionary, issue)
+            // 实际交付后才消费补弹意图，普通刷新不能抢先丢弃请求。
+            if reopen {self.queue.async{if self.active?["occurrence_id"] as? String==id{self.reopening=false}}}
         }
         publication = work; DispatchQueue.main.async(execute: work)
     }
@@ -101,7 +104,7 @@
         arm(Date(timeIntervalSinceNow: min(30, pow(2, Double(min(faults-1, 5))))))
     }
     // 认领全部到期轮次，逐条展示，并只等待最近未来时刻。
-    private func rld() {
+    private func rld(reopen: Bool = false) {
         guard running, let store else { return }; clr()
         do {
             let now = clock()
@@ -122,31 +125,38 @@
                 if let failure { throw failure }
             }
             reminders.rcl(ready)
-            if let active { pub(active) } else { pub(nil) }
+            if let active { pub(active, reopen: reopen || reopening) } else { reopening=false;pub(nil) }
             if let next = alerts.first(where: { alert in
                 guard let stamp = alert["remind_at"] as? NSNumber else { return false }
                 return stamp.doubleValue > now && (alert["occurrence_id"] as? String).map { !triggered.contains($0) } != false
             }), let stamp = next["remind_at"] as? NSNumber {
                 fire = Date(timeIntervalSince1970: stamp.doubleValue); arm(fire!)
             }
+            if let wake = snapshot["agenda_wake_at"] as? NSNumber, wake.doubleValue > now,
+                fire == nil || wake.doubleValue < fire!.timeIntervalSince1970 {
+                let nextReminder = fire
+                clr(); arm(Date(timeIntervalSince1970: wake.doubleValue)); fire = nextReminder
+            }
             faults = 0
             onPlan?(fire, active != nil, nil)
         } catch { err(error as NSError) }
     }
     // 合并同一轮事件中的重复重读请求。
-    private func req() {
-        guard running, !queued else { return }; queued = true
-        queue.async { [weak self] in guard let self else { return }; self.queued = false; self.rld() }
+    private func req(reopen: Bool = false) {
+        guard running else { return };reopening = reopening || reopen
+        guard !queued else{return};queued = true
+        queue.async { [weak self] in guard let self else { return }; self.queued = false;self.rld(reopen:self.reopening) }
     }
     // 注册系统变化和提交后的Darwin通知，无周期性数据库轮询。
     @objc(start:) func strt(_ error: AutoreleasingUnsafeMutablePointer<NSError?>?) -> Bool {
         qsyn {
             if running { return true }
             guard let store else { error?.pointee = NSError(domain: "com.iwmei.taskforiwmei.sync", code: Int(SQLITE_CANTOPEN), userInfo: [NSLocalizedDescriptionKey:"存储未就绪"]); return false }
-            let notes: [String] = [store.changeNote, TS_CLOCK_SET, TS_TIME_ZONE, TS_DISPLAY_ON]
+            let retry=TaskToday.note(store)
+            let notes: [String] = [store.changeNote, TS_CLOCK_SET, TS_TIME_ZONE, TS_DISPLAY_ON,retry]
             for name in notes {
                 var token: Int32 = -1
-                let status = name.withCString { notify_register_dispatch($0, &token, queue) { [weak self] _ in self?.req() } }
+                let status = name.withCString { notify_register_dispatch($0, &token, queue) { [weak self] _ in self?.req(reopen:name==retry) } }
                 guard status == NOTIFY_STATUS_OK else {
                     tokens.forEach { notify_cancel($0) }; tokens.removeAll()
                     error?.pointee = NSError(domain: "com.iwmei.taskforiwmei.sync", code: Int(status), userInfo: [NSLocalizedDescriptionKey:"调度通知注册失败"]); return false
@@ -204,7 +214,7 @@
     // 停止后拒绝旧计时和已排队的展示结果。
     @objc(stop) func stp() {
         qsyn {
-            running = false; epoch += 1; queued = false; clr(); reminders.clr()
+            running = false; epoch += 1; queued = false;reopening=false; clr(); reminders.clr()
             tokens.forEach { notify_cancel($0) }; tokens.removeAll()
             observers.forEach { NotificationCenter.default.removeObserver($0) }; observers.removeAll(); pub(nil)
         }

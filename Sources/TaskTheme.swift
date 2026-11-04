@@ -1,5 +1,6 @@
 // 定义中性表面、清晰文字和橙色强调。
 enum TaskTheme {
+    static let edge:CGFloat=16, gap:CGFloat=8, pad:CGFloat=12, group:CGFloat=16, section:CGFloat=24
     static let base = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 29/255, green: 27/255, blue: 25/255, alpha: 1) : UIColor(red: 251/255, green: 249/255, blue: 247/255, alpha: 1) }
     static let ink = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 239/255, green: 235/255, blue: 231/255, alpha: 1) : UIColor(red: 42/255, green: 35/255, blue: 29/255, alpha: 1) }
     static let muted = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 190/255, green: 179/255, blue: 168/255, alpha: 1) : UIColor(red: 111/255, green: 101/255, blue: 93/255, alpha: 1) }
@@ -42,24 +43,48 @@ func tu_nav(_ page: UIViewController) {
 
 // 统一所有Swift页面的中性底层。
 class TaskScreen: UIViewController {
+    private var headHeight:NSLayoutConstraint?
     // 在安全区内容下插入原生背景。
     override func viewDidLoad() {
-        super.viewDidLoad(); view.backgroundColor = TaskTheme.base; view.tintColor = lb_acnt()
+        super.viewDidLoad(); view.backgroundColor = TaskTheme.base; view.tintColor = lb_acnt(); navigationItem.backButtonDisplayMode = .minimal
         let backdrop = TaskBackdrop(frame: view.bounds)
         backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]; view.insertSubview(backdrop, at: 0)
         tu_nav(self)
     }
+    // 共用首页与直属子页的固定触摸位置。
+    func hdr(_ title:UILabel,_ left:UIButton?,_ right:UIButton?,large:Bool=false) -> UIView {
+        if !large {title.font=UIFontMetrics(forTextStyle:.headline).scaledFont(for:.systemFont(ofSize:20,weight:.semibold),maximumPointSize:32,compatibleWith:traitCollection);title.numberOfLines=1}
+        let header=UIView();header.accessibilityIdentifier="screen.header";view.addSubview(header);tu_wdth(header,view,inset:0)
+        title.translatesAutoresizingMaskIntoConstraints=false;header.addSubview(title)
+        headHeight=header.heightAnchor.constraint(equalToConstant:56)
+        NSLayoutConstraint.activate([header.topAnchor.constraint(equalTo:view.safeAreaLayoutGuide.topAnchor),headHeight!,title.centerXAnchor.constraint(equalTo:header.centerXAnchor),title.centerYAnchor.constraint(equalTo:header.centerYAnchor),title.leadingAnchor.constraint(greaterThanOrEqualTo:header.leadingAnchor,constant:56),title.trailingAnchor.constraint(lessThanOrEqualTo:header.trailingAnchor,constant:-56)])
+        for (button,leading) in [(left,true),(right,false)] {
+            guard let button else{continue};button.translatesAutoresizingMaskIntoConstraints=false;var style=button.configuration;style?.contentInsets=NSDirectionalEdgeInsets(top:8,leading:button.configuration?.title == nil ? 8:12,bottom:8,trailing:button.configuration?.title == nil ? 8:12);style?.imagePadding=8;style?.background.cornerRadius=12;button.configuration=style;header.addSubview(button)
+            NSLayoutConstraint.activate([button.centerYAnchor.constraint(equalTo:header.centerYAnchor),button.heightAnchor.constraint(equalToConstant:56),button.widthAnchor.constraint(greaterThanOrEqualToConstant:56),leading ? button.leadingAnchor.constraint(equalTo:header.leadingAnchor):button.trailingAnchor.constraint(equalTo:header.trailingAnchor)])
+            if button.configuration?.title==nil {button.widthAnchor.constraint(equalToConstant:56).isActive=true}
+        }
+        return header
+    }
+    // 直属子页沿用同一顶栏，其他页面保留系统导航。
+    override func viewWillAppear(_ animated:Bool) {super.viewWillAppear(animated);navigationController?.setNavigationBarHidden(headHeight != nil,animated:false)}
+    // 动态大字下保持首页与子页按钮中心一致。
+    override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        headHeight?.constant=max(56,ceil(UIFontMetrics(forTextStyle:.title1).scaledFont(for:.systemFont(ofSize:28),compatibleWith:traitCollection).lineHeight)+8+8)
+    }
+    // 返回导航上一级或关闭独立设置页。
+    @objc func bck() {if let navigationController,navigationController.viewControllers.count>1{navigationController.popViewController(animated:true)}else{dismiss(animated:true)}}
 }
 
 // 复用统一圆角按钮并设置模板图标。
-func tu_btn(_ title: String?, _ icon: String? = nil, _ target: Any? = nil, _ action: Selector? = nil) -> UIButton {
+func tu_btn(_ title: String?, _ icon: String? = nil, _ target: Any? = nil, _ action: Selector? = nil, minWidth: CGFloat = 44) -> UIButton {
     let button = lb_mkbtn(title, target, action)!
     var config = button.configuration!
-    config.image = icon.flatMap { lb_icon($0) }; config.imagePadding = 8
+    config.image = icon.flatMap { lb_icon($0) }; config.imagePadding = TaskTheme.gap; config.contentInsets = .init(top:8,leading:12,bottom:8,trailing:12)
     config.baseForegroundColor = TaskTheme.ink
     button.configuration = config; button.tintColor = TaskTheme.ink
     button.imageView?.contentMode = .scaleAspectFit
-    button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+    button.widthAnchor.constraint(greaterThanOrEqualToConstant: minWidth).isActive = true
     button.contentHorizontalAlignment = .leading
     button.titleLabel?.adjustsFontForContentSizeCategory = true
     return button
@@ -73,7 +98,7 @@ func tu_fill(_ button: UIButton, primary: Bool = false) {
 }
 // 设置图标按钮的无障碍身份。
 func tu_ibtn(_ icon: String, _ label: String, _ id: String, _ target: Any?, _ action: Selector?) -> UIButton {
-    let button = tu_btn(nil, icon, target, action); button.contentHorizontalAlignment = .center
+    let button = tu_btn(nil, icon, target, action); var config=button.configuration;config?.contentInsets = .init(top:8,leading:8,bottom:8,trailing:8);button.configuration=config;button.contentHorizontalAlignment = .center
     button.accessibilityLabel = label; button.accessibilityIdentifier = id
     button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
     return button
@@ -86,21 +111,33 @@ func tu_lbl(_ text: String?) -> UILabel {
     label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     return label
 }
-// 创建唯一间距的纵向布局。
+// 统一表单输入边界、圆角和文字内边距。
+func tu_fld(_ field:UIView) {
+    field.backgroundColor=TaskTheme.control;field.layer.cornerRadius=12;field.layer.cornerCurve = .continuous;field.clipsToBounds=true;field.heightAnchor.constraint(greaterThanOrEqualToConstant:44).isActive=true
+    if let text=field as? UITextView {text.textContainerInset = .init(top:8,left:12,bottom:8,right:12);text.textContainer.lineFragmentPadding=0}
+    if let text=field as? UITextField {text.leftView=UIView(frame:CGRect(x:0,y:0,width:12,height:1));text.rightView=UIView(frame:CGRect(x:0,y:0,width:12,height:1));text.leftViewMode = .always;text.rightViewMode = .always}
+}
+// 统一平面列表的字体、颜色和内容边距。
+func tu_cell() -> UIListContentConfiguration {
+    var content=UIListContentConfiguration.subtitleCell();content.textProperties.font=lb_fnt(.body,nil);content.textProperties.color=TaskTheme.ink;content.textProperties.numberOfLines=0
+    content.secondaryTextProperties.font=lb_fnt(.subheadline,nil);content.secondaryTextProperties.color=TaskTheme.muted;content.secondaryTextProperties.numberOfLines=0
+    content.directionalLayoutMargins = .init(top:12,leading:16,bottom:12,trailing:16);content.imageToTextPadding=12;return content
+}
+// 创建同组内容的纵向布局。
 func tu_stk(_ views: [UIView]) -> UIStackView {
-    let stack = UIStackView(arrangedSubviews: views); stack.axis = .vertical; stack.spacing = 8; return stack
+    let stack = UIStackView(arrangedSubviews: views); stack.axis = .vertical; stack.spacing = TaskTheme.gap; return stack
 }
 // 创建标签与原生控件横向行。
 func tu_row(_ title: String, _ control: UIView) -> UIStackView {
     let label = tu_lbl(title); label.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
-    if control is UITextField { control.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true }
+    if control is UITextField { NSLayoutConstraint.activate([control.widthAnchor.constraint(greaterThanOrEqualToConstant:44),control.heightAnchor.constraint(greaterThanOrEqualToConstant:44)]) }
     let row = tu_stk([label, control]); row.axis = .horizontal; row.alignment = .center
     control.setContentHuggingPriority(.required, for: .horizontal)
     control.setContentCompressionResistancePriority(control is UITextField || control is UIDatePicker ? .defaultLow : .required, for: .horizontal)
     return row
 }
 // 约束单列最大宽度和统一边距。
-func tu_wdth(_ content: UIView, _ parent: UIView, inset: CGFloat = 12) {
+func tu_wdth(_ content: UIView, _ parent: UIView, inset: CGFloat = TaskTheme.edge) {
     content.translatesAutoresizingMaskIntoConstraints = false
     let width = content.widthAnchor.constraint(equalTo: parent.safeAreaLayoutGuide.widthAnchor, constant: -inset * 2); width.priority = UILayoutPriority(999)
     NSLayoutConstraint.activate([width, content.widthAnchor.constraint(lessThanOrEqualToConstant: 680),
@@ -109,16 +146,16 @@ func tu_wdth(_ content: UIView, _ parent: UIView, inset: CGFloat = 12) {
         content.trailingAnchor.constraint(lessThanOrEqualTo: parent.safeAreaLayoutGuide.trailingAnchor, constant: -inset)])
 }
 // 使用原生键盘布局指南避让输入。
-@discardableResult func tu_form(_ parent: UIViewController, _ fields: UIStackView, _ id: String) -> UIScrollView {
+@discardableResult func tu_form(_ parent: UIViewController, _ fields: UIStackView, _ id: String, top:UIView?=nil) -> UIScrollView {
     let scroll = UIScrollView(); scroll.accessibilityIdentifier = id; scroll.keyboardDismissMode = .interactive
-    parent.view.addSubview(scroll); tu_wdth(scroll, parent.view); fields.translatesAutoresizingMaskIntoConstraints = false; scroll.addSubview(fields)
-    NSLayoutConstraint.activate([scroll.topAnchor.constraint(equalTo: parent.view.safeAreaLayoutGuide.topAnchor, constant: 4),
-        scroll.bottomAnchor.constraint(equalTo: parent.view.keyboardLayoutGuide.topAnchor, constant: -4),
-        fields.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 4),
-        fields.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -4),
-        fields.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 4),
-        fields.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -4),
-        fields.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -8)])
+    fields.spacing=TaskTheme.group;parent.view.addSubview(scroll); tu_wdth(scroll, parent.view); fields.translatesAutoresizingMaskIntoConstraints = false; scroll.addSubview(fields)
+    NSLayoutConstraint.activate([scroll.topAnchor.constraint(equalTo: top?.bottomAnchor ?? parent.view.safeAreaLayoutGuide.topAnchor, constant: 16),
+        scroll.bottomAnchor.constraint(equalTo: parent.view.keyboardLayoutGuide.topAnchor, constant: -16),
+        fields.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+        fields.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+        fields.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+        fields.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+        fields.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor)])
     return scroll
 }
 // 保留数据库错误分类并显示简短提示。
@@ -176,7 +213,7 @@ private final class TaskDock: UIPresentationController {
     // 取消紧凑草稿，展开后保留表单滚动。
     @objc private func swp() { if contentHeight <= 200 { cls() } }
     // 退出未提交草稿。
-    @objc private func cls() { presentedViewController.dismiss(animated: true) }
+    @objc private func cls() { guard !presentedViewController.isModalInPresentation else{return};presentedViewController.dismiss(animated: true) }
     // 根据键盘和动态字号更新原生容器尺寸。
     override func containerViewWillLayoutSubviews() {
         super.containerViewWillLayoutSubviews(); shade.frame = containerView?.bounds ?? .zero
@@ -232,8 +269,8 @@ func tu_sheet(_ parent: UIViewController, _ content: UIViewController, compact: 
     sheet?.preferredCornerRadius = 20
 }
 // 请求原生删除确认。
-func tu_cfrm(_ parent: UIViewController, _ title: String, _ work: @escaping () -> Void) {
-    let alert = UIAlertController(title: title, message: nil, preferredStyle: .alert)
+func tu_cfrm(_ parent: UIViewController, _ title: String, message: String? = nil, _ work: @escaping () -> Void) {
+    let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
     alert.addAction(UIAlertAction(title: "取消", style: .cancel))
     alert.addAction(UIAlertAction(title: "删除", style: .destructive) { _ in work() }); parent.present(alert, animated: true)
 }
@@ -253,10 +290,10 @@ final class TaskMenu: UITableViewController {
     // 创建分组平面行，外部点击和下拉由原生面板处理。
     override func viewDidLoad() {
         super.viewDidLoad(); view.accessibilityIdentifier = "menu.sheet"; tableView.backgroundColor = TaskTheme.base; tableView.separatorStyle = .none
-        tableView.rowHeight = UITableView.automaticDimension; tableView.estimatedRowHeight = lists ? 56 : 48; tableView.contentInset.top = 8
+        tableView.rowHeight = UITableView.automaticDimension; tableView.estimatedRowHeight = 56; tableView.contentInset.top = 8
         if let header {
             let button = tu_btn(header.title); button.accessibilityIdentifier = header.identifier.rawValue; button.accessibilityLabel = "更多排序"
-            var config = button.configuration; config?.baseForegroundColor = TaskTheme.muted; config?.contentInsets = .init(top: 8, leading: 16, bottom: 8, trailing: 44)
+            var config = button.configuration; config?.baseForegroundColor = TaskTheme.muted; config?.contentInsets = .init(top: 8, leading: 16, bottom: 8, trailing: 48)
             config?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in var value = attributes; value.font = lb_fnt(.subheadline, nil); return value }; button.configuration = config
             let image = UIImageView(image: lb_icon("more")); image.tintColor = TaskTheme.muted; image.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(image)
             NSLayoutConstraint.activate([image.widthAnchor.constraint(equalToConstant: 24), image.heightAnchor.constraint(equalToConstant: 24), image.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -16), image.centerYAnchor.constraint(equalTo: button.centerYAnchor)])
@@ -286,14 +323,15 @@ final class TaskMenu: UITableViewController {
         let selected = item.state == .on
         content.textProperties.color = item.attributes.contains(.disabled) ? TaskTheme.muted : ((lists || caption != nil) && selected ? lb_acnt()! : TaskTheme.ink)
         content.imageProperties.tintColor = content.textProperties.color; content.imageToTextPadding = 16
-        content.directionalLayoutMargins = .init(top: lists ? 16 : 12, leading: lists && item.image == nil ? 56 : 16, bottom: lists ? 16 : 12, trailing: 16)
-        if item.identifier.rawValue == "list.delete" && item.attributes.contains(.disabled) { content.secondaryText = "无法删除此任务列表"; content.secondaryTextProperties.font = lb_fnt(.subheadline, traitCollection); content.secondaryTextProperties.color = TaskTheme.muted }
+        content.directionalLayoutMargins = .init(top: 12, leading: lists && item.image == nil ? 56 : 16, bottom: 12, trailing: 16)
+        if item.identifier.rawValue == "list.delete" && item.attributes.contains(.disabled) { cell.accessibilityHint="默认清单不可删除";cell.addInteraction(UIToolTipInteraction(defaultToolTip:"默认清单不可删除")) }
         cell.contentConfiguration = content; cell.accessibilityIdentifier = item.identifier.rawValue
         var background = UIBackgroundConfiguration.clear(); background.backgroundColor = lists && selected ? TaskTheme.control : .clear; background.cornerRadius = lists ? 28 : 0; background.backgroundInsets.trailing = lists ? 8 : 0; cell.backgroundConfiguration = background
         if selected { cell.accessibilityTraits.insert(.selected) }
         if selected && !lists { let check = UIImageView(image: lb_icon("check")); check.frame.size = CGSize(width: 24, height: 24); check.tintColor = lb_acnt(); cell.accessoryView = check }
         if breaks.contains(indexPath.row) { let line = UIView(); line.backgroundColor = UIColor.separator; line.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(line); NSLayoutConstraint.activate([line.leadingAnchor.constraint(equalTo: cell.leadingAnchor), line.trailingAnchor.constraint(equalTo: cell.trailingAnchor), line.topAnchor.constraint(equalTo: cell.topAnchor), line.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale)]) }
-        cell.tintColor = lb_acnt(); cell.isUserInteractionEnabled = !item.attributes.contains(.disabled); return cell
+        if item.attributes.contains(.disabled){cell.accessibilityTraits.insert(.notEnabled);cell.selectionStyle = .none}
+        cell.contentView.heightAnchor.constraint(greaterThanOrEqualToConstant:56).isActive=true;cell.tintColor = lb_acnt(); return cell
     }
     // 等待面板关闭后执行操作。
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {

@@ -7,6 +7,7 @@ def tstcmd(path, *args, success=True):
     result = run([str(ROOT / 'build/taskstore'), str(path), *args], capture_output=True, text=True)
     assert (result.returncode == 0) == success, result.stderr
     if success:
+        assert result.stdout.isascii(), "device console JSON must use ASCII escapes"
         return jld(result.stdout)
     assert not result.stdout and result.stderr
     return jld(result.stderr)
@@ -16,7 +17,7 @@ def tstcmd(path, *args, success=True):
 def tstcli():
     with TemporaryDirectory(prefix='trolltask-cli-') as root:
         path = Path(root) / 'tasks.sqlite3'
-        assert tstcmd(path, 'schema')['schema_version'] == 10
+        assert tstcmd(path, 'schema')['schema_version'] == 12
         assert tstcmd(path, 'lists')[0]['title'] == '我的任务'
         task = tstcmd(path, 'create', jdmp({'title': '两天完成', 'planned_duration': 172800, 'deadline_at': 1800000000}))
         task_id = task['task_id']
@@ -37,6 +38,16 @@ def tstcli():
         assert tstcmd(path, 'get', task_id) == before
         for args in [('create', '{'), ('create', '[]'), ('update', task_id, 'null'), ('unknown',), ('occur', task_id, 'true')]:
             tstcmd(path, *args, success=False)
+        tstcmd(path, 'day', '1700000000', 'UTC', 'invalid', success=False)
+        source = '## 周一\n1. 8:00~9:00 根据一般待办按顺序完成任务\n2. 9:00~9:30 早餐\n'
+        imported = tstcmd(path, 'routine-import', source, 'cli-test.md')
+        assert imported['added'] == 2
+        assert tstcmd(path, 'routine-import', source, 'cli-test.md')['added'] == 0
+        assert tstcmd(path, 'day', '1700000000', 'UTC')['draft_count'] == 2
+        routines = [item for item in tstcmd(path, 'tasks') if item['routine_source']]
+        assert len(routines) == 2 and all(item['routine_enabled'] == 0 for item in routines)
+        for item in routines:
+            tstcmd(path, 'delete', item['task_id'])
         with connect(path) as db:
             assert db.execute('pragma integrity_check').fetchone() == ('ok',)
             assert db.execute('pragma foreign_key_check').fetchall() == []
@@ -65,9 +76,9 @@ def tstcli():
         tstcmd(path, 'clear-completed', listing)
         assert tstcmd(path, 'get', extra)['deleted'] == 1
         tstcmd(path, 'delete-list', listing)
-        assert len(tstcmd(path, 'lists')) == 1
+        assert len(tstcmd(path, 'lists')) == 2
         assert tstcmd(path, 'clear-completed', listing, success=False)['kind'] == 'not_found'
-        assert tstcmd(path, 'delete-list', tstcmd(path, 'lists')[0]['list_id'], success=False)['kind'] == 'invalid_fields'
+        assert tstcmd(path, 'delete-list', '00000000-0000-4000-8000-000000000001', success=False)['kind'] == 'invalid_fields'
         proof_task = tstcmd(path, 'create', jdmp({'title': '图片打卡命令', 'due_at': 100}))
         plan = tstcmd(path, 'plan', '101')
         alert = next(item for item in plan['alerts'] if item['task_id'] == proof_task['task_id'])
@@ -114,6 +125,10 @@ def tstcli():
             assert tstcmd(path, 'update', task_id, jdmp({'notes': '锁等待失败'}), success=False)['kind'] == 'database_busy'
             lock.rollback()
         assert tstcmd(path, 'get', task_id)['notes'] == before['notes']
+        encoded = {'title': '中文𠀀与引号"', 'notes': '换行\n原样反斜杠\\path'}
+        utf = tstcmd(path, 'create', jdmp(encoded))
+        assert utf['title'] == encoded['title'] and utf['notes'] == encoded['notes']
+        tstcmd(path, 'delete', utf['task_id'])
     print('TaskStore CLI: JSON, durable CRUD/import/order, explicit errors, claims/actions, hold/resume/checkin/proof and atomic batch rollback passed')
 
 

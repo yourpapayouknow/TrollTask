@@ -37,6 +37,8 @@
         planned.textColor = TaskTheme.muted; planned.font = lb_fnt(.subheadline, nil); planned.numberOfLines = 0; planned.adjustsFontSizeToFitWidth = false; planned.accessibilityIdentifier = "hud.planned"
         done = tu_btn("提交", nil, self, #selector(cmpl)); done.accessibilityIdentifier = "hud.complete"
         delay = tu_btn("延后5分钟", nil, self, #selector(snz)); delay.accessibilityIdentifier = "hud.snooze"
+        // 固定操作文字在窄屏大字下保持单行，最低保留20pt。
+        for button in [done!,delay!] {var config=button.configuration;config?.titleLineBreakMode = .byClipping;button.configuration=config;button.titleLabel?.numberOfLines=1;button.titleLabel?.adjustsFontSizeToFitWidth=true;button.titleLabel?.minimumScaleFactor=20.0/32.0}
         let shot = tu_ibtn("screenshot", "截图", "hud.screenshot", self, #selector(sht))
         let upload = tu_ibtn("upload", "上传附件", "hud.image", nil, nil)
         upload.menu = UIMenu(children: [
@@ -233,11 +235,14 @@
         traits.isHidden = traits.arrangedSubviews.isEmpty
         titleText.text = task["title"] as? String; notes.text = task["notes"] as? String; notes.isHidden = notes.text?.isEmpty != false
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "zh_CN"); formatter.dateFormat = task["schedule_kind"] as? String == "date" ? "yyyy-MM-dd" : "yyyy-MM-dd HH:mm"; formatter.timeZone = .current
-        let stamp = (alert["cycle_at"] as? NSNumber)?.doubleValue ?? (alert["scheduled_at"] as? NSNumber)?.doubleValue ?? 0
-        planned.text = "原计划：" + formatter.string(from: Date(timeIntervalSince1970: stamp))
+        let arranged = task["due_at"] is NSNull && alert["kind"] as? String == "plan"
+        let stamp = (alert[arranged ? "scheduled_at" : "cycle_at"] as? NSNumber)?.doubleValue ?? (alert["scheduled_at"] as? NSNumber)?.doubleValue ?? 0
+        planned.text = (arranged ? "日程安排：" : "原计划：") + formatter.string(from: Date(timeIntervalSince1970: stamp))
         delay.isEnabled = (occurrence["defer_count"] as? NSNumber)?.intValue != 1
         done.isEnabled = true
         stt(error == nil ? "提交" : "重试打卡"); mdl(1)
+        // 主动补弹只恢复原窗口，保留附件、选择状态与提交锁。
+        if (alert["manual_reopen"] as? Bool)==true {windowMode?(captureToken == nil ? 1:0)}
         signal.present(alert, store: reminder?.captureStore)
     }
     // 更新唯一主操作的功能反馈。

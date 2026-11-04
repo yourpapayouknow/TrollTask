@@ -8,21 +8,22 @@ private func tp_num(_ text: String, _ id: String) -> UITextField {
 // 为进入下一级的功能行统一提供尾部方向图标。
 private func tp_arr(_ button: UIButton) {
     let arrow = UIImageView(image: lb_icon("down")); arrow.transform = CGAffineTransform(rotationAngle: -.pi / 2); arrow.tintColor = TaskTheme.muted; arrow.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(arrow)
-    var config = button.configuration; config?.contentInsets.trailing = 44; button.configuration = config
-    NSLayoutConstraint.activate([arrow.widthAnchor.constraint(equalToConstant: 24), arrow.heightAnchor.constraint(equalToConstant: 24), arrow.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -8), arrow.centerYAnchor.constraint(equalTo: button.centerYAnchor)])
+    var config = button.configuration; config?.contentInsets.trailing = 48; button.configuration = config
+    NSLayoutConstraint.activate([arrow.widthAnchor.constraint(equalToConstant: 24), arrow.heightAnchor.constraint(equalToConstant: 24), arrow.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -12), arrow.centerYAnchor.constraint(equalTo: button.centerYAnchor)])
 }
 
 // 复用预设和结束条件的平面选择行。
 private func tp_opt(_ title: String, _ id: String, _ target: Any, _ action: Selector) -> UIButton {
     let row = tu_btn(title, nil, target, action); row.accessibilityIdentifier = id
-    var config = row.configuration; config?.contentInsets = .init(top: 12, leading: 40, bottom: 12, trailing: 44)
+    var config = row.configuration; config?.contentInsets = .init(top: 12, leading: 12, bottom: 12, trailing: 48)
     config?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in var value = attributes; value.font = lb_fnt(.body, nil); return value }; row.configuration = config
     let mark = UIImageView(image: lb_icon("check")); mark.tintColor = lb_acnt(); mark.translatesAutoresizingMaskIntoConstraints = false; mark.tag = 1; row.addSubview(mark)
-    NSLayoutConstraint.activate([mark.widthAnchor.constraint(equalToConstant: 24), mark.heightAnchor.constraint(equalToConstant: 24), mark.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8), mark.centerYAnchor.constraint(equalTo: row.centerYAnchor)]); return row
+    NSLayoutConstraint.activate([mark.widthAnchor.constraint(equalToConstant: 24), mark.heightAnchor.constraint(equalToConstant: 24), mark.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -12), mark.centerYAnchor.constraint(equalTo: row.centerYAnchor)]); return row
 }
 
 // 保存完整重复属性并只修改用户改变的规则参数。
 @objc(TaskRepeat) final class TaskRepeat: TaskScreen, UIPickerViewDataSource, UIPickerViewDelegate {
+    var allowsNone = true
     private let original: TaskFields, reply: ((TaskFields) -> Void)?
     private var type: String, end = "none", days: Set<String> = [], dirty: Set<String> = []
     private var interval: UITextField!, count: UITextField!
@@ -87,8 +88,9 @@ private func tp_opt(_ title: String, _ id: String, _ target: Any, _ action: Sele
             let ordinal = ["第一个", "第二个", "第三个", "第四个", "第五个"][(day - 1) / 7]
             presetKeys = ["none", "daily", "weekly", "ordinal", "monthly", "yearly", "workdays", "custom"]
             let titles = ["不重复", "每天", "每1周的" + week, "每1个月的" + ordinal + week, "每1个月的\(day)号", "每年", "每个工作日", "自定义…"]
-            typeRows.axis = .vertical; typeRows.spacing = 0
-            for (key, name) in zip(presetKeys, titles) {
+            let choices = zip(presetKeys,titles).filter { allowsNone || $0.0 != "none" }; presetKeys = choices.map { $0.0 }
+            typeRows.axis = .vertical; typeRows.spacing = 8
+            for (key, name) in choices {
                 let row = tp_opt(name, "repeat.type." + key, self, #selector(tpSel(_:)))
                 typeRows.addArrangedSubview(row)
             }
@@ -99,7 +101,7 @@ private func tp_opt(_ title: String, _ id: String, _ target: Any, _ action: Sele
     @objc private func tpSel(_ sender: UIButton) {
         let key = String(sender.accessibilityIdentifier!.dropFirst(12))
         if key == "custom" {
-            let editor = TaskRepeat(fields: original, reply: reply); editor.customMode = true
+            let editor = TaskRepeat(fields: original, reply: reply); editor.customMode = true; editor.allowsNone = allowsNone
             navigationItem.backButtonTitle = "重复"; navigationController?.pushViewController(editor, animated: true); return
         }
         type = key; interval.text = "1"; dirty.formUnion(["type", "interval", "days"])
@@ -122,6 +124,8 @@ private func tp_opt(_ title: String, _ id: String, _ target: Any, _ action: Sele
     func numberOfComponents(in pickerView: UIPickerView) -> Int { 2 }
     // 保留原有大间隔值。
     func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int { component == 0 ? pickerLimit : freqs.count }
+    // 原生滚轮行高随动态字号增大，避免文字相互覆盖。
+    func pickerView(_ pickerView:UIPickerView,rowHeightForComponent component:Int)->CGFloat {max(44,lb_fnt(.body,traitCollection).lineHeight+8)}
     // 使用中文单位和统一字体。
     func pickerView(_ pickerView: UIPickerView, viewForRow row: Int, forComponent component: Int, reusing view: UIView?) -> UIView {
         let label = view as? UILabel ?? tu_lbl(nil); label.textAlignment = .center; label.text = component == 0 ? String(row + 1) : units[row]; return label
@@ -217,9 +221,9 @@ private final class TaskRepEnd: TaskScreen {
             if index == 0 { let icon = UIImageView(image: lb_icon("repeat")); icon.tintColor = TaskTheme.muted; icon.translatesAutoresizingMaskIntoConstraints = false; row.addSubview(icon); NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: row.leadingAnchor), icon.centerYAnchor.constraint(equalTo: row.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 24), icon.heightAnchor.constraint(equalToConstant: 24)]) }
         }
         let done = tu_btn("完成", nil, self, #selector(sv)); done.accessibilityIdentifier = "repeat.end.done"; var style = done.configuration; style?.baseForegroundColor = lb_acnt(); done.configuration = style; navigationItem.rightBarButtonItem = UIBarButtonItem(customView: done)
-        count.textAlignment = .left; count.accessibilityLabel = "重复次数"; countRow = tu_stk([count, tu_lbl("次后"), UIView()]); countRow.axis = .horizontal; countRow.alignment = .center; countRow.spacing = 4; countRow.translatesAutoresizingMaskIntoConstraints = false; countSlot.addSubview(countRow)
+        count.textAlignment = .left; count.accessibilityLabel = "重复次数"; countRow = tu_stk([count, tu_lbl("次后"), UIView()]); countRow.axis = .horizontal; countRow.alignment = .center; countRow.spacing = 8; countRow.translatesAutoresizingMaskIntoConstraints = false; countSlot.addSubview(countRow)
         let mark = UIImageView(image: lb_icon("check")); mark.tintColor = lb_acnt(); mark.translatesAutoresizingMaskIntoConstraints = false; countSlot.addSubview(mark)
-        NSLayoutConstraint.activate([countRow.leadingAnchor.constraint(equalTo: countSlot.leadingAnchor, constant: 40), countRow.trailingAnchor.constraint(equalTo: countSlot.trailingAnchor, constant: -44), countRow.topAnchor.constraint(equalTo: countSlot.topAnchor), countRow.bottomAnchor.constraint(equalTo: countSlot.bottomAnchor), countSlot.heightAnchor.constraint(greaterThanOrEqualToConstant: 48), mark.widthAnchor.constraint(equalToConstant: 24), mark.heightAnchor.constraint(equalToConstant: 24), mark.trailingAnchor.constraint(equalTo: countSlot.trailingAnchor, constant: -8), mark.centerYAnchor.constraint(equalTo: countSlot.centerYAnchor)])
+        NSLayoutConstraint.activate([countRow.leadingAnchor.constraint(equalTo: countSlot.leadingAnchor, constant: 12), countRow.trailingAnchor.constraint(equalTo: countSlot.trailingAnchor, constant: -48), countRow.topAnchor.constraint(equalTo: countSlot.topAnchor), countRow.bottomAnchor.constraint(equalTo: countSlot.bottomAnchor), countSlot.heightAnchor.constraint(greaterThanOrEqualToConstant: 48), mark.widthAnchor.constraint(equalToConstant: 24), mark.heightAnchor.constraint(equalToConstant: 24), mark.trailingAnchor.constraint(equalTo: countSlot.trailingAnchor, constant: -12), mark.centerYAnchor.constraint(equalTo: countSlot.centerYAnchor)])
         date.addTarget(self, action: #selector(dtChg), for: .valueChanged)
         tu_form(self, tu_stk([rows[0], rows[1], date, rows[2], countSlot]), "repeat.end.form"); refresh()
     }
@@ -251,8 +255,8 @@ private final class TaskRaw: TaskScreen {
     required init?(coder: NSCoder) { fatalError("Use init(text:save:)") }
     // 创建完整规则输入和完成入口。
     override func viewDidLoad() {
-        super.viewDidLoad(); title = "完整重复规则"; field.text = text; field.accessibilityIdentifier = "repeat.rules"; field.font = lb_fnt(.body, nil); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.backgroundColor = .clear
-        field.heightAnchor.constraint(greaterThanOrEqualToConstant: 216).isActive = true
+        super.viewDidLoad(); title = "完整重复规则"; field.text = text; field.accessibilityIdentifier = "repeat.rules"; field.font = lb_fnt(.body, nil); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink;
+        tu_fld(field);field.isScrollEnabled = false; field.heightAnchor.constraint(greaterThanOrEqualToConstant: 216).isActive = true
         let done = tu_btn("完成", nil, self, #selector(sv)); done.accessibilityIdentifier = "repeat.raw.done"; var style = done.configuration; style?.baseForegroundColor = lb_acnt(); done.configuration = style; navigationItem.rightBarButtonItem = UIBarButtonItem(customView: done)
         tu_form(self, tu_stk([field]), "repeat.raw.form")
     }
@@ -262,6 +266,7 @@ private final class TaskRaw: TaskScreen {
 
 // 使用iOS16原生月历及系统时间输入。
 @available(iOS 16, *) @objc(TaskCalendar) final class TaskCalendar: TaskScreen, UICalendarSelectionSingleDateDelegate {
+    var requiresTime = false
     private var date: Date, repeatName: String?
     private let zone: TimeZone, deadline: Bool
     private var timed: Bool, clockMode = false
@@ -279,6 +284,7 @@ private final class TaskRaw: TaskScreen {
     // 创建原生月历、时间和独立截止控件。
     override func viewDidLoad() {
         super.viewDidLoad(); var local = Calendar(identifier: .gregorian); local.timeZone = zone
+        if requiresTime { timed = true }
         calendar.tintColor = UIColor(red: 184/255, green: 85/255, blue: 0, alpha: 1); calendar.accessibilityIdentifier = "calendar.month"; calendar.calendar = local; calendar.timeZone = zone; calendar.locale = Locale(identifier: "zh_CN")
         let selection = UICalendarSelectionSingleDate(delegate: self); calendar.selectionBehavior = selection
         let parts = local.dateComponents([.year, .month, .day], from: date); selection.setSelected(parts, animated: false); calendar.setVisibleDateComponents(parts, animated: false)
@@ -290,13 +296,14 @@ private final class TaskRaw: TaskScreen {
         clockRow = tu_stk([timeBtn, remove]); clockRow.axis = .horizontal; clockRow.accessibilityIdentifier = "calendar.clockRow"
         let done = tu_btn("完成", nil, self, #selector(sv)); done.accessibilityIdentifier = "calendar.done"; var config = done.configuration; config?.baseForegroundColor = lb_acnt(); done.configuration = config
         repeatBtn = tu_btn(repeatName ?? "不重复", "repeat", self, #selector(rpt)); repeatBtn.isHidden = deadline; repeatBtn.isEnabled = action != nil; repeatBtn.accessibilityIdentifier = "calendar.repeat"; var repeatStyle = repeatBtn.configuration; repeatStyle?.contentInsets.trailing = 44; repeatBtn.configuration = repeatStyle
-        let header = UIView(), label = tu_lbl(deadline ? "选择截止日期" : "日期和时间")
-        label.font = lb_fnt(.headline, nil); label.textAlignment = .center
-        for item in [label, done] { item.translatesAutoresizingMaskIntoConstraints = false; header.addSubview(item) }
-        NSLayoutConstraint.activate([header.heightAnchor.constraint(greaterThanOrEqualToConstant: 56), done.trailingAnchor.constraint(equalTo: header.trailingAnchor), done.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            label.centerXAnchor.constraint(equalTo: header.centerXAnchor), label.topAnchor.constraint(equalTo: header.topAnchor, constant: 4), label.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -4), label.trailingAnchor.constraint(lessThanOrEqualTo: done.leadingAnchor, constant: -4), label.leadingAnchor.constraint(greaterThanOrEqualTo: header.leadingAnchor, constant: 4)])
+        let label=tu_lbl(deadline ? "选择截止日期":"日期和时间"),header=hdr(label,nil,done)
         tp_arr(repeatBtn)
-        tu_form(self, tu_stk([header, dayBtn, calendar, clockRow, time, repeatBtn]), "calendar.form"); mode()
+        tu_form(self, tu_stk([dayBtn, calendar, clockRow, time, repeatBtn]), "calendar.form",top:header); mode()
+    }
+    // 使用语义文字识别星期标签，补足原生月历的文字对比度。
+    override func viewDidLayoutSubviews(){
+        super.viewDidLayoutSubviews();calendar.layoutIfNeeded();let format=DateFormatter();format.locale=calendar.locale;let weekdays=Set(format.shortStandaloneWeekdaySymbols ?? []);var views=calendar.subviews
+        while let view=views.popLast(){if let label=view as? UILabel,weekdays.contains(label.text ?? ""){label.textColor=TaskTheme.muted};views.append(contentsOf:view.subviews)}
     }
     // 更新草稿重复标签。
     @objc func rptName(_ name: String) { repeatName = name; repeatBtn?.setTitle(name, for: .normal) }
@@ -317,7 +324,7 @@ private final class TaskRaw: TaskScreen {
     @objc private func clkChg() { mode() }
     // 保持原版日期与时间两个互斥面板。
     private func mode() {
-        calendar.isHidden = clockMode; dayBtn.isHidden = !clockMode; time.isHidden = !clockMode || deadline; clockRow.isHidden = deadline; remove.isHidden = !timed
+        calendar.isHidden = clockMode; dayBtn.isHidden = !clockMode; time.isHidden = !clockMode || deadline; clockRow.isHidden = deadline; remove.isHidden = !timed || requiresTime
         let format = DateFormatter(); format.locale = Locale(identifier: "zh_CN"); format.timeZone = zone; format.dateFormat = "M月d日 EEEE"
         dayBtn.setTitle(format.string(from: date), for: .normal)
         format.dateFormat = "HH:mm"; timeBtn.setTitle(timed ? format.string(from: time.date) : "设置时间", for: .normal)

@@ -24,7 +24,7 @@ static void tstnote(int token) {
 
 // 验证配置默认值、异常输入和读写通知。
 static void tstcfg(void) {
-    assert([lb_ldcfg() isEqual:@{@"enabled": @YES}]);
+    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
     int config = tstreg(LB_CFG_NOTE);
     int preview = tstreg(LB_TEST_NOTE);
     assert(lb_svcfg(@{@"enabled": @NO, @"unknown": @42}));
@@ -34,15 +34,15 @@ static void tstcfg(void) {
     assert(notify_check(preview, &changed) == NOTIFY_STATUS_OK && !changed);
 
     assert(lb_svcfg(nil));
-    assert([lb_ldcfg() isEqual:@{@"enabled": @YES}]);
+    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
     for (id value in @[@"false", NSNull.null, @[], @{}]) {
         assert(lb_svcfg(@{@"enabled": value}));
-        assert([lb_ldcfg() isEqual:@{@"enabled": @YES}]);
+        assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
     }
     assert(lb_svcfg((NSDictionary *)(id)@[]));
-    assert([lb_ldcfg() isEqual:@{@"enabled": @YES}]);
+    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
     assert([@"invalid plist" writeToFile:lb_tstpath atomically:YES encoding:NSUTF8StringEncoding error:nil]);
-    assert([lb_ldcfg() isEqual:@{@"enabled": @YES}]);
+    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
 
     assert(notify_check(config, &changed) == NOTIFY_STATUS_OK);
     NSString *savedPath = lb_tstpath;
@@ -52,6 +52,31 @@ static void tstcfg(void) {
     assert(notify_check(config, &changed) == NOTIFY_STATUS_OK && !changed);
     assert(notify_cancel(config) == NOTIFY_STATUS_OK);
     assert(notify_cancel(preview) == NOTIFY_STATUS_OK);
+}
+
+// 验证旧开关只迁移一次，界面偏好的后续写入无法改变服务状态。
+static void tstmigcfg(void) {
+    NSString *savedPath = lb_tstpath;
+    for (NSNumber *enabled in @[@NO, @YES]) {
+        lb_tstpath = [savedPath stringByAppendingFormat:@".migrate-%d", enabled.boolValue];
+        NSString *legacyPath = [lb_tstpath stringByAppendingString:@".legacy"];
+        NSDictionary *expected = @{@"enabled": enabled};
+        assert(([@{@"enabled": enabled, @"routine.calendar": @YES} writeToFile:legacyPath atomically:YES]));
+        assert([lb_ldcfg() isEqual:expected]);
+        assert([[NSDictionary dictionaryWithContentsOfFile:lb_tstpath] isEqual:expected]);
+        assert(([@{@"enabled": @(!enabled.boolValue), @"routine.calendar": @NO} writeToFile:legacyPath atomically:YES]));
+        assert([lb_ldcfg() isEqual:expected]);
+        assert(lb_svcfg(@{@"enabled": @NO}));
+        assert(![lb_ldcfg()[@"enabled"] boolValue]);
+        assert([@"invalid plist" writeToFile:lb_tstpath atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+        assert(![lb_ldcfg()[@"enabled"] boolValue]);
+    }
+    lb_tstpath = [savedPath stringByAppendingString:@".view-only"];
+    assert(([@{@"routine.calendar": @YES} writeToFile:[lb_tstpath stringByAppendingString:@".legacy"] atomically:YES]));
+    assert(![lb_ldcfg()[@"enabled"] boolValue]);
+    assert(([@{@"enabled": @YES} writeToFile:[lb_tstpath stringByAppendingString:@".legacy"] atomically:YES]));
+    assert(![lb_ldcfg()[@"enabled"] boolValue]);
+    lb_tstpath = savedPath;
 }
 
 // 验证预览、就绪和退出通知互不串扰。
@@ -178,6 +203,7 @@ int main(void) {
         NSString *lockPath = [root stringByAppendingPathComponent:@"hud.lock"];
         lb_tstlock = lockPath.fileSystemRepresentation;
         tstcfg();
+        tstmigcfg();
         tstipc();
         tstlock();
         tsttap();

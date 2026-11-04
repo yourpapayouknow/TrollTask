@@ -86,6 +86,7 @@ static void rm_end(NSUInteger count) {
 }
 // 验证锁竞争、显式关闭、缺失存储与禁用状态。
 static void rm_unit(void) {
+    rm_req(lb_svcfg(@{@"enabled":@YES}),@"明确开启隔离服务夹具");
     NSString *path=[rm_root stringByAppendingPathComponent:@"owned.sqlite3"]; __block NSUInteger cleanup=0;
     TaskReminder *service=[[TaskReminder alloc] initAt:path handler:^(__unused NSDictionary *a,__unused NSError *e){} cleanup:^{ cleanup++; rm_req(lb_svcup() && rm_fd(path)==0,@"服务清理仍持锁且数据库已关闭"); } finish:^(__unused BOOL r){}];
     rm_req([service open:nil] && !service.running && lb_svcup(),@"窗口启动前加载存储和锁");
@@ -181,8 +182,11 @@ static void rm_proc(NSString *path) {
     notify_post(LB_STOP_NOTE); rm_end(6);
     rm_req(lb_spawn(),@"休眠恢复测试启动唯一服务");
     rm_wt(3,^BOOL { return rm_rows(@"starts.jsonl").count==7 && lb_svcup(); },@"暂停前服务就绪");
-    pid=rm_pid();rm_req(kill(pid,SIGSTOP)==0,@"实际暂停调度进程");
-    NSDictionary *missed=[writer crtTsk:@{@"title":@"暂停期间到期",@"due_at":@(NSDate.date.timeIntervalSince1970+0.2)} error:nil];
+    // 先取得写锁再暂停，避免把服务冻结在持锁事务内。
+    pid=rm_pid(); NSError *pauseError=nil;
+    rm_req([writer wrTxn:^BOOL(NSError **failure) { (void)failure; return kill(pid,SIGSTOP)==0; } error:&pauseError],pauseError.localizedDescription ?: @"实际暂停调度进程");
+    NSDictionary *missed=[writer crtTsk:@{@"title":@"暂停期间到期",@"due_at":@(NSDate.date.timeIntervalSince1970+0.2)} error:&pauseError];
+    rm_req(missed!=nil,pauseError.localizedDescription ?: @"暂停期间成功创建待办");
     NSDate *wake=[NSDate dateWithTimeIntervalSinceNow:0.5];
     while (wake.timeIntervalSinceNow>0) CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.01,true);
     rm_req([writer lsOcc:missed[@"task_id"] error:nil].count==0,@"暂停期间不会执行尚未运行的timer");

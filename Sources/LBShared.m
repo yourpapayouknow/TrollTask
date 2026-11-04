@@ -32,14 +32,33 @@ void lb_dbgarm(unsigned int seconds) { signal(SIGALRM, SIG_DFL); alarm(seconds);
 // 生成经过边界校验的配置。
 static NSDictionary *lb_normcfg(NSDictionary *input) {
     id enabled = [input isKindOfClass:NSDictionary.class] ? input[@"enabled"] : nil;
+#ifdef LB_HUD_PROBE
     BOOL active = [enabled isKindOfClass:NSNumber.class] ? [enabled boolValue] : YES;
+#else
+    BOOL active = [enabled isKindOfClass:NSNumber.class] && [enabled boolValue];
+#endif
     return @{@"enabled": @(active)};
 }
 
 // 读取共享配置文件。
 NSDictionary *lb_ldcfg(void) {
-    NSDictionary *stored = [NSDictionary dictionaryWithContentsOfFile:LB_PREF_PATH];
-    return lb_normcfg(stored ?: @{});
+    NSString *path = LB_PREF_PATH;
+    if (!path.length) return lb_normcfg(nil);
+    NSDictionary *stored = [NSDictionary dictionaryWithContentsOfFile:path];
+#ifdef LB_OLD_PREF_PATH
+    if (!stored && ![NSFileManager.defaultManager fileExistsAtPath:path]) {
+        // 迁移旧开关或写入关闭默认值，保留原文件中的界面偏好。
+        NSDictionary *legacy = [NSDictionary dictionaryWithContentsOfFile:LB_OLD_PREF_PATH];
+        NSString *staging = [path stringByAppendingFormat:@".%@", NSUUID.UUID.UUIDString];
+        if ([lb_normcfg(legacy) writeToFile:staging atomically:YES]) {
+            // 独占发布完整文件，避免覆盖另一个进程刚保存的开关。
+            link(staging.fileSystemRepresentation, path.fileSystemRepresentation);
+            unlink(staging.fileSystemRepresentation);
+            stored = [NSDictionary dictionaryWithContentsOfFile:path];
+        }
+    }
+#endif
+    return lb_normcfg(stored);
 }
 
 // 保存共享配置文件。

@@ -2,7 +2,8 @@
 
 #define TS_DB_PATH @"/var/mobile/Library/Application Support/com.iwmei.taskforiwmei/tasks.sqlite3"
 #define TS_DFLT_LST @"00000000-0000-4000-8000-000000000001"
-#define TS_SCH_VER 10
+#define TS_RTN_LST @"00000000-0000-4000-8000-000000000002"
+#define TS_SCH_VER 12
 #define TS_ATT_MAX 6
 #define TS_DATA_NOTE "com.iwmei.taskforiwmei.data"
 #define TS_CAPTURE_NOTE "com.iwmei.taskforiwmei.capture"
@@ -34,6 +35,27 @@
 - (BOOL)clrCmpl:(NSString *)listID error:(NSError **)error;
 // 读取全部清单。
 - (NSArray *)lsLsts:(NSError **)error;
+// 幂等建立不可删除的常律清单。
+- (BOOL)rtnList:(NSError **)error;
+// 读取指定当地日期的完整安排及未排原因，不修改任务。
+- (NSDictionary *)dayAt:(NSTimeInterval)stamp zone:(NSString *)zone now:(NSTimeInterval)now error:(NSError **)error;
+// 只展开指定范围内的常律规则，不读取执行历史。
+- (NSArray *)rtnDays:(NSTimeInterval)stamp count:(NSUInteger)count zone:(NSString *)zone error:(NSError **)error;
+// 计算下一个当地02:00。
++ (NSTimeInterval)nextExpiry:(NSTimeInterval)stamp zone:(NSString *)zone;
+// 只在内存中预览禁用常律，不启动提醒。
+- (NSDictionary *)draftDay:(NSTimeInterval)stamp zone:(NSString *)zone now:(NSTimeInterval)now error:(NSError **)error;
+// 事务导入原文和禁用草稿，重复导入不覆盖用户修改。
+- (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error;
+// 事务固化已核验的正式周表，并归档原文对应的旧草稿。
+- (NSDictionary *)applyRtns:(NSDictionary *)document error:(NSError **)error;
+// 按最新快照原子安排当天普通任务，保留已呈现和已到期轮次。
+- (BOOL)arrangeAt:(NSTimeInterval)stamp zone:(NSString *)zone error:(NSError **)error;
+// 计算窗口内扣除现有安排后的真实工作空档。
+- (NSDictionary *)roomAt:(NSTimeInterval)start until:(NSTimeInterval)end zone:(NSString *)zone excluding:(NSArray *)ids now:(NSTimeInterval)now error:(NSError **)error NS_SWIFT_NAME(room(start:end:zone:excluding:now:));
+// 读取与写入同库评估记录，不改变提醒状态。
+- (NSDictionary *)rdReview:(NSString *)taskID error:(NSError **)error NS_SWIFT_NAME(review(_:));
+- (BOOL)svReview:(NSString *)taskID data:(NSDictionary *)data error:(NSError **)error NS_SWIFT_NAME(storeReview(_:data:));
 // 创建稳定UUID的任务。
 - (NSDictionary *)crtTsk:(NSDictionary *)fields error:(NSError **)error;
 // 导入指定UUID，冲突时拒绝覆盖。
@@ -56,6 +78,8 @@
 - (BOOL)rstrTsk:(NSString *)taskID error:(NSError **)error;
 // 按实际下一次提醒时间读取所有未完成且未删除任务。
 - (NSArray *)lsPnd:(NSError **)error;
+// 复用已读取的调度快照以构建未完成任务列表。
++ (NSArray *)pndRows:(NSDictionary *)snapshot;
 // 独立读取未删除的已完成任务。
 - (NSArray *)lsCmpl:(NSError **)error;
 // 读取持久化数据修订号。
@@ -80,6 +104,8 @@
 - (BOOL)chkOcc:(NSString *)occID attachments:(NSArray<NSDictionary *> *)attachments error:(NSError **)error;
 // 按附件序号读取同库证据，元数据读取不加载图片。
 - (NSArray<NSDictionary *> *)lsChk:(NSString *)occID images:(BOOL)images error:(NSError **)error;
+// 只读取指定附件的完整内容，避免一次加载六份大文件。
+- (NSDictionary *)rdPrf:(NSString *)occID position:(NSInteger)position error:(NSError **)error;
 // 读取本次打卡元数据或完整图片。
 - (NSDictionary *)rdChk:(NSString *)occID image:(BOOL)image error:(NSError **)error;
 // 在同库建立唯一的短期前台采集请求。

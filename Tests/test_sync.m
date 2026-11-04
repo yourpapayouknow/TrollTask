@@ -31,9 +31,10 @@ static void tstcrud(NSString *path) {
     assert(([TaskStore vldTxt:[@"a" stringByPaddingToLength:1024 withString:@"a" startingAtIndex:0]
         notes:[@"a" stringByPaddingToLength:8192 withString:@"a" startingAtIndex:0] error:nil]));
     assert(([store revision:nil] == 0 && !tstnote(token)));
+    NSTimeInterval base = ceil(NSDate.date.timeIntervalSince1970);
     __block NSDictionary *task = nil;
     assert(([store wrTxn:^BOOL(NSError **error) {
-        task = [store crtTsk:@{@"title": @"计划", @"due_at": @200, @"deadline_at": @100, @"snooze_until": @300} error:error];
+        task = [store crtTsk:@{@"title": @"计划", @"due_at": @(base+200), @"deadline_at": @(base+100), @"snooze_until": @(base+300)} error:error];
         assert((task && !tstnote(token)));
         assert(([reader lsTsks:nil].count == 0));
         return [store updTsk:task[@"task_id"] fields:@{@"notes": @"已提交"} error:error];
@@ -57,11 +58,11 @@ static void tstcrud(NSString *path) {
     assert(([failure.userInfo[@"kind"] isEqual:@"duplicate_uuid"] && !tstnote(token)));
     failure = nil;
     assert((![store crtTsk:@{@"title": NSNull.null} error:&failure] && [failure.userInfo[@"kind"] isEqual:@"invalid_fields"]));
-    NSDictionary *second = [store crtTsk:@{@"title": @"更晚", @"due_at": @150} error:nil];
+    NSDictionary *second = [store crtTsk:@{@"title": @"更晚", @"due_at": @(base+150)} error:nil];
     NSDictionary *floating = [store crtTsk:@{@"title": @"无时间"} error:nil];
     NSArray *pending = [store lsPnd:nil];
     assert((pending.count == 3 && [pending[0][@"task_id"] isEqual:task[@"task_id"]]));
-    assert(([pending[0][@"remind_at"] isEqual:@100] && [pending[2][@"task_id"] isEqual:floating[@"task_id"]]));
+    assert(([pending[0][@"remind_at"] isEqual:@(base+100)] && [pending[2][@"task_id"] isEqual:floating[@"task_id"]]));
     assert(([store cmplTsk:task[@"task_id"] error:nil] && [store lsCmpl:nil].count == 1 && [store lsPnd:nil].count == 2));
     assert(([store rstrTsk:task[@"task_id"] error:nil] && [store lsCmpl:nil].count == 0));
     NSDictionary *child = [store crtTsk:@{@"title": @"子任务", @"parent_id": second[@"task_id"]} error:nil];

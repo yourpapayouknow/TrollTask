@@ -98,10 +98,11 @@ static void ut_bounds(UIView *view, UIView *viewport) {
     if ([view.accessibilityIdentifier isEqual:@"home.tabs"]) return;
     for (UIView *child in view.subviews) {
         if (child.hidden) continue;
+        BOOL nativeCalendar=NO;if(@available(iOS 16.0,*))nativeCalendar=[child isKindOfClass:UICalendarView.class];
         if ([child isKindOfClass:UIStackView.class] || [child isKindOfClass:UILabel.class]
             || [child isKindOfClass:UIButton.class] || [child isKindOfClass:UITextField.class]
             || [child isKindOfClass:UITextView.class] || [child isKindOfClass:UISwitch.class]
-            || [child isKindOfClass:UIDatePicker.class]) {
+            || [child isKindOfClass:UIDatePicker.class] || nativeCalendar) {
             CGRect aligned = [child alignmentRectForFrame:child.frame];
             CGRect visible = [child convertRect:child.bounds toView:viewport];
             BOOL calendar = NO;
@@ -120,7 +121,7 @@ static void ut_bounds(UIView *view, UIView *viewport) {
                 [NSException raise:@"UITestFailure" format:@"勾选图标超出按钮%@", NSStringFromCGRect(image)];
         }
         if ([child isKindOfClass:UITextView.class] || [child isKindOfClass:UITextField.class]
-            || [child isKindOfClass:UIDatePicker.class] || [child isKindOfClass:UIButton.class]) continue;
+            || [child isKindOfClass:UIDatePicker.class] || [child isKindOfClass:UIButton.class] || nativeCalendar) continue;
         // 附件滚动内容由HUD单行及末项可达断言单独检查。
         if ([child.accessibilityIdentifier isEqual:@"hud.attachments"]) {
             CGRect frame=[child convertRect:child.bounds toView:viewport];
@@ -131,6 +132,41 @@ static void ut_bounds(UIView *view, UIView *viewport) {
         ut_bounds(child, viewport);
     }
 }
+// 按实际控件属性单独记录设计规范，不以功能通过代替设计验收。
+static void ut_dsgn(NSString *name) {
+    UIView *root=ut_top().view,*header=ut_find(root,@"screen.header"),*form=ut_find(root,@"settings.content") ?: ut_find(root,@"assistant.config"),*tabs=ut_find(root,@"home.tabs");
+    if(!header || (!form && !tabs))return;
+    NSMutableArray *rows=[NSMutableArray new],*labels=[NSMutableArray new];__block BOOL valid=YES;
+    void(^record)(NSString *,NSString *,BOOL,NSString *)=^(NSString *item,NSString *rule,BOOL pass,NSString *evidence){[rows addObject:@{@"element":item ?: @"view",@"rule":rule,@"score":pass ? @100:@95,@"compliant":@(pass),@"evidence":evidence ?: @""}];valid=valid && pass;};
+    NSMutableArray *pending=[NSMutableArray arrayWithObject:header];if(form)[pending addObject:form];if(tabs)[pending addObject:tabs];
+    while(pending.count){UIView *view=pending.lastObject;[pending removeLastObject];
+        if(view.hidden)continue;NSString *item=view.accessibilityIdentifier ?: [NSStringFromClass(view.class) stringByAppendingString:NSStringFromCGRect([view convertRect:view.bounds toView:root])];
+        if([view isKindOfClass:UIButton.class]){UIButton *button=(UIButton *)view;NSString *key=button.accessibilityIdentifier;if(!key)continue;
+            UIEdgeInsets insets=UIEdgeInsetsMake(button.configuration.contentInsets.top,button.configuration.contentInsets.leading,button.configuration.contentInsets.bottom,button.configuration.contentInsets.trailing);
+            record(key,@"按钮按用途留白",insets.top==8 && insets.bottom==8 && (insets.left==8 || insets.left==12) && insets.left==insets.right,NSStringFromUIEdgeInsets(insets));
+            record(key,@"手机控件12圆角",button.configuration.background.cornerRadius==12,[NSString stringWithFormat:@"%.1f",button.configuration.background.cornerRadius]);
+            record(key,@"图文8间距",button.configuration.imagePadding==8,[NSString stringWithFormat:@"%.1f",button.configuration.imagePadding]);
+            record(key,@"触摸区至少44",button.bounds.size.width>=44 && button.bounds.size.height>=44,NSStringFromCGSize(button.bounds.size));
+            BOOL userList=[key hasPrefix:@"list."] && ![@[@"list.today",@"list.starred",[@"list." stringByAppendingString:TS_RTN_LST]] containsObject:key];
+            if(!userList){if(button.configuration.title.length)[labels addObject:button.configuration.title];if(button.configuration.subtitle.length)[labels addObject:button.configuration.subtitle];}continue;
+        }
+        if([view isKindOfClass:UITextField.class] || [view isKindOfClass:UITextView.class])record(item,@"输入框12圆角",view.layer.cornerRadius==12,[NSString stringWithFormat:@"%.1f",view.layer.cornerRadius]);
+        if([view isKindOfClass:UIControl.class] || [view isKindOfClass:UITextView.class])continue;
+        if([view isMemberOfClass:UIStackView.class])record(item,@"组件间距按层级",[@[@4,@8,@16,@24]containsObject:@(((UIStackView *)view).spacing)],[NSString stringWithFormat:@"%.1f",((UIStackView *)view).spacing]);
+        if([view isKindOfClass:UILabel.class] && ((UILabel *)view).text.length)[labels addObject:((UILabel *)view).text];
+        [pending addObjectsFromArray:view.subviews];
+    }
+    for(NSString *text in labels){record(text,@"静态文字至多13字",text.length<=13,[NSString stringWithFormat:@"%lu",(unsigned long)text.length]);record(text,@"禁止emoji",[text rangeOfString:@"[\\p{So}]" options:NSRegularExpressionSearch].location==NSNotFound,text);record(text,@"无重复静态标签",[labels indexesOfObjectsPassingTest:^BOOL(id other,NSUInteger index,BOOL *stop){(void)index;(void)stop;return [other isEqual:text];}].count==1,text);}
+    if(form){CGRect frame=[form convertRect:form.bounds toView:root];CGRect safe=root.safeAreaLayoutGuide.layoutFrame;record(form.accessibilityIdentifier,@"页面16侧边距",fabs(frame.origin.x-safe.origin.x-16)<1 && fabs(CGRectGetMaxX(safe)-CGRectGetMaxX(frame)-16)<1,NSStringFromCGRect(frame));}
+    NSMutableDictionary *scores=[NSMutableDictionary new];for(NSDictionary *row in rows){NSString *item=row[@"element"];scores[item]=@((scores[item] ? [scores[item]integerValue]:100)-([row[@"compliant"]boolValue] ? 0:5));}
+    NSNumber *minimum=[scores.allValues valueForKeyPath:@"@min.self"] ?: @100;
+    NSDictionary *report=@{@"page":name,@"all_compliant":@(valid),@"minimum_score":minimum,@"element_scores":scores,@"elements":rows};
+    [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]writeToFile:[ut_docs stringByAppendingPathComponent:[@"DesignAudit-" stringByAppendingString:[name stringByAppendingString:@".json"]]] atomically:YES];
+    ut_req(valid,[@"独立设计门禁：" stringByAppendingString:name]);
+}
+
+// 导出页面控件审查数据。
+static void ut_pgdata(NSString *name,UIView *root,UINavigationController *nav);
 // 保存UIKit真实渲染并检查应用控件边界。
 static void ut_shot(NSString *name, CGFloat width, CGFloat height, BOOL large) {
     // 按用户验收范围仅检查iPhone宽度。
@@ -141,8 +177,9 @@ static void ut_shot(NSString *name, CGFloat width, CGFloat height, BOOL large) {
     ut_ui(^{
         UIViewController *root = ut_top(); UINavigationController *nav = root.navigationController ?: ut_nav;
         container = root.navigationController ? nav.view : root.view; originalFrame = container.frame;
-        if (root.parentViewController == nav) [nav setOverrideTraitCollection:[UITraitCollection traitCollectionWithPreferredContentSizeCategory:
-            large ? UIContentSizeCategoryAccessibilityExtraExtraExtraLarge : UIContentSizeCategoryLarge] forChildViewController:root];
+        if(@available(iOS 17.0,*)){if([ut_args containsObject:@"--design-pages"])root.traitOverrides.preferredContentSizeCategory=large ? UIContentSizeCategoryAccessibilityExtraExtraExtraLarge:UIContentSizeCategoryLarge;
+            else if(root.parentViewController==nav)[nav setOverrideTraitCollection:[UITraitCollection traitCollectionWithPreferredContentSizeCategory:large ? UIContentSizeCategoryAccessibilityExtraExtraExtraLarge:UIContentSizeCategoryLarge]forChildViewController:root];}
+        else if(root.parentViewController==nav)[nav setOverrideTraitCollection:[UITraitCollection traitCollectionWithPreferredContentSizeCategory:large ? UIContentSizeCategoryAccessibilityExtraExtraExtraLarge:UIContentSizeCategoryLarge]forChildViewController:root];
         container.frame = CGRectMake(0, 0, width, height);
         [container setNeedsLayout]; [container layoutIfNeeded]; [root.view layoutIfNeeded];
         UITableView *table = ut_table(); [table reloadData]; [table layoutIfNeeded];
@@ -152,22 +189,34 @@ static void ut_shot(NSString *name, CGFloat width, CGFloat height, BOOL large) {
         UIViewController *root = ut_top(); UINavigationController *nav = root.navigationController ?: ut_nav;
         container.frame = CGRectMake(0,0,width,height); [container layoutIfNeeded]; [root.view layoutIfNeeded];
         ut_req(fabs(root.view.bounds.size.width - width) < 1, @"原生页面达到目标宽度");
+        if([ut_args containsObject:@"--design-pages"])ut_req([root.traitCollection.preferredContentSizeCategory isEqual:large ? UIContentSizeCategoryAccessibilityExtraExtraExtraLarge:UIContentSizeCategoryLarge],@"直接弹出的子页也达到目标字号类别");
         [ut_table() layoutIfNeeded];
+        // 为长表单单独核对底部可达性，截图后恢复阅读位置。
+        UIScrollView *tail=[name containsString:@"-bottom-"] ? (UIScrollView *)ut_find(root.view,@"edit.form"):nil;CGPoint offset=tail.contentOffset;
+        if(tail){[tail setContentOffset:CGPointMake(offset.x,MAX(-tail.adjustedContentInset.top,tail.contentSize.height-tail.bounds.size.height+tail.adjustedContentInset.bottom)) animated:NO];[tail layoutIfNeeded];}
+        ut_dsgn(name);
         UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:container.bounds.size];
         NSData *png = [renderer PNGDataWithActions:^(UIGraphicsImageRendererContext *context) {
-            [container.layer renderInContext:context.CGContext];
+        if([ut_args containsObject:@"--design-pages"])[container drawViewHierarchyInRect:container.bounds afterScreenUpdates:YES];
+        else [container.layer renderInContext:context.CGContext];
         }];
         [png writeToFile:[ut_docs stringByAppendingPathComponent:[@"screens/" stringByAppendingString:name]] atomically:YES];
+        if([ut_args containsObject:@"--design-pages"] && [name hasPrefix:@"new-full"])ut_req(fabs(root.view.bounds.size.width-width)<1,@"原生紧凑弹层截图后仍保持目标宽度");
+        ut_pgdata(name,root.view,nav);
+        if(tail)[tail setContentOffset:offset animated:NO];
         NSMutableArray *frames=[NSMutableArray array];
         for (NSString *key in @[@"edit.form",@"edit.actions",@"edit.title",@"edit.notes",@"edit.save",@"edit.complete",@"calendar.form",@"calendar.month"]) {
             UIView *item=ut_find(root.view,key); if(item) [frames addObject:@{@"id":key,@"frame":NSStringFromCGRect([item convertRect:item.bounds toView:root.view]),@"safe":NSStringFromUIEdgeInsets(item.safeAreaInsets)}];
         }
         [[NSJSONSerialization dataWithJSONObject:frames options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[ut_docs stringByAppendingPathComponent:[@"screens/" stringByAppendingString:[name stringByAppendingString:@".json"]]] atomically:YES];
         if (![root isKindOfClass:TTTaskHUD.class]) ut_req(root.traitCollection.userInterfaceStyle==ut_nav.traitCollection.userInterfaceStyle,@"所有子页沿用首页明暗主题");
-        UIView *actions=ut_find(root.view,@"edit.actions"); if(actions) ut_req(actions.bounds.size.width>=width-26,@"编辑底部操作保留整行宽度");
+        UIView *header=ut_find(root.view,@"screen.header");
+        if(header && ![root isKindOfClass:TaskHome.class]){for(UIView *item in header.subviews)if([item isKindOfClass:UILabel.class])ut_req(((UILabel *)item).font.pointSize<=32 && ((UILabel *)item).numberOfLines==1,@"直属子页导航标题限制单行32点");UIView *form=ut_find(root.view,@"settings.content") ?: ut_find(root.view,@"assistant.config");if(form)ut_req(CGRectGetMaxY(header.frame)<=CGRectGetMinY(form.frame),@"大字导航标题与表单区域不重叠");}
+        UIView *actions=ut_find(root.view,@"edit.actions"); if(actions) ut_req(fabs(actions.bounds.size.width-(width-32))<1,@"编辑底部操作保留两侧16点留白");
         UIButton *complete=(UIButton *)ut_find(root.view,@"edit.complete"); if(complete && !complete.hidden) ut_req(complete.titleLabel.bounds.size.height<=complete.titleLabel.font.lineHeight+1,@"详情完成操作保持单行文字");
         UIView *month=ut_find(root.view,@"calendar.month"); if(month) ut_req(month.bounds.size.width>=width-34,@"原生月历保留完整七列宽度");
         ut_bounds(root.view, root.view);
+        if(@available(iOS 17.0,*)){if([ut_args containsObject:@"--design-pages"])[root.traitOverrides removeTrait:UITraitPreferredContentSizeCategory.class];}
         if (root.parentViewController == nav) [nav setOverrideTraitCollection:nil forChildViewController:root]; container.frame = originalFrame;
         [container setNeedsLayout]; [container layoutIfNeeded]; [ut_table() reloadData]; [ut_table() layoutIfNeeded];
     });
@@ -193,7 +242,7 @@ static void ut_refs(void) {
     ut_tap(@"edit.details"); ut_ui(^{ UITextView *notes = (UITextView *)ut_find(ut_window,@"edit.notes"); notes.text = @"跨天完成记录"; [notes.delegate textViewDidChange:notes]; });
     ut_tap(@"edit.star"); ut_tap(@"edit.more"); ut_tap(@"edit.urgency.3"); ut_tap(@"edit.difficulty.2");
     ut_ui(^{ UITextField *field = (UITextField *)ut_find(ut_window,@"edit.duration"); field.text = @"1500"; [field sendActionsForControlEvents:UIControlEventEditingChanged];
-        field = (UITextField *)ut_find(ut_window,@"edit.timezone"); field.text = @"America/New_York"; [field sendActionsForControlEvents:UIControlEventEditingChanged]; });
+        UITextView *zone=(UITextView *)ut_find(ut_window,@"edit.timezone");zone.text=@"America/New_York";[zone.delegate textViewDidChange:zone]; });
     ut_tap(@"edit.date"); ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskCalendar.class]; },@"日期入口使用系统月历");
     ut_shot(@"calendar-320.png",320,850,NO); ut_shot(@"calendar-768.png",768,1024,NO);
     ut_ui(^{ UICalendarView *calendar = (UICalendarView *)ut_find(ut_window,@"calendar.month");
@@ -215,7 +264,7 @@ static void ut_refs(void) {
     ut_tap(@"repeat.done"); ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskCalendar.class] && !ut_top().presentedViewController; },@"重复返回日期面板");
     ut_ui(^{ ut_req([[(UIButton *)ut_find(ut_window,@"calendar.repeat") titleForState:UIControlStateNormal] isEqual:@"每2周"],@"日期面板同步重复状态"); });
     ut_tap(@"calendar.done"); ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"月历返回快捷草稿");
-    ut_tap(@"edit.deadline"); ut_ui(^{ut_req(ut_find(ut_surface(),@"calendar.clockRow").hidden && ut_find(ut_surface(),@"calendar.repeat").hidden,@"截止日期仅显示月历，不混入计划时间及重复");}); ut_tap(@"calendar.done"); ut_save(); ut_home();
+    ut_tap(@"edit.more"); ut_tap(@"edit.deadline"); ut_ui(^{ut_req(ut_find(ut_surface(),@"calendar.clockRow").hidden && ut_find(ut_surface(),@"calendar.repeat").hidden,@"截止日期仅显示月历，不混入计划时间及重复");}); ut_tap(@"calendar.done"); ut_save(); ut_home();
     NSArray *pending = [ut_store lsPnd:nil]; NSDictionary *task = pending.firstObject; NSString *uuid = task[@"task_id"];
     ut_req([task[@"list_id"] isEqual:listID] && [task[@"timezone_id"] isEqual:@"America/New_York"]
         && [task[@"notes"] isEqual:@"跨天完成记录"] && [task[@"starred"] boolValue]
@@ -399,16 +448,23 @@ static void ut_run(void) {
 
 // 验证Swift设置页的原生配置、失败回滚和Darwin预览通信。
 static void ut_sttng(void) {
+    __block CGRect settingsEntry;
+    ut_home();
+    ut_ui(^{UIView *entry=ut_find(ut_surface(),@"home.settings");settingsEntry=[entry convertRect:entry.bounds toView:ut_window];});
     ut_ui(^{
         UIViewController *controller = [NSClassFromString(@"LBSetCtl") new];
         ut_req(controller != nil, @"Swift后台设置运行类型存在");
         [ut_nav setNavigationBarHidden:NO animated:NO]; [ut_nav pushViewController:controller animated:NO];
+        [ut_surface()layoutIfNeeded];UIView *closeButton=ut_find(controller.view,@"settings.close");CGRect frame=[closeButton convertRect:closeButton.bounds toView:ut_window];
+        ut_req(fabs(CGRectGetMidX(frame)-CGRectGetMidX(settingsEntry))<1 && fabs(CGRectGetMidY(frame)-CGRectGetMidY(settingsEntry))<1 && frame.size.width==56 && frame.size.height==56,@"设置关闭与首页设置触摸位置完全一致");
+        for(NSString *key in @[@"settings.status",@"settings.next",@"settings.preview",@"settings.recovery",@"settings.assistant"]){UIButton *row=(UIButton *)ut_find(controller.view,key);ut_req(row.contentHorizontalAlignment==UIControlContentHorizontalAlignmentLeading && row.bounds.size.height>=56 && (!row.configuration.background.backgroundColor || CGColorGetAlpha(row.configuration.background.backgroundColor.CGColor)<0.01),@"设置功能统一平面对齐且不铺强调底色");}
         UISwitch *monitor = (UISwitch *)ut_find(controller.view, @"settings.enabled");
         UIButton *preview = (UIButton *)ut_find(controller.view, @"settings.preview");
         UIButton *recovery = (UIButton *)ut_find(controller.view, @"settings.recovery");
-        ut_req([recovery.configuration.title containsString:@"需打开一次App恢复提醒服务"] && recovery.titleLabel.numberOfLines==0,@"整机重启限制明确可见并允许大字换行");
+        ut_req([recovery.configuration.title isEqual:@"恢复提醒"] && [recovery.accessibilityHint containsString:@"需打开一次App恢复提醒服务"] && recovery.menu.children.count==1,@"恢复入口简短且完整条件移入悬浮说明");
         monitor.on = NO; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
         ut_req(![lb_ldcfg()[@"enabled"] boolValue] && !preview.enabled, @"关闭服务保存并禁用预览");
+        [recovery sendActionsForControlEvents:UIControlEventTouchUpInside];ut_req(![lb_ldcfg()[@"enabled"] boolValue] && [controller.presentedViewController isKindOfClass:UIAlertController.class] && [((UIAlertController *)controller.presentedViewController).title isEqual:@"先开启后台服务"],@"关闭服务时恢复只说明条件而不擅自开启");[controller dismissViewControllerAnimated:NO completion:nil];
         ut_spawn = NO; monitor.on = YES; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
         ut_req(!monitor.on && ![lb_ldcfg()[@"enabled"] boolValue], @"启动失败恢复关闭状态");
         ut_spawn = YES; monitor.on = YES; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
@@ -444,8 +500,20 @@ static void ut_sttng(void) {
         ut_req(lb_svcfg(@{@"enabled":@YES}),@"外部提交启用配置");[status sendActionsForControlEvents:UIControlEventTouchUpInside];
         ut_req(monitor.on && [(UIButton *)ut_find(ut_top().view,@"settings.preview") isEnabled],@"状态刷新同步启用意图，开关不保留旧值");
     });
+    ut_tap(@"settings.recovery.help");ut_ui(^{UIAlertController *help=(UIAlertController *)ut_top();ut_req([help isKindOfClass:UIAlertController.class] && [help.title isEqual:@"重启后打开App恢复"] && help.title.length<=13,@"长按说明可查看且不超过13字");[help dismissViewControllerAnimated:NO completion:nil];});
+    ut_shot(@"settings-dark-320.png",320,693,NO);
+    ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;});ut_shot(@"settings-light-375.png",375,850,NO);ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleDark;});
     ut_shot(@"settings-large-320.png", 320, 850, YES);
-    ut_ui(^{ [ut_nav popViewControllerAnimated:NO]; });
+    NSArray *connectionKeys=@[@"assistant.endpoint",@"assistant.model",@"assistant.hard_model",@"assistant.ddl_model"];NSMutableDictionary *configBefore=[NSMutableDictionary new];for(NSString *key in connectionKeys)configBefore[key]=[NSUserDefaults.standardUserDefaults objectForKey:key] ?: NSNull.null;
+    ut_tap(@"settings.assistant");ut_wait(^BOOL{return ut_find(ut_surface(),@"assistant.config.back")!=nil && !ut_nav.transitionCoordinator;},@"设置进入助手连接子页");
+    ut_ui(^{[ut_surface()layoutIfNeeded];for(NSString *key in @[@"assistant.endpoint",@"assistant.model",@"assistant.hard_model",@"assistant.ddl_model",@"assistant.key"]){UITextField *field=(UITextField *)ut_find(ut_surface(),key);ut_req(field.bounds.size.width>=250 && field.adjustsFontForContentSizeCategory,@"连接字段单独成行且支持动态字号");}UITextView *address=(UITextView *)ut_find(ut_surface(),@"assistant.endpoint");ut_req([address isKindOfClass:UITextView.class] && !address.scrollEnabled && address.textContainer.lineBreakMode==NSLineBreakByCharWrapping,@"服务地址允许完整换行而不省略尾部");ut_req(((UITextField *)ut_find(ut_surface(),@"assistant.key")).secureTextEntry,@"连接密钥仍由安全字段隐藏");});
+    ut_shot(@"assistant-config-dark-320.png",320,693,NO);ut_shot(@"assistant-config-large-320.png",320,850,YES);
+    ut_tap(@"assistant.config.back");ut_wait(^BOOL{return ut_find(ut_surface(),@"settings.close")!=nil && !ut_nav.transitionCoordinator;},@"助手返回后恢复设置顶栏");
+    NSMutableDictionary *configAfter=[NSMutableDictionary new];for(NSString *key in connectionKeys)configAfter[key]=[NSUserDefaults.standardUserDefaults objectForKey:key] ?: NSNull.null;ut_req([configBefore isEqual:configAfter],@"浏览并返回助手设置不改连接配置");
+    ut_tap(@"settings.close");ut_home();
+    ut_ui(^{UIViewController *settings=[NSClassFromString(@"LBSetCtl")new];UINavigationController *panel=[[UINavigationController alloc]initWithRootViewController:settings];panel.modalPresentationStyle=UIModalPresentationFullScreen;[ut_nav presentViewController:panel animated:NO completion:nil];});
+    ut_wait(^BOOL{return ut_find(ut_surface(),@"settings.close")!=nil && !ut_top().isBeingPresented;},@"设置作为独立全屏面板打开");
+    ut_tap(@"settings.close");ut_wait(^BOOL{return !ut_nav.presentedViewController;},@"设置右侧关闭撤下整个面板");ut_home();
 }
 
 // 用真实HUD和同库服务验证内存测试轮次、正常数据库零变化与真提醒优先。
@@ -496,7 +564,7 @@ static void ut_mon(void) {
 // 通过原生导航打开统一新建或已有详情。
 static void ut_edt(NSDictionary *task) {
     ut_ui(^{ [ut_nav setNavigationBarHidden:NO animated:NO]; [ut_nav pushViewController:[[TaskEdit alloc] initWithStore:ut_store task:task saved:nil] animated:NO]; });
-    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && ut_find(ut_top().view,@"edit.title"); },@"统一编辑页面就绪");
+    ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && ut_top().view.window && !ut_nav.transitionCoordinator && ut_find(ut_top().view,@"edit.title"); },@"统一编辑页面就绪");
 }
 // 从系统月历和时刻控件修改草稿。
 static void ut_date(NSDate *date) API_AVAILABLE(ios(16.0));
@@ -525,7 +593,7 @@ static void ut_clsr(void) {
     ut_tap(@"repeat.type.custom"); ut_ui(^{[ut_top().navigationController popViewControllerAnimated:NO];}); ut_tap(@"repeat.cancel");
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"取消重复回到原草稿");
     ut_ui(^{ ut_req(![(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn],@"取消重复不能启用原本没有的日期"); });
-    ut_tap(@"edit.date"); ut_tap(@"calendar.repeat"); ut_tap(@"repeat.type.weekly");
+    ut_tap(@"edit.more"); ut_tap(@"edit.date"); ut_tap(@"calendar.repeat"); ut_tap(@"repeat.type.weekly");
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskCalendar.class] && !ut_top().presentedViewController; },@"重复修改暂存在月历内");
     ut_ui(^{ [ut_top() dismissViewControllerAnimated:YES completion:nil]; });
     ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController; },@"取消月历回到草稿");
@@ -629,7 +697,7 @@ static void ut_edit(void) {
     NSDictionary *pending = [ut_store crtTsk:@{@"title":@"待修改计时",@"due_at":@(oldTime),@"deadline_at":@(oldTime+7200),@"urgency":@3,@"difficulty":@2,@"starred":@1,@"planned_duration":@90000,@"timezone_id":@"UTC"} error:nil];
     NSString *pendingID = pending[@"task_id"]; ut_edt(pending); ut_tap(@"edit.more");
     ut_ui(^{
-        ut_req([[(UITextField *)ut_find(ut_top().view,@"edit.duration") text] isEqual:@"1500"] && [[(UITextField *)ut_find(ut_top().view,@"edit.timezone") text] isEqual:@"UTC"],@"时区和预计投入回填");
+        ut_req([[(UITextField *)ut_find(ut_top().view,@"edit.duration") text] isEqual:@"1500"] && [[(UITextView *)ut_find(ut_top().view,@"edit.timezone") text] isEqual:@"UTC"],@"时区和预计投入回填");
         ut_req([[(UIButton *)ut_find(ut_top().view,@"edit.urgency") configuration].title isEqual:@"紧急程度：高"] && [[(UIButton *)ut_find(ut_top().view,@"edit.difficulty") configuration].title isEqual:@"难易程度：一般"],@"紧急难度回填");
         ut_req([(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"plan.timed") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.timed") isOn],@"计划和独立截止开关回填");
         UIDatePicker *plan = (UIDatePicker *)ut_find(ut_top().view,@"plan.time"), *ddl = (UIDatePicker *)ut_find(ut_top().view,@"deadline.time");
@@ -796,6 +864,11 @@ static void ut_svc(void) {
 #include "test_hud.inc"
 #include "test_signal.inc"
 #include "test_parity.inc"
+#include "test_routine_ui.inc"
+#include "test_assistant_ui.inc"
+#include "test_today_ui.inc"
+#include "test_design_ui.inc"
+#include "test_weekly_ui.inc"
 
 // 前台呈现失败保持待接管状态，超时取消后可再次打开采集。
 static void ut_bridge(void) {
@@ -892,7 +965,7 @@ static void ut_hdbg(BOOL seed) {
     BOOL seed = hudInspect && ![NSFileManager.defaultManager fileExistsAtPath:path];
     ut_store = [[TaskStore alloc] initAt:path error:nil]; ut_checks = [NSMutableArray array];
     TaskHome *home = [[TaskHome alloc] initWithStore:ut_store settings:nil];
-    ut_nav = [[UINavigationController alloc] initWithRootViewController:home]; ut_nav.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    ut_nav = [[UINavigationController alloc] initWithRootViewController:home]; ut_nav.overrideUserInterfaceStyle = [ut_args containsObject:@"--design-light"] ? UIUserInterfaceStyleLight:UIUserInterfaceStyleDark;
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]; ut_window = self.window;
     UIViewController *host = [UIViewController new]; self.window.rootViewController = host;
     [host addChildViewController:ut_nav]; ut_nav.view.frame = host.view.bounds;
@@ -921,7 +994,15 @@ static void ut_hdbg(BOOL seed) {
                 BOOL settingsOnly = [ut_args containsObject:@"--settings-only"];
                 BOOL signalOnly = [ut_args containsObject:@"--signal"];
                 BOOL parityOnly = [ut_args containsObject:@"--parity"];
-                if (parityOnly) { ut_prty(); if (@available(iOS 16.0,*)) { ut_refs(); ut_clsr(); ut_edit(); } }
+                if ([ut_args containsObject:@"--routine-view"]) {ut_rtnview();}
+                else if ([ut_args containsObject:@"--routine-edit"]) {ut_rptedit();}
+                else if ([ut_args containsObject:@"--formal"]) {ut_weekly();}
+                else if ([ut_args containsObject:@"--design-editor"]) {ut_dflds();}
+                else if ([ut_args containsObject:@"--design-pages"]) {ut_dpages();}
+                else if ([ut_args containsObject:@"--today"]) {ut_tdy();}
+                else if (parityOnly) { ut_prty(); if (@available(iOS 16.0,*)) { ut_refs(); ut_clsr(); ut_edit(); ut_rtn(); } }
+                else if ([ut_args containsObject:@"--assistant"]) { ut_rtn(); ut_ast(); }
+                else if ([ut_args containsObject:@"--routines"]) { ut_rtn(); }
                 else if (signalOnly) { ut_signal(); }
                 else if (settingsOnly) { ut_sttng(); }
                 else if (bridge) { ut_bridge(); }
@@ -952,5 +1033,10 @@ static void ut_hdbg(BOOL seed) {
     }); return YES;
 }
 @end
-// 启动原生UIKit测试，不运行生产HUD或访问共享生产路径。
-int main(int argc, char **argv) { @autoreleasepool { NSMutableArray *args = [NSMutableArray array]; for (int index = 0; index < argc; index++) [args addObject:@(argv[index])]; ut_args = args.copy; return UIApplicationMain(argc, argv, nil, NSStringFromClass(UITestDel.class)); } }
+// 启动隔离UIKit测试，冷启动模式复用生产App委托。
+int main(int argc, char **argv) { @autoreleasepool { NSMutableArray *args = [NSMutableArray array]; for (int index = 0; index < argc; index++) [args addObject:@(argv[index])]; ut_args = args.copy;
+    if([ut_args containsObject:@"--formal-launch"]){
+        @try { ut_lprep(); } @catch(NSException *error) { NSDictionary *report=@{@"passed":@NO,@"checks":ut_checks ?: @[],@"failure":error.reason ?: @"启动准备失败",@"device":@"iPhone",@"runtime":@"setup"};[[NSJSONSerialization dataWithJSONObject:report options:0 error:nil]writeToFile:[ut_docs stringByAppendingPathComponent:@"UITestReport.json"] atomically:YES];return 1; }
+        return UIApplicationMain(argc,argv,nil,@"LBAppDel");
+    }
+    return UIApplicationMain(argc, argv, nil, NSStringFromClass(UITestDel.class)); } }

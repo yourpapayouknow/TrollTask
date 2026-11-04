@@ -31,6 +31,7 @@ static NSDictionary *ck_clm(TaskStore *store, BOOL repeat) {
 
 // 恢复真实旧版Occurrence结构，供既有迁移用例降级隔离库。
 static void ck_old(NSString *path) {
+    ck_sql(path,[NSString stringWithContentsOfFile:@"Tests/Fixtures/agenda-v10.sql" encoding:NSUTF8StringEncoding error:nil]);
     NSString *fixture=[NSString stringWithContentsOfFile:@"Tests/Fixtures/occurrence-v8.sql" encoding:NSUTF8StringEncoding error:nil];
     NSString *schema=nil;
     for (NSString *line in [fixture componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"CREATE TABLE reminder_occurrences "]) schema=line;
@@ -100,6 +101,8 @@ static void ck_files(NSString *root) {
     NSArray *saved=[reader lsChk:occ images:YES error:nil],*meta=[reader lsChk:occ images:NO error:nil];
     ck_req(saved.count==6 && [saved[0][@"image"] isEqual:bytes] && [saved[0][@"name"] isEqual:file[@"name"]] && [saved[2][@"image"] length]==0 && [saved[1][@"image"] isEqual:png]);
     ck_req([meta[0][@"method"] isEqual:@"file"] && [meta[0][@"content_type"] isEqual:@"public.data"] && [meta[0][@"image_bytes"] intValue]==5 && !meta[0][@"image"]);
+    ck_req([[reader rdPrf:occ position:2 error:nil][@"image"] length]==0 && [[reader rdPrf:occ position:1 error:nil][@"image"] isEqual:png]);
+    ck_req([reader rdPrf:occ position:6 error:nil]==nil && [reader rdPrf:@"invalid" position:0 error:nil]==nil);
     for (NSNumber *fail in @[@NO,@YES]) {
         NSString *legacy=[root stringByAppendingPathComponent:fail.boolValue?@"v8-fail.sqlite3":@"v7-files.sqlite3"];__block NSString *oldID;
         @autoreleasepool {TaskStore *old=[[TaskStore alloc] initAt:legacy error:nil];NSDictionary *a=ck_clm(old,NO);oldID=a[@"occurrence_id"];ck_req([old chkOcc:oldID attachments:@[image,image] error:nil]);}

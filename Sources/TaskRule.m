@@ -219,6 +219,9 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
 // 根据当前轮次及处理记录计算有效的双提醒。
 + (NSArray *)alerts:(NSDictionary *)task history:(NSArray *)history at:(NSTimeInterval)stamp error:(NSError **)error {
     if ([task[@"deleted"] boolValue] || ![task[@"status"] isEqual:@"needsAction"]) return @[];
+    // 草稿、休息及一般任务时段只供排程，不创建强制提醒。
+    if ((task[@"routine_kind"] && ![task[@"routine_kind"] isEqual:@"none"] && ![task[@"routine_enabled"] boolValue])
+        || [@[@"work",@"rest"] containsObject:task[@"routine_kind"] ?: @"none"]) return @[];
     BOOL repeats = [task[@"recurrence"] count] > 0;
     NSArray *cycles = [self cycles:task at:stamp limit:4 error:error];
     if (!cycles) return nil;
@@ -239,7 +242,7 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
     NSMutableArray *records = [NSMutableArray array];
     NSMutableSet *completed = [NSMutableSet set];
     NSMutableDictionary *floor = [NSMutableDictionary dictionary];
-    NSNumber *completedFloor = nil;
+    NSNumber *completedFloor = nil, *expiredFloor = nil;
     for (NSDictionary *row in history) if ([row[@"task_id"] isEqual:task[@"task_id"]] && [row[@"generation"] isEqual:task[@"reminder_version"]]) {
         [records addObject:row];
         if ([@[@"completed",@"resolved"] containsObject:row[@"status"]] && [row[@"action"] isEqual:@"complete"]) {
@@ -247,21 +250,25 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
             if (!completedFloor || [completedFloor compare:row[@"cycle_at"]] == NSOrderedAscending) completedFloor = row[@"cycle_at"];
         }
         if ([row[@"status"] isEqual:@"resolved"]) {
+            if ([row[@"action"] isEqual:@"expire"] && (!expiredFloor || [expiredFloor compare:row[@"cycle_at"]] == NSOrderedAscending))
+                expiredFloor = row[@"cycle_at"];
             NSArray *keys = [row[@"kind"] isEqual:@"both"] ? @[@"plan", @"deadline", @"both"] : @[row[@"kind"]];
             for (NSString *key in keys) if (!floor[key] || [floor[key] compare:row[@"scheduled_at"]] == NSOrderedAscending) floor[key] = row[@"scheduled_at"];
         }
         if ([@[@"pending",@"snoozed",@"presented"] containsObject:row[@"status"]]) [set addObject:row[@"cycle_at"]];
     }
     // 提前完成超出预取窗口后，从已完成轮次继续展开原始规则。
-    if (repeats && completedFloor && completedFloor.doubleValue >= stamp) {
-        NSArray *future = [self cycles:task at:nextafter(completedFloor.doubleValue, INFINITY) limit:4 error:error];
+    NSNumber *terminal = !expiredFloor || (completedFloor && [completedFloor compare:expiredFloor] == NSOrderedDescending) ? completedFloor : expiredFloor;
+    if (repeats && terminal && terminal.doubleValue >= stamp) {
+        NSArray *future = [self cycles:task at:nextafter(terminal.doubleValue, INFINITY) limit:4 error:error];
         if (!future) return nil;
         [set addObjectsFromArray:future];
     }
     NSMutableArray *result = [NSMutableArray array];
     NSMutableDictionary *latest = [NSMutableDictionary dictionary];
     for (NSNumber *cycle in set) {
-        if ([completed containsObject:cycle] || (repeats && completedFloor && [cycle compare:completedFloor] != NSOrderedDescending)) continue;
+        if ([completed containsObject:cycle] || (repeats && terminal && [cycle compare:terminal] != NSOrderedDescending)
+            || (!repeats && expiredFloor)) continue;
         NSNumber *plan = task[@"due_at"] == NSNull.null ? nil : cycle;
         if (plan && [task[@"schedule_kind"] isEqual:@"date"]) {
             NSDate *date = [calendar dateBySettingHour:9 minute:0 second:0 ofDate:[NSDate dateWithTimeIntervalSince1970:plan.doubleValue] options:0];

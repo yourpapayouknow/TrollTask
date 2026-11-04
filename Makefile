@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.18.0.tipa
+TIPA := $(BUILD)/TrollTask-0.21.21.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
@@ -29,14 +29,15 @@ ICAL_SIM := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-sim/%.o,$(ICAL_SRCS))
 SIM_CC := xcrun --sdk iphonesimulator clang
 SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -IVendor/libical
 HEADERS := $(wildcard Sources/*.h)
+HEADERS += Sources/TaskAgenda.inc
 HEADERS += Vendor/TrollSpeed/head.h
-CORE_SWIFT := Sources/SwiftHead.swift Sources/ReminderQueue.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift
+CORE_SWIFT := Sources/SwiftHead.swift Sources/ReminderQueue.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift Sources/TaskRoutineImport.swift Sources/TaskRoutineView.swift Sources/TaskAI.swift Sources/TaskIntake.swift Sources/TaskToday.swift Sources/TaskDayOrder.swift Sources/TaskDivision.swift Sources/TaskTimeMap.swift
 HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical
 HOST_OBJECTS := $(BUILD)/host/TaskStore.o $(BUILD)/host/TaskRule.o $(BUILD)/host/LBShared.o $(BUILD)/host/TaskScheduler.o
 ICAL_HEADERS := $(wildcard Vendor/libical/*.h)
 ICAL_FILES := $(wildcard Vendor/libical/* Vendor/libical/LICENSES/*)
 
-.PHONY: all package package-debug test test-rule test-queue test-recover test-load test-sched test-reminder test-checkin test-occ test-signal test-ui clean inspect icons serve store
+.PHONY: all package package-debug test test-assist test-agenda test-routine-view test-rule test-queue test-recover test-load test-sched test-reminder test-checkin test-occ test-signal test-ui clean inspect icons serve store
 
 icons: $(ICON_SOURCE)
 	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
@@ -74,12 +75,12 @@ $(APP_DIR)/ThirdParty/libical-source.zip: $(BUILD)/libical-source.zip Vendor/LIB
 	cp $< $@
 	cp Vendor/LIBICAL.md $(APP_DIR)/ThirdParty/NOTICE.md
 
-$(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist Resources/Reminder.wav $(MING_FILES) $(TOUCH_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
+$(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist Resources/Reminder.wav Resources/WeeklyRoutine.json $(MING_FILES) $(TOUCH_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
 	mkdir -p $(APP_DIR)
 	xcrun --sdk iphoneos swiftc -target arm64-apple-ios15.0 -sdk $(SDK) $(OBJECTS) -Xlinker -dead_strip -framework Foundation -framework ImageIO -framework IOKit -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-ios.a -o $@
 	cp Resources/Info.plist $(APP_DIR)/Info.plist
 	cp -R Resources/MingCute $(APP_DIR)/
-	cp Resources/Reminder.wav $(APP_DIR)/
+	cp Resources/Reminder.wav Resources/WeeklyRoutine.json $(APP_DIR)/
 	mkdir -p $(APP_DIR)/ThirdParty/TrollSpeed
 	cp Vendor/TrollSpeed/* $(APP_DIR)/ThirdParty/TrollSpeed/
 	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@2x.png $(APP_DIR)/AppIcon60x60@2x.png
@@ -114,6 +115,11 @@ test: | $(BUILD)
 	$(MAKE) $(BUILD)/test_store $(BUILD)/test_sync
 	$(BUILD)/test_store
 	$(BUILD)/test_sync
+	$(MAKE) test-agenda
+	$(MAKE) test-routine-view
+	PYTHONPATH=scripts:Tests python3 -B Tests/test_weekly.py
+	$(MAKE) test-assist
+	PYTHONPATH=scripts python3 -B Tests/test_intake.py
 	$(MAKE) test-queue
 	$(MAKE) test-recover
 	$(MAKE) test-load
@@ -146,11 +152,21 @@ $(BUILD)/host/TaskScheduler.o: $(CORE_SWIFT) $(HEADERS) $(ICAL_HEADERS) Makefile
 	mkdir -p $(dir $@)
 	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O -emit-object $(CORE_SWIFT) -o $@
 
-$(BUILD)/test_store $(BUILD)/test_sync $(BUILD)/test_sched $(BUILD)/test_reminder $(BUILD)/test_checkin $(BUILD)/test_occ $(BUILD)/test_signalstore: $(BUILD)/test_%: $(BUILD)/host/test_%.o $(HOST_OBJECTS) $(BUILD)/ical-host.a
+$(BUILD)/test_store $(BUILD)/test_sync $(BUILD)/test_sched $(BUILD)/test_reminder $(BUILD)/test_checkin $(BUILD)/test_occ $(BUILD)/test_signalstore $(BUILD)/test_agenda $(BUILD)/test_routine_view: $(BUILD)/test_%: $(BUILD)/host/test_%.o $(HOST_OBJECTS) $(BUILD)/ical-host.a
 	xcrun --sdk macosx swiftc $^ -framework Foundation -framework ImageIO -lsqlite3 -o $@
 
 test-sched: $(BUILD)/test_sched
 	$(BUILD)/test_sched
+
+test-assist: store
+	PYTHONPATH=scripts:Tests python3 -B Tests/test_assist.py
+
+test-agenda: $(BUILD)/test_agenda
+	$(BUILD)/test_agenda
+
+# 只读常律触发分区及五项分组。
+test-routine-view: $(BUILD)/test_routine_view
+	$(BUILD)/test_routine_view
 
 test-queue: $(BUILD)/test_queue
 	$(BUILD)/test_queue
@@ -223,7 +239,7 @@ $(BUILD)/ui/touch/%.o: Vendor/TrollSpeed/%.m $(HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 
-$(BUILD)/ui/test_ui.o: Tests/test_ui.m Tests/test_hud.inc Tests/test_signal.inc Tests/test_parity.inc $(HEADERS) Makefile
+$(BUILD)/ui/test_ui.o: Tests/test_ui.m Tests/test_hud.inc Tests/test_signal.inc Tests/test_parity.inc Tests/test_routine_ui.inc Tests/test_assistant_ui.inc Tests/test_today_ui.inc Tests/test_design_ui.inc Tests/test_weekly_ui.inc $(HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 
@@ -231,11 +247,11 @@ $(BUILD)/ui/TaskSwift.o: $(SWIFT_SOURCES) $(HEADERS) $(ICAL_HEADERS) Makefile
 	mkdir -p $(dir $@)
 	xcrun --sdk iphonesimulator swiftc $(SWIFT_FLAGS) -target arm64-apple-ios15.0-simulator -sdk $(SIM_SDK) -D LB_UI_TEST -Xcc -DLB_HOST_TEST -Xcc -DLB_UI_TEST -O -emit-object $(SWIFT_SOURCES) -o $@
 
-$(BUILD)/MobileUI.app/UItest: $(UI_OBJECTS) Tests/UIInfo.plist Resources/Reminder.wav $(MING_FILES) $(BUILD)/ical-sim.a
+$(BUILD)/MobileUI.app/UItest: $(UI_OBJECTS) Tests/UIInfo.plist Resources/Reminder.wav Resources/WeeklyRoutine.json $(MING_FILES) $(BUILD)/ical-sim.a
 	mkdir -p $(dir $@)
 	xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios15.0-simulator -sdk $(SIM_SDK) $(UI_OBJECTS) -framework Foundation -framework ImageIO -framework IOKit -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-sim.a -o $@
 	cp Tests/UIInfo.plist $(dir $@)/Info.plist
-	cp Resources/Reminder.wav $(dir $@)/
+	cp Resources/Reminder.wav Resources/WeeklyRoutine.json $(dir $@)/
 	cp -R Resources/MingCute $(dir $@)/
 	codesign --force --sign - $(dir $@)
 

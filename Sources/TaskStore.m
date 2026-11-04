@@ -77,6 +77,8 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 @property(nonatomic, readwrite, strong) NSError *syncError;
 @end
 
+#include "TaskAgenda.inc"
+
 @implementation TaskStore
 
 // 共用标题与说明规则，不开启事务或修改数据库。
@@ -326,6 +328,24 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             "ALTER TABLE reminder_occurrences ADD COLUMN signal_uptime REAL;"
             "ALTER TABLE reminder_occurrences ADD COLUMN signal_ack INTEGER NOT NULL DEFAULT 0 CHECK(signal_ack IN (0,1));"
             "UPDATE store_meta SET schema_version=10 WHERE singleton=1;" error:failure]) return NO;
+        // 常律和日程继续保存在同一数据库，旧任务保持原有提醒语义。
+        if (version <= 10 && ![self exec:
+            "ALTER TABLE tasks ADD COLUMN routine_kind TEXT NOT NULL DEFAULT 'none' CHECK(routine_kind IN ('none','fixed','work','rest','background'));"
+            "ALTER TABLE tasks ADD COLUMN routine_end INTEGER CHECK(routine_end BETWEEN 0 AND 1439);"
+            "ALTER TABLE tasks ADD COLUMN routine_enabled INTEGER NOT NULL DEFAULT 1 CHECK(routine_enabled IN (0,1));"
+            "ALTER TABLE tasks ADD COLUMN routine_source TEXT;"
+            "CREATE UNIQUE INDEX routine_source_unique ON tasks(routine_source) WHERE routine_source IS NOT NULL;"
+            "CREATE TABLE agenda_slots(task_id TEXT NOT NULL REFERENCES tasks(task_id),generation INTEGER NOT NULL,cycle_at REAL NOT NULL,"
+            "scheduled_at REAL NOT NULL,day_at REAL NOT NULL,start_at REAL NOT NULL,end_at REAL NOT NULL CHECK(end_at>start_at),"
+            "PRIMARY KEY(task_id,generation,cycle_at));"
+            "CREATE INDEX agenda_day ON agenda_slots(day_at,start_at);"
+            "CREATE TABLE routine_documents(name TEXT PRIMARY KEY NOT NULL,content TEXT NOT NULL,created_at REAL NOT NULL);"
+            "UPDATE store_meta SET schema_version=11 WHERE singleton=1;" error:failure]) return NO;
+        // 评估与提醒分别保存状态，继续复用唯一数据库。
+        if (version <= 11 && ![self exec:
+            "ALTER TABLE tasks ADD COLUMN planning_mode TEXT NOT NULL DEFAULT 'fixed' CHECK(planning_mode IN ('fixed','window'));"
+            "CREATE TABLE task_reviews(task_id TEXT PRIMARY KEY NOT NULL REFERENCES tasks(task_id),data TEXT NOT NULL);"
+            "UPDATE store_meta SET schema_version=12 WHERE singleton=1;" error:failure]) return NO;
         return YES;
     } error:error];
 }
@@ -376,6 +396,11 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         || ![@[@"needsAction", @"completed"] containsObject:task[@"status"]]
         || ![@[@"none", @"daily", @"weekly", @"monthly", @"yearly", @"custom"] containsObject:task[@"recurrence_type"]])
         return [self dbErr:SQLITE_CONSTRAINT message:@"任务文本、时区或类型无效" error:error];
+    if (![@[@"fixed",@"window"] containsObject:task[@"planning_mode"] ?: @"fixed"])
+        return [self dbErr:SQLITE_CONSTRAINT message:@"规划类型无效" error:error];
+    if ([task[@"planning_mode"] isEqual:@"window"] && (task[@"due_at"]==NSNull.null || task[@"deadline_at"]==NSNull.null
+        || [task[@"deadline_at"] doubleValue]<=[task[@"due_at"] doubleValue] || [task[@"recurrence"] count] || ![task[@"routine_kind"] isEqual:@"none"]))
+        return [self dbErr:SQLITE_CONSTRAINT message:@"规划窗口无效" error:error];
     for (NSString *key in @[@"due_at", @"deadline_at", @"snooze_until", @"planned_duration"])
         if (task[key] != NSNull.null && (!ts_num(task[key]) || ([key isEqual:@"planned_duration"] && [task[key] doubleValue] <= 0)
             || (![key isEqual:@"planned_duration"] && fabs([task[key] doubleValue]) >= 253402300800.0)))
@@ -418,6 +443,17 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         return [self dbErr:SQLITE_CONSTRAINT message:@"不重复任务的间隔应为1" error:error];
     if (task[@"parent_id"] != NSNull.null && recurrence.count)
         return [self dbErr:SQLITE_CONSTRAINT message:@"子任务不能设置重复" error:error];
+    NSString *role = task[@"routine_kind"];
+    id end = task[@"routine_end"], enabled = task[@"routine_enabled"], source = task[@"routine_source"];
+    if (![@[@"none",@"fixed",@"work",@"rest",@"background"] containsObject:role]
+        || ![enabled isKindOfClass:NSNumber.class] || ![@[@0,@1] containsObject:enabled]
+        || (end != NSNull.null && (!ts_num(end) || [end doubleValue] != [end integerValue] || [end integerValue] < 0 || [end integerValue] > 1439))
+        || (source != NSNull.null && !ts_txt(source,1024))) return [self dbErr:SQLITE_CONSTRAINT message:@"常律参数无效" error:error];
+    if (![role isEqual:@"none"] && (![task[@"list_id"] isEqual:TS_RTN_LST] || task[@"parent_id"] != NSNull.null
+        || ([enabled boolValue] && (![task[@"schedule_kind"] isEqual:@"timed"] || end == NSNull.null || !recurrence.count))))
+        return [self dbErr:SQLITE_CONSTRAINT message:@"常律需设置时段和重复" error:error];
+    if ([role isEqual:@"none"] && ([task[@"list_id"] isEqual:TS_RTN_LST] || end != NSNull.null))
+        return [self dbErr:SQLITE_CONSTRAINT message:@"请选择常律类型" error:error];
     return [TaskRule vld:task error:error];
 }
 
@@ -425,7 +461,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 - (NSArray *)tskFlds {
     return @[@"title", @"notes", @"due_at", @"timezone_id", @"recurrence_type", @"recurrence_interval", @"status", @"snooze_until",
         @"list_id", @"parent_id", @"position", @"starred", @"schedule_kind", @"planned_duration", @"deadline_at", @"deadline_kind",
-        @"recurrence", @"deleted", @"urgency", @"difficulty"];
+        @"recurrence", @"deleted", @"urgency", @"difficulty", @"routine_kind", @"routine_end", @"routine_enabled", @"routine_source", @"planning_mode"];
 }
 
 // 合并任务补丁并维护时间模式及标准重复快捷规则。
@@ -451,6 +487,16 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         }
     }
     if (![self vldTsk:result error:error]) return nil;
+    if (![result[@"routine_kind"] isEqual:@"none"]) {
+        if (![self rtnList:error]) return nil;
+    }
+    if (![result[@"routine_kind"] isEqual:@"none"] && ts_num(result[@"due_at"]) && ts_num(result[@"routine_end"])) {
+        NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian]; calendar.timeZone = [NSTimeZone timeZoneWithName:result[@"timezone_id"]];
+        NSDate *start = [NSDate dateWithTimeIntervalSince1970:[result[@"due_at"] doubleValue]]; NSInteger end = [result[@"routine_end"] integerValue];
+        NSDate *finish = [calendar dateBySettingHour:end/60 minute:end%60 second:0 ofDate:start options:0];
+        if (finish.timeIntervalSince1970 <= start.timeIntervalSince1970) finish = [calendar dateByAddingUnit:NSCalendarUnitDay value:1 toDate:finish options:0];
+        result[@"planned_duration"] = @([finish timeIntervalSinceDate:start]);
+    }
     result[@"list_id"] = [result[@"list_id"] lowercaseString];
     NSArray *lists = [self qry:"SELECT list_id FROM task_lists WHERE list_id=? AND deleted=0" values:@[result[@"list_id"]] error:error];
     if (!lists || !lists.count) { if (lists) [self dbErr:SQLITE_NOTFOUND message:@"清单已删除或不存在" error:error]; return nil; }
@@ -536,7 +582,8 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             @"status": @"needsAction", @"snooze_until": NSNull.null, @"created_at": now, @"updated_at": now,
             @"list_id": TS_DFLT_LST, @"parent_id": NSNull.null, @"position": @0, @"starred": @0, @"starred_at": NSNull.null,
             @"schedule_kind": @"none", @"planned_duration": NSNull.null, @"deadline_at": NSNull.null, @"deadline_kind": @"none",
-            @"recurrence": @[], @"completed_at": NSNull.null, @"deleted": @0, @"urgency": @0, @"difficulty": @0, @"reminder_version": @1};
+            @"recurrence": @[], @"completed_at": NSNull.null, @"deleted": @0, @"urgency": @0, @"difficulty": @0, @"reminder_version": @1,
+            @"routine_kind": @"none", @"routine_end": NSNull.null, @"routine_enabled": @1, @"routine_source": NSNull.null, @"planning_mode": @"fixed"};
         result = [self mrg:fields into:task error:failure];
         NSDictionary *row = result ? [self enc:result error:failure] : nil;
         return row && [self wrt:row table:@"tasks" key:@"task_id" insert:YES error:failure];
@@ -551,7 +598,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         NSDictionary *task = old ? [self mrg:fields into:old error:failure] : nil;
         if (!task) return NO;
         BOOL reschedule = NO;
-        for (NSString *key in @[@"due_at", @"timezone_id", @"recurrence", @"schedule_kind", @"deadline_at", @"deadline_kind", @"snooze_until", @"status", @"deleted"])
+        for (NSString *key in @[@"due_at", @"timezone_id", @"recurrence", @"schedule_kind", @"deadline_at", @"deadline_kind", @"snooze_until", @"status", @"deleted", @"routine_kind", @"routine_end", @"routine_enabled", @"planning_mode"])
             if (![old[key] isEqual:task[key]]) reschedule = YES;
         if (reschedule) {
             NSMutableDictionary *changed = [task mutableCopy];
@@ -637,9 +684,10 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     BOOL success = [self wrTxn:^BOOL(NSError **failure) {
         NSArray *tasks = [self lsTsks:failure];
         NSArray *history = tasks ? [self qry:"SELECT * FROM reminder_occurrences ORDER BY created_at,occurrence_id" values:@[] error:failure] : nil;
-        long long revision = history ? [self revision:failure] : -1;
+        NSArray *slots = history ? [self qry:"SELECT * FROM agenda_slots ORDER BY start_at,task_id" values:@[] error:failure] : nil;
+        long long revision = slots ? [self revision:failure] : -1;
         if (revision < 0) return NO;
-        result = @{@"tasks": tasks, @"history": history, @"revision": @(revision)};
+        result = @{@"tasks": tasks, @"history": history, @"slots":slots, @"revision": @(revision)};
         return YES;
     } error:error];
     return success ? result : nil;
@@ -647,16 +695,21 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 
 // 按有效提醒时间排序，未安排提醒的任务仍在末尾返回。
 - (NSArray *)lsPnd:(NSError **)error {
-    NSDictionary *snapshot = [self planAt:NSDate.date.timeIntervalSince1970 error:error]; if (!snapshot) return nil;
+    NSDictionary *snapshot = [self planAt:NSDate.date.timeIntervalSince1970 error:error];
+    return snapshot ? [TaskStore pndRows:snapshot] : nil;
+}
+
+// 共享计划快照中的任务排序与有效提醒。
++ (NSArray *)pndRows:(NSDictionary *)snapshot {
+    NSMutableDictionary *first = [NSMutableDictionary dictionary];
+    for (NSDictionary *alert in snapshot[@"alerts"]) if (!first[alert[@"task_id"]]) first[alert[@"task_id"]] = alert;
     NSMutableArray *result = [NSMutableArray array];
     for (NSDictionary *task in snapshot[@"tasks"]) {
         if ([task[@"deleted"] boolValue] || ![task[@"status"] isEqual:@"needsAction"]) continue;
         NSMutableDictionary *item = [task mutableCopy];
-        item[@"remind_at"] = NSNull.null;
-        item[@"next_cycle_at"] = NSNull.null;
-        for (NSDictionary *alert in snapshot[@"alerts"]) if ([alert[@"task_id"] isEqual:task[@"task_id"]]) {
-            item[@"remind_at"] = alert[@"remind_at"]; item[@"next_cycle_at"] = alert[@"cycle_at"]; break;
-        }
+        NSDictionary *alert = first[task[@"task_id"]];
+        item[@"remind_at"] = alert[@"remind_at"] ?: NSNull.null;
+        item[@"next_cycle_at"] = alert[@"cycle_at"] ?: NSNull.null;
         [result addObject:item];
     }
     return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
@@ -668,17 +721,98 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     }];
 }
 
+// 用当地日历定位最近的02:00边界，兼容夏令时。
+static NSDate *ts_expiry(NSCalendar *calendar, NSDate *day) {
+    return [calendar nextDateAfterDate:[day dateByAddingTimeInterval:-1]
+        matchingHour:2 minute:0 second:0 options:NSCalendarMatchNextTime | NSCalendarMatchFirst];
+}
+
+// 最近一次02:00对应的日界之前属于过期轮次。
+static double ts_cutoff(double stamp, NSCalendar *calendar) {
+    NSDate *day = [calendar startOfDayForDate:[NSDate dateWithTimeIntervalSince1970:stamp]];
+    if (stamp < ts_expiry(calendar,day).timeIntervalSince1970)
+        day = [calendar dateByAddingUnit:NSCalendarUnitDay value:-1 toDate:day options:0];
+    return day.timeIntervalSince1970;
+}
+
+// 下次过期检查与午夜换日由同一墙钟调度。
++ (NSTimeInterval)nextExpiry:(NSTimeInterval)stamp zone:(NSString *)zone {
+    NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
+    calendar.timeZone = [NSTimeZone timeZoneWithName:zone] ?: NSTimeZone.localTimeZone;
+    NSDate *day = [calendar startOfDayForDate:[NSDate dateWithTimeIntervalSince1970:stamp]];
+    NSDate *expiry = ts_expiry(calendar,day);
+    if (expiry.timeIntervalSince1970 <= stamp)
+        expiry = ts_expiry(calendar,[calendar dateByAddingUnit:NSCalendarUnitDay value:1 toDate:day options:0]);
+    return expiry.timeIntervalSince1970;
+}
+
+// 以实际安排开始时间判断轮次归属，延期不改变原日期。
+static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
+    NSDictionary *task = alert[@"task"];
+    for (NSDictionary *slot in slots)
+        if ([slot[@"task_id"] isEqual:alert[@"task_id"]] && [slot[@"generation"] isEqual:alert[@"generation"]]
+            && [slot[@"cycle_at"] isEqual:alert[@"cycle_at"]]) return [slot[@"start_at"] doubleValue] < cutoff;
+    id anchor = task[@"due_at"] != NSNull.null && ![task[@"planning_mode"] isEqual:@"window"] ? alert[@"cycle_at"] : alert[@"scheduled_at"];
+    return [anchor doubleValue] < cutoff;
+}
+
+// 原子丢弃过期执行轮次，保留任务、常律规则与已完成记录。
+- (BOOL)expAt:(double)stamp cutoff:(double)cutoff error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        NSDictionary *snapshot = [self snapshot:failure]; if (!snapshot) return NO;
+        NSArray *history = snapshot[@"history"], *slots = snapshot[@"slots"];
+        for (NSDictionary *task in snapshot[@"tasks"]) {
+            NSArray *alerts = ta_alerts(task,history,slots,cutoff,failure);
+            if (!alerts) return NO;
+            for (NSDictionary *alert in alerts) {
+                if (!ts_stale(alert,slots,cutoff)) continue;
+                NSNumber *now = @(stamp);
+                if (![self qry:"INSERT INTO reminder_occurrences(occurrence_id,task_id,scheduled_at,cycle_at,generation,kind,handled_at,status,action,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,'resolved','expire',?,?) ON CONFLICT(task_id,generation,kind,cycle_at) DO UPDATE SET "
+                    "status='resolved',action='expire',next_fire_at=NULL,hold_reason=NULL,hold_until=NULL,handled_at=excluded.handled_at,updated_at=excluded.updated_at "
+                    "WHERE reminder_occurrences.status IN ('pending','presented','snoozed')"
+                    values:@[NSUUID.UUID.UUIDString.lowercaseString,alert[@"task_id"],alert[@"scheduled_at"],alert[@"cycle_at"],alert[@"generation"],alert[@"kind"],now,now,now] error:failure]) return NO;
+            }
+        }
+        return YES;
+    } error:error];
+}
+
 // 使用同一数据快照与原生重复模块生成完整计划。
 - (NSDictionary *)planAt:(NSTimeInterval)stamp error:(NSError **)error {
     if (!isfinite(stamp)) { [self dbErr:SQLITE_MISMATCH message:@"调度时刻无效" error:error]; return nil; }
+    NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
+    calendar.timeZone = NSTimeZone.localTimeZone;
+    double cutoff = ts_cutoff(stamp,calendar);
+    if (![self expAt:stamp cutoff:cutoff error:error] || ![self arrangeAt:stamp zone:calendar.timeZone.name error:error]) return nil;
     NSDictionary *snapshot = [self snapshot:error]; if (!snapshot) return nil;
     NSMutableArray *alerts = [NSMutableArray array];
+    NSMutableSet *parents=[NSMutableSet set],*active=[NSMutableSet set],*ready=[NSMutableSet set],*slotted=[NSMutableSet set];
+    NSMutableDictionary *children=[NSMutableDictionary dictionary],*byID=[NSMutableDictionary dictionary];
+    for(NSDictionary *task in snapshot[@"tasks"])byID[task[@"task_id"]]=task;
+    for(NSDictionary *slot in snapshot[@"slots"])if([slot[@"generation"] isEqual:byID[slot[@"task_id"]][@"reminder_version"]])[slotted addObject:slot[@"task_id"]];
+    for(NSDictionary *task in snapshot[@"tasks"]) {
+        NSString *id=task[@"task_id"];if([task[@"deleted"] boolValue])continue;
+        if(task[@"parent_id"]!=NSNull.null){NSString *parent=task[@"parent_id"];if(!children[parent])children[parent]=[NSMutableArray array];[children[parent] addObject:task];}
+        if(task[@"due_at"]!=NSNull.null || task[@"deadline_at"]!=NSNull.null || [slotted containsObject:id])[ready addObject:id];
+    }
+    for(NSDictionary *row in snapshot[@"history"])if([@[@"presented",@"snoozed"] containsObject:row[@"status"]]){[active addObject:row[@"task_id"]];[ready addObject:row[@"task_id"]];}
+    // 全部未完成子级都有独立提醒时才停用汇总提醒；旧子任务未估时仍保留父级。
+    BOOL changed=YES;while(changed){changed=NO;for(NSString *id in children){
+        if([parents containsObject:id])continue;BOOL pending=NO,all=YES;
+        for(NSDictionary *child in children[id])if([child[@"status"] isEqual:@"needsAction"]){pending=YES;if(![ready containsObject:child[@"task_id"]])all=NO;}
+        if(pending && all){[parents addObject:id];if(![ready containsObject:id]){[ready addObject:id];changed=YES;}}
+    }}
     for (NSDictionary *task in snapshot[@"tasks"]) {
-        NSArray *items = [TaskRule alerts:task history:snapshot[@"history"] at:stamp error:error];
+        if([parents containsObject:task[@"task_id"]] && ![active containsObject:task[@"task_id"]])continue;
+        NSArray *items = ta_alerts(task,snapshot[@"history"],snapshot[@"slots"],stamp,error);
         if (!items) return nil;
-        [alerts addObjectsFromArray:items];
+        for (NSDictionary *alert in items) if (!ts_stale(alert,snapshot[@"slots"],cutoff)) [alerts addObject:alert];
     }
     NSMutableDictionary *result = [snapshot mutableCopy];
+    NSDate *day = [calendar startOfDayForDate:[NSDate dateWithTimeIntervalSince1970:stamp]];
+    double midnight = [calendar dateByAddingUnit:NSCalendarUnitDay value:1 toDate:day options:0].timeIntervalSince1970;
+    result[@"agenda_wake_at"] = @(fmin(midnight,[TaskStore nextExpiry:stamp zone:calendar.timeZone.name]));
     result[@"alerts"] = [alerts sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
         NSComparisonResult order = [a[@"remind_at"] compare:b[@"remind_at"]];
         return order == NSOrderedSame ? [a[@"task_id"] compare:b[@"task_id"]] : order;
@@ -697,11 +831,17 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         if (!task) return NO;
         if ([task[@"deleted"] boolValue] || ![task[@"status"] isEqual:@"needsAction"]
             || ![task[@"reminder_version"] isEqual:alert[@"generation"]] || [alert[@"remind_at"] doubleValue] > stamp) return YES;
-        NSArray *valid = [TaskRule alerts:task history:[self lsOcc:task[@"task_id"] error:failure] at:stamp error:failure];
+        NSArray *slots = [self qry:"SELECT * FROM agenda_slots WHERE task_id=?" values:@[task[@"task_id"]] error:failure];
+        NSArray *history = slots ? [self lsOcc:task[@"task_id"] error:failure] : nil;
+        NSArray *valid = history ? ta_alerts(task,history,slots,stamp,failure) : nil;
         if (!valid) return NO;
         BOOL matches = NO;
         for (NSDictionary *candidate in valid) if ([candidate[@"kind"] isEqual:alert[@"kind"]] && [candidate[@"cycle_at"] isEqual:alert[@"cycle_at"]]
-            && [candidate[@"scheduled_at"] isEqual:alert[@"scheduled_at"]] && [candidate[@"remind_at"] isEqual:alert[@"remind_at"]]) matches = YES;
+            && [candidate[@"scheduled_at"] isEqual:alert[@"scheduled_at"]] && [candidate[@"remind_at"] isEqual:alert[@"remind_at"]]) {
+            NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
+            calendar.timeZone = NSTimeZone.localTimeZone;
+            matches = !ts_stale(candidate,slots,ts_cutoff(stamp,calendar));
+        }
         if (!matches) return YES;
         NSNumber *now = @(stamp);
         if (![self qry:"INSERT INTO reminder_occurrences(occurrence_id,task_id,scheduled_at,cycle_at,generation,kind,next_fire_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) "
@@ -948,6 +1088,15 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     }
 }
 
+// 按指定序号只读取一份归档附件。
+- (NSDictionary *)rdPrf:(NSString *)occID position:(NSInteger)position error:(NSError **)error {
+    @synchronized(self) {
+        if (!ts_uuid(occID) || position<0 || position>=TS_ATT_MAX) { [self dbErr:SQLITE_CONSTRAINT message:@"附件序号无效" error:error]; return nil; }
+        NSArray *rows = [self qry:"SELECT * FROM reminder_checkins WHERE occurrence_id=? AND position=?" values:@[occID.lowercaseString,@(position)] error:error];
+        if (rows && !rows.count) [self dbErr:SQLITE_NOTFOUND message:@"附件不存在" error:error]; return rows.firstObject;
+    }
+}
+
 // 保留旧单图读取约定，返回按序排列的首个附件。
 - (NSDictionary *)rdChk:(NSString *)occID image:(BOOL)image error:(NSError **)error {
     NSArray *rows=[self lsChk:occID images:image error:error];
@@ -955,7 +1104,168 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     return rows.firstObject;
 }
 
-// 创建任务清单。
+// 按固定身份创建常驻清单。
+- (BOOL)rtnList:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        return [self qry:"INSERT INTO task_lists(list_id,title,created_at,updated_at,deleted) VALUES(?,'常律',?,?,0) ON CONFLICT(list_id) DO NOTHING"
+            values:@[TS_RTN_LST,@(NSDate.date.timeIntervalSince1970),@(NSDate.date.timeIntervalSince1970)] error:failure] != nil;
+    } error:error];
+}
+
+// 返回现有评估，未评估任务返回空对象。
+- (NSDictionary *)rdReview:(NSString *)taskID error:(NSError **)error {
+    @synchronized(self) {
+        NSArray *rows=[self qry:"SELECT data FROM task_reviews WHERE task_id=?" values:@[taskID] error:error];if(!rows)return nil;
+        return rows.count ? [NSJSONSerialization JSONObjectWithData:[rows[0][@"data"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:error] : @{};
+    }
+}
+// 在调用方事务中保存评估与任务，失败时整体回滚。
+- (BOOL)svReview:(NSString *)taskID data:(NSDictionary *)data error:(NSError **)error {
+    NSData *bytes=[NSJSONSerialization dataWithJSONObject:data options:NSJSONWritingSortedKeys error:error];if(!bytes)return NO;
+    return [self wrTxn:^BOOL(NSError **failure){return [self qry:"INSERT INTO task_reviews(task_id,data) VALUES(?,?) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data"
+        values:@[taskID,[[NSString alloc]initWithData:bytes encoding:NSUTF8StringEncoding]] error:failure]!=nil;} error:error];
+}
+// 逐日模拟既有任务，已分配的一次性任务不在次日重复占用。
+- (NSDictionary *)roomAt:(NSTimeInterval)start until:(NSTimeInterval)end zone:(NSString *)zone excluding:(NSArray *)ids now:(NSTimeInterval)now error:(NSError **)error {
+    if(!isfinite(start)||!isfinite(end)||end<=start||!isfinite(now)||![NSTimeZone timeZoneWithName:zone]) {ts_err(error,SQLITE_CONSTRAINT,@"请选择有效时间窗口");return nil;}
+    NSMutableDictionary *snapshot=[[self snapshot:error] mutableCopy];if(!snapshot)return nil;
+    NSMutableSet *excluded=[NSMutableSet setWithArray:ids];BOOL changed=YES;
+    while(changed){NSUInteger count=excluded.count;for(NSDictionary *task in snapshot[@"tasks"])if([excluded containsObject:task[@"parent_id"]])[excluded addObject:task[@"task_id"]];changed=count!=excluded.count;}
+    NSMutableArray *tasks=[NSMutableArray array];for(NSDictionary *task in snapshot[@"tasks"])if(![excluded containsObject:task[@"task_id"]])[tasks addObject:[task mutableCopy]];
+    snapshot[@"tasks"]=tasks;
+    NSMutableArray *history=[NSMutableArray array];for(NSDictionary *row in snapshot[@"history"]){NSMutableDictionary *copy=row.mutableCopy;if([@[@"presented",@"snoozed"] containsObject:copy[@"status"]])copy[@"status"]=@"pending";[history addObject:copy];}snapshot[@"history"]=history;
+    NSMutableArray *gaps=[NSMutableArray array];NSMutableSet *reserved=[NSMutableSet set];
+    NSCalendar *calendar=[NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];calendar.timeZone=[NSTimeZone timeZoneWithName:zone];
+    NSDate *day=[calendar startOfDayForDate:[NSDate dateWithTimeIntervalSince1970:start]];NSUInteger count=0;double capacity=0,maxSpan=0;BOOL conflicts=NO;
+    while(day.timeIntervalSince1970<end){
+        if(++count>400)break;
+        NSDictionary *plan=ta_plan(snapshot,day.timeIntervalSince1970,zone,now,error);if(!plan)return nil;
+        NSMutableArray *windows=[NSMutableArray array],*busy=[NSMutableArray array];
+        for(NSDictionary *entry in plan[@"entries"]) {
+            if([entry[@"kind"] isEqual:@"work"])[windows addObject:entry];
+            else if(![entry[@"kind"] isEqual:@"background"])[busy addObject:entry];
+            NSDictionary *task=entry[@"task"];if([entry[@"kind"] isEqual:@"task"] && ![task[@"recurrence"] count])[reserved addObject:task[@"task_id"]];
+        }
+        conflicts=conflicts||[plan[@"conflicts"] count]>0;
+        for(NSDictionary *gap in ta_free(windows,busy)) {
+            double lo=fmax([gap[@"start_at"] doubleValue],fmax(start,ceil(now/60)*60)),hi=fmin([gap[@"end_at"] doubleValue],end);
+            if(hi>lo){[gaps addObject:@{@"start_at":@(lo),@"end_at":@(hi)}];capacity+=hi-lo;maxSpan=fmax(maxSpan,hi-lo);}
+        }
+        for(NSMutableDictionary *task in tasks)if([reserved containsObject:task[@"task_id"]])task[@"deleted"]=@1;
+        day=[calendar dateByAddingUnit:NSCalendarUnitDay value:1 toDate:day options:0];
+    }
+    return @{@"gaps":gaps,@"capacity":@(capacity),@"max_span":@(maxSpan),@"revision":snapshot[@"revision"],@"conflicts":@(conflicts),@"truncated":@(count>400)};
+}
+
+// 从同一快照读取指定日期的安排。
+- (NSDictionary *)dayAt:(NSTimeInterval)stamp zone:(NSString *)zone now:(NSTimeInterval)now error:(NSError **)error {
+    NSDictionary *snapshot = [self snapshot:error];
+    return snapshot ? ta_plan(snapshot,stamp,zone,now,error) : nil;
+}
+
+// 按需读取一批常律日程，执行状态不参与模板展开。
+- (NSArray *)rtnDays:(NSTimeInterval)stamp count:(NSUInteger)count zone:(NSString *)zone error:(NSError **)error {
+    NSTimeZone *tz = [NSTimeZone timeZoneWithName:zone];
+    if (!tz || !isfinite(stamp) || !count || count > 28) {
+        [self dbErr:SQLITE_CONSTRAINT message:@"常律日期范围无效" error:error]; return nil;
+    }
+    NSArray *rows;
+    @synchronized(self) {
+        rows = [self qry:"SELECT * FROM tasks WHERE list_id=? AND deleted=0 ORDER BY position,created_at,task_id" values:@[TS_RTN_LST] error:error];
+    }
+    if (!rows) return nil;
+    NSMutableArray *tasks = [NSMutableArray array];
+    for (NSDictionary *row in rows) {
+        NSDictionary *task = [self dec:row error:error]; if (!task) return nil;
+        [tasks addObject:task];
+    }
+    NSDictionary *snapshot = @{@"tasks":tasks,@"history":@[],@"templates":@YES,@"revision":@0};
+    NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian]; calendar.timeZone = tz;
+    NSDate *day = [calendar startOfDayForDate:[NSDate dateWithTimeIntervalSince1970:stamp]];
+    NSMutableArray *days = [NSMutableArray array];
+    for (NSUInteger index=0; index<count; index++) {
+        NSDictionary *plan = ta_plan(snapshot,day.timeIntervalSince1970,zone,day.timeIntervalSince1970,error);
+        if (!plan) return nil;
+        [days addObject:plan];
+        day = [calendar dateByAddingUnit:NSCalendarUnitDay value:1 toDate:day options:0];
+    }
+    return days;
+}
+
+// 草稿预览只改快照副本，不能改变共享服务和数据库。
+- (NSDictionary *)draftDay:(NSTimeInterval)stamp zone:(NSString *)zone now:(NSTimeInterval)now error:(NSError **)error {
+    NSMutableDictionary *snapshot = [[self snapshot:error] mutableCopy]; if (!snapshot) return nil;
+    NSMutableArray *tasks = [NSMutableArray array];
+    for (NSDictionary *task in snapshot[@"tasks"]) {
+        NSMutableDictionary *copy = [task mutableCopy];
+        if (![copy[@"routine_kind"] isEqual:@"none"]) copy[@"routine_enabled"] = @1;
+        [tasks addObject:copy];
+    }
+    snapshot[@"tasks"] = tasks; return ta_plan(snapshot,stamp,zone,now,error);
+}
+
+// 共用原文导入事务，正式周表仅首次写入，后续保留用户编辑。
+- (NSDictionary *)rtnDoc:(NSDictionary *)document active:(BOOL)active error:(NSError **)error {
+    __block NSUInteger added = 0, skipped = 0, archived = 0;
+    BOOL success = [self wrTxn:^BOOL(NSError **failure) {
+        if (![document isKindOfClass:NSDictionary.class] || !ts_txt(document[@"source"],255)
+            || !ts_txt(document[@"text"],1024*1024) || ![document[@"tasks"] isKindOfClass:NSArray.class]
+            || [document[@"tasks"] count]>1000) return [self dbErr:SQLITE_CONSTRAINT message:@"时间表格式无效" error:failure];
+        NSArray *existing = [self qry:"SELECT content FROM routine_documents WHERE name=?" values:@[document[@"source"]] error:failure]; if (!existing) return NO;
+        if (existing.count && ![existing.firstObject[@"content"] isEqual:document[@"text"]]) return [self dbErr:SQLITE_CONSTRAINT message:@"同名时间表已导入" error:failure];
+        if (active && existing.count) { skipped = [document[@"tasks"] count]; return YES; }
+        for (id task in document[@"tasks"]) {
+            if (![task isKindOfClass:NSDictionary.class] || ![task[@"list_id"] isEqual:TS_RTN_LST] || ![task[@"routine_enabled"] isEqual:@(active)]
+                || !ts_txt(task[@"routine_source"],1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"常律启用状态无效" error:failure];
+            NSArray *rows = [self qry:"SELECT task_id FROM tasks WHERE routine_source=?" values:@[task[@"routine_source"]] error:failure]; if (!rows) return NO;
+            if (rows.count) { skipped++; continue; }
+            if (![self crtTsk:task error:failure]) return NO; added++;
+        }
+        if (active) {
+            NSString *prefix = document[@"replaces"];
+            if (!ts_txt(prefix,1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"原时间表来源无效" error:failure];
+            NSArray *drafts = [self qry:"SELECT task_id FROM tasks WHERE deleted=0 AND routine_enabled=0 AND substr(routine_source,1,?)=?"
+                values:@[@(prefix.length),prefix] error:failure]; if (!drafts) return NO;
+            for (NSDictionary *draft in drafts) { if (![self delTsk:draft[@"task_id"] error:failure]) return NO; archived++; }
+        }
+        return [self qry:"INSERT INTO routine_documents(name,content,created_at) VALUES(?,?,?) ON CONFLICT(name) DO NOTHING"
+            values:@[document[@"source"],document[@"text"],@(NSDate.date.timeIntervalSince1970)] error:failure]!=nil;
+    } error:error];
+    return success ? (active ? @{@"added":@(added),@"skipped":@(skipped),@"archived":@(archived)} : @{@"added":@(added),@"skipped":@(skipped)}) : nil;
+}
+
+// 通用Markdown导入保持禁用草稿，不执行原文内容。
+- (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:NO error:error]; }
+// 已核验的周表使用同一导入实现与唯一数据库。
+- (NSDictionary *)applyRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:YES error:error]; }
+
+// 只在存在启用的一般任务时段时自动安排，重复读取不写入相同结果。
+- (BOOL)arrangeAt:(NSTimeInterval)stamp zone:(NSString *)zone error:(NSError **)error {
+    if (!isfinite(stamp) || ![NSTimeZone timeZoneWithName:zone]) return [self dbErr:SQLITE_CONSTRAINT message:@"日程日期或时区无效" error:error];
+    return [self wrTxn:^BOOL(NSError **failure) {
+        NSArray *windows = [self qry:"SELECT task_id FROM tasks WHERE deleted=0 AND status='needsAction' AND routine_kind='work' AND routine_enabled=1 LIMIT 1" values:@[] error:failure];
+        if (!windows) return NO; if (!windows.count) return YES;
+        NSDictionary *plan = [self dayAt:stamp zone:zone now:stamp error:failure]; if (!plan) return NO;
+        if ([plan[@"conflicts"] count]) return YES;
+        NSMutableSet *retained = [NSMutableSet set];
+        for (NSDictionary *entry in plan[@"entries"]) [retained addObject:entry[@"id"]];
+        NSArray *old = [self qry:"SELECT * FROM agenda_slots WHERE day_at=? AND start_at>?" values:@[plan[@"day_at"],@(stamp)] error:failure]; if (!old) return NO;
+        for (NSDictionary *slot in old) {
+            NSDictionary *identity = @{@"task_id":slot[@"task_id"],@"reminder_version":slot[@"generation"]};
+            if (![retained containsObject:ta_key(identity,slot[@"cycle_at"])])
+                if (![self qry:"DELETE FROM agenda_slots WHERE task_id=? AND generation=? AND cycle_at=?" values:@[slot[@"task_id"],slot[@"generation"],slot[@"cycle_at"]] error:failure]) return NO;
+        }
+        for (NSDictionary *slot in plan[@"allocations"]) {
+            if (![self qry:"INSERT INTO agenda_slots(task_id,generation,cycle_at,scheduled_at,day_at,start_at,end_at) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(task_id,generation,cycle_at) DO UPDATE SET start_at=excluded.start_at,end_at=excluded.end_at "
+                "WHERE agenda_slots.start_at!=excluded.start_at OR agenda_slots.end_at!=excluded.end_at"
+                values:@[slot[@"task_id"],slot[@"generation"],slot[@"cycle_at"],slot[@"scheduled_at"],slot[@"day_at"],slot[@"start_at"],slot[@"end_at"]] error:failure]) return NO;
+        }
+        return YES;
+    } error:error];
+}
+
+// 创建普通任务清单。
 - (NSDictionary *)crtLst:(NSString *)title error:(NSError **)error {
     __block NSDictionary *row = nil;
     BOOL success = [self wrTxn:^BOOL(NSError **failure) {
@@ -971,6 +1281,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 - (BOOL)updLst:(NSString *)listID title:(NSString *)title error:(NSError **)error {
     return [self wrTxn:^BOOL(NSError **failure) {
         if (!ts_uuid(listID) || !ts_txt(title, 1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"清单标识或名称无效" error:failure];
+        if ([listID.lowercaseString isEqual:TS_RTN_LST]) return [self dbErr:SQLITE_CONSTRAINT message:@"常律清单不可重命名" error:failure];
         if (![self qry:"UPDATE task_lists SET title=?,updated_at=? WHERE list_id=? AND deleted=0"
             values:@[title, @(NSDate.date.timeIntervalSince1970), listID.lowercaseString] error:failure]) return NO;
         return sqlite3_changes(self->_db) == 1 || [self dbErr:SQLITE_NOTFOUND message:@"清单不存在" error:failure];
@@ -985,7 +1296,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 // 原子删除清单和任务并使全部旧提醒失效。
 - (BOOL)delLst:(NSString *)listID error:(NSError **)error {
     return [self wrTxn:^BOOL(NSError **failure) {
-        if (!ts_uuid(listID) || [listID.lowercaseString isEqual:TS_DFLT_LST])
+        if (!ts_uuid(listID) || [@[(NSString *)TS_DFLT_LST,(NSString *)TS_RTN_LST] containsObject:listID.lowercaseString])
             return [self dbErr:SQLITE_CONSTRAINT message:@"默认清单不能删除" error:failure];
         NSArray *lists = [self qry:"SELECT list_id FROM task_lists WHERE list_id=? AND deleted=0" values:@[listID.lowercaseString] error:failure];
         if (!lists) return NO;
