@@ -39,13 +39,13 @@ def tstcli():
         for args in [('create', '{'), ('create', '[]'), ('update', task_id, 'null'), ('unknown',), ('occur', task_id, 'true')]:
             tstcmd(path, *args, success=False)
         tstcmd(path, 'day', '1700000000', 'UTC', 'invalid', success=False)
-        source = '## 周一\n1. 8:00~9:00 根据一般待办按顺序完成任务\n2. 9:00~9:30 早餐\n'
+        source = '# TrollTask常律模板v1\n## 周一\n- 08:00~09:00 [工作] 工作\n- 09:00~09:30 [固定] 早餐\n'
         imported = tstcmd(path, 'routine-import', source, 'cli-test.md')
         assert imported['added'] == 2
         assert tstcmd(path, 'routine-import', source, 'cli-test.md')['added'] == 0
-        assert tstcmd(path, 'day', '1700000000', 'UTC')['draft_count'] == 2
+        assert tstcmd(path, 'day', '1700000000', 'UTC')['draft_count'] == 0
         routines = [item for item in tstcmd(path, 'tasks') if item['routine_source']]
-        assert len(routines) == 2 and all(item['routine_enabled'] == 0 for item in routines)
+        assert len(routines) == 2 and all(item['routine_enabled'] == 1 for item in routines)
         for item in routines:
             tstcmd(path, 'delete', item['task_id'])
         with connect(path) as db:

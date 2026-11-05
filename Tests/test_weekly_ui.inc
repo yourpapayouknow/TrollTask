@@ -22,7 +22,7 @@ static void ut_weekly(void) {
     ut_ui(^{ut_req(ut_nav.viewControllers.count==1 && ut_nav.navigationBarHidden,@"常律与普通清单同层且不出现返回栏");ut_req(ut_find(ut_surface(),[@"list." stringByAppendingString:TS_RTN_LST]).accessibilityTraits & UIAccessibilityTraitSelected,@"常律页签有真实选中态");for(UITableViewCell *cell in ut_table().visibleCells)for(NSDictionary *task in [ut_store lsPnd:nil])if([task[@"list_id"]isEqual:TS_RTN_LST]){UIView *check=ut_find(cell,[@"task." stringByAppendingString:task[@"task_id"]]);if(check)ut_req(check.hidden && !ut_find(cell,[@"star." stringByAppendingString:task[@"task_id"]]),@"正式模板没有星标或完成入口");}});
     ut_shot(@"formal-rules-dark-320.png",320,693,NO);ut_shot(@"formal-rules-large-320.png",320,850,YES);
     ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;});ut_shot(@"formal-rules-light-375.png",375,850,NO);ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleDark;});
-    NSUInteger ruleCount=[ut_store lsTsks:nil].count;ut_tap(@"home.create");ut_wait(^BOOL{return ut_find(ut_surface(),@"routine.enabled") && !ut_nav.transitionCoordinator;},@"常律首页加号直接新建模板");ut_tap(@"edit.back");ut_home();ut_req([ut_store lsTsks:nil].count==ruleCount,@"取消新建模板不落库");
+    NSUInteger ruleCount=[ut_store lsTsks:nil].count;ut_tap(@"home.create");ut_wait(^BOOL{return ut_find(ut_surface(),@"edit.repeat") && !ut_nav.transitionCoordinator;},@"常律首页加号打开底部草稿");ut_tap(@"edit.cancel");ut_home();ut_req([ut_store lsTsks:nil].count==ruleCount,@"取消新建模板不落库");
     for(NSInteger step=0;step<3;step++){ut_tap(@"list.today");ut_tap([@"list." stringByAppendingString:TS_RTN_LST]);ut_ui(^{ut_req(ut_nav.viewControllers.count==1,@"连续切换不叠加常律页面");});}
     ut_ui(^{UITableView *table=(UITableView *)ut_find(ut_surface(),@"home.list");[table.delegate tableView:table didSelectRowAtIndexPath:[NSIndexPath indexPathForRow:1 inSection:3]];});
     ut_wait(^BOOL{return ut_find(ut_surface(),@"routine.enabled") && !ut_nav.transitionCoordinator;},@"正式常律沿用既有编辑器");
@@ -121,9 +121,9 @@ static void ut_rptedit(void) {
     NSDictionary *leaf=[ut_store crtTsk:@{@"title":@"普通单项验收"} error:&error];ut_req(leaf!=nil,@"创建普通独立任务夹具");ut_edt(leaf);
     ut_ui(^{ut_req(((UIButton *)ut_find(ut_surface(),@"edit.repeat")).enabled,@"普通无子任务项仍可设重复");[ut_nav popToRootViewControllerAnimated:NO];});ut_home();
     ut_tap([@"list." stringByAppendingString:TS_RTN_LST]);ut_tap(@"home.create");
-    ut_wait(^BOOL{return ut_find(ut_surface(),@"routine.enabled") && !ut_nav.transitionCoordinator;},@"新建常律就绪");
+    ut_wait(^BOOL{return ut_find(ut_surface(),@"edit.repeat") && !ut_nav.transitionCoordinator;},@"新建常律就绪");
     ut_ui(^{ut_req(((UIButton *)ut_find(ut_surface(),@"edit.repeat")).enabled,@"新建常律保留重复入口");});
-    NSUInteger count=[ut_store lsTsks:nil].count;ut_tap(@"edit.repeat");ut_tap(@"repeat.cancel");ut_tap(@"edit.back");ut_home();ut_req([ut_store lsTsks:nil].count==count,@"取消新建常律不写库");
+    NSUInteger count=[ut_store lsTsks:nil].count;ut_tap(@"edit.repeat");ut_tap(@"repeat.cancel");ut_tap(@"edit.cancel");ut_home();ut_req([ut_store lsTsks:nil].count==count,@"取消新建常律不写库");
 }
 
 // 验证常律同页列表、分组、时刻及旧界面偏好。

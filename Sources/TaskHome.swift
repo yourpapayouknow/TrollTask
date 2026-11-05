@@ -102,7 +102,7 @@ final class TaskCell: UITableViewCell {
         trailing.addTarget(owner, action: card ? #selector(TaskHome.delRtn(_:)) : #selector(TaskHome.tglStar(_:)), for: .touchUpInside)
         let role = task["routine_kind"] as? String ?? "none"
         check.isEnabled = today && !complete && (role == "none" || (!["work","rest"].contains(role) && (task["routine_enabled"] as? NSNumber)?.boolValue == true)) && ((task["remind_at"] as? NSNumber)?.doubleValue ?? .infinity)<=Date().timeIntervalSince1970
-        if !check.isEnabled { check.setImage(lb_icon("time"), for: .normal); check.accessibilityLabel = ["work":"一般任务时段","rest":"休息"][role] ?? "常律草稿" }
+        if !check.isEnabled { check.setImage(lb_icon("time"), for: .normal); check.accessibilityLabel = ["work":"一般任务时段","rest":"休息"][role] ?? "已停用" }
         titleLabelView.text = task["title"] as? String; titleLabelView.accessibilityLabel = titleLabelView.text
         titleLabelView.font = lb_fnt(.body, owner.traitCollection)
         // 常律卡片按正文高度排版，其他行沿用图标触摸列。
@@ -127,7 +127,7 @@ final class TaskCell: UITableViewCell {
         if let end=task["today_end"] as? NSNumber,let start=task["remind_at"] as? NSNumber {let format=DateFormatter();format.dateFormat="HH:mm";let boundary=Calendar.current.date(byAdding:.day,value:1,to:Calendar.current.startOfDay(for:Date(timeIntervalSince1970:start.doubleValue)))!.timeIntervalSince1970;day.text=format.string(from:Date(timeIntervalSince1970:start.doubleValue))+"–"+(end.doubleValue==boundary ? "24:00":format.string(from:Date(timeIntervalSince1970:end.doubleValue)));clock.isHidden=true;day.isHidden=false}
         if (task["today_unplaced"] as? Bool)==true {day.text="待安排";day.isHidden=false;clock.isHidden=true}
         if (task["today_resolved"] as? Bool)==true {check.isEnabled=false}
-        if role != "none", (task["routine_enabled"] as? NSNumber)?.boolValue == false { day.text = "草稿"; day.isHidden = false; clock.isHidden = true; titleLabelView.textColor = TaskTheme.muted }
+        if role != "none", (task["routine_enabled"] as? NSNumber)?.boolValue == false { day.text = "已停用"; day.isHidden = false; clock.isHidden = true; titleLabelView.textColor = TaskTheme.muted }
         if owner.routineOnly {
             let first=(task["routine_group_first"] as? Bool)==true,disabled=(task["routine_enabled"] as? NSNumber)?.boolValue != true
             let format=DateFormatter();format.dateFormat="HH:mm"
@@ -440,8 +440,8 @@ final class TaskCell: UITableViewCell {
     @objc private func crt() {
         guard !todayOnly else{return}
         guard let store = store else { rfrsh(); return }; guard presentedViewController == nil else { return }
-        if listID == TS_RTN_LST { navigationController?.setNavigationBarHidden(false, animated: false); navigationController?.pushViewController(TaskEdit(store: store, task: nil, draft: tr_draft(), quick: false, saved: { [weak self] in self?.rfrsh() }), animated: true); return }
-        let editor = TaskEdit(store: store, task: nil, draft: ["list_id": ["today","starred"].contains(listID) ? TS_DFLT_LST : listID, "starred": listID == "starred"], quick: true) { [weak self] in self?.rfrsh() }
+        let draft: TaskFields = routineOnly ? tr_draft() : ["list_id": listID == "starred" ? TS_DFLT_LST : listID, "starred": listID == "starred"]
+        let editor = TaskEdit(store: store, task: nil, draft: draft, quick: true) { [weak self] in self?.rfrsh() }
         let nav = UINavigationController(rootViewController: editor); nav.preferredContentSize = editor.preferredContentSize; tu_sheet(self, nav, compact: true)
     }
     // 筛选当前清单和存储排序。
@@ -584,7 +584,7 @@ final class TaskCell: UITableViewCell {
         guard let store else { rfrsh(); return }
         let issues = tu_act("待处理安排","list","agenda.issues"){[weak self] in self?.agendaIssues()}
         if listID == TS_RTN_LST {
-            tu_menu(self,"常律选项",[issues,tu_act("导入时间表","upload","rules.import"){[weak self] in
+            tu_menu(self,"常律选项",[issues,tu_act("导入常律","upload","rules.import"){[weak self] in
                 guard let self else{return}
                 if self.rtnPicker == nil {self.rtnPicker=TaskRtnPicker(store:store,host:self){[weak self] in self?.rfrsh()}}
                 self.rtnPicker?.open()

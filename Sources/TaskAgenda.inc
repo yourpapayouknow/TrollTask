@@ -142,7 +142,7 @@ static NSDictionary *ta_plan(NSDictionary *snapshot, double stamp, NSString *zon
                 [entries addObject:entry];
                 if (templates) continue;
                 if ([role isEqual:@"work"]) [windows addObject:entry];
-                else if (![role isEqual:@"background"]) [busy addObject:entry];
+                else [busy addObject:entry];
             }
             continue;
         }

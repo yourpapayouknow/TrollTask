@@ -27,21 +27,49 @@ final class TaskAgendaIssues: TaskScreen, UITableViewDataSource, UITableViewDele
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { tableView.deselectRow(at: indexPath, animated: true); guard rows.indices.contains(indexPath.row) else { return }; let row = rows[indexPath.row]; do { let task = try store.rdTsk(((row["task"] as! TaskFields)["task_id"] as! String)) as! TaskFields; try tu_live(task);if row["reason"] as? String == "未设置一般任务时段" { navigationController?.pushViewController(TaskRoutineRules(store: store), animated: true) } else if (row["needs_split"] as? NSNumber)?.boolValue == true { navigationController?.pushViewController(TaskAssistantScreen(store: store, taskID: task["task_id"] as? String, maxMinutes: ((row["max_span"] as? NSNumber)?.doubleValue ?? maxSpan) > 0 ? max(1, Int(((row["max_span"] as? NSNumber)?.doubleValue ?? maxSpan) / 60)) : nil, automatic: true), animated: true) } else { let page = TaskEdit(store: store, task: task, saved: nil); if (row["reason"] as? String)?.contains("估时") == true { page.estTime() }; navigationController?.pushViewController(page, animated: true) } } catch { tu_err(self, error) } }
 }
 
-// 首页与显式管理入口共用同一原生文件选择和草稿导入流程。
+// 首页与设置共用模板下载和正式常律导入。
 final class TaskRtnPicker:NSObject,UIDocumentPickerDelegate {
     private let store:TaskStore,changed:()->Void
     private weak var host:UIViewController?
-    private var importing=false
+    private var importing=false, exporting=false
+    private var templateURL: URL?
     private let queue=DispatchQueue(label:"com.iwmei.taskforiwmei.routine.import")
     // 接收同库和当前展示页。
     init(store:TaskStore,host:UIViewController,changed:@escaping ()->Void){self.store=store;self.host=host;self.changed=changed;super.init()}
-    // 沿用已验证的系统文件复制导入方式。
+    // 原生菜单提供模板下载和文件上传两个独立入口。
     func open() {
         guard !importing,let host,host.presentedViewController == nil else { return }
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true); picker.delegate = self; picker.allowsMultipleSelection = false; host.present(picker, animated: true)
+        let menu = UIAlertController(title:"导入常律",message:nil,preferredStyle:.actionSheet); menu.view.tintColor = lb_acnt()
+        for (title, export) in [("下载模板",true),("选择文件",false)] {
+            menu.addAction(UIAlertAction(title:title,style:.default) { [weak self, weak menu] _ in
+                menu?.dismiss(animated:true) { self?.pick(export) }
+            })
+        }
+        menu.addAction(UIAlertAction(title:"取消",style:.cancel))
+        menu.popoverPresentationController?.sourceView = host.view
+        menu.popoverPresentationController?.sourceRect = CGRect(x:host.view.bounds.midX,y:host.view.bounds.midY,width:0,height:0)
+        host.present(menu,animated:true)
     }
-    // 在后台验证小型UTF8时间表，再事务导入禁用草稿。
+    // 使用iOS14起的复制导出和复制导入接口。
+    private func pick(_ export: Bool) {
+        guard let host,host.presentedViewController == nil else { return }
+        do {
+            let picker: UIDocumentPickerViewController
+            if export {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("routine-"+UUID().uuidString,isDirectory:true)
+                try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+                let url = directory.appendingPathComponent("常律模板.md")
+                try TaskRoutineImport.template().write(to:url,atomically:true,encoding:.utf8); templateURL = url; exporting = true
+                picker = UIDocumentPickerViewController(forExporting:[url],asCopy:true)
+            } else { exporting = false; picker = UIDocumentPickerViewController(forOpeningContentTypes:[.data],asCopy:true) }
+            picker.delegate = self; picker.allowsMultipleSelection = false; host.present(picker,animated:true)
+        } catch { tu_err(host,error) }
+    }
+    // 释放本次导出的临时模板。
+    private func clear() { if let url = templateURL { try? FileManager.default.removeItem(at:url.deletingLastPathComponent()) }; templateURL = nil; exporting = false }
+    // 在后台完整验证UTF8模板，整批创建或整批拒绝。
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        if exporting { clear(); return }
         guard let url = urls.first, !importing else { return }; importing = true
         if controller.presentingViewController != nil { controller.dismiss(animated: true) { [weak self] in self?.rdImp(url) } }
         else { rdImp(url) }
@@ -56,20 +84,20 @@ final class TaskRtnPicker:NSObject,UIDocumentPickerDelegate {
                 guard info.isRegularFile == true, (info.fileSize ?? Int.max) <= 1024*1024 else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"请选择小于1MB的文本"]) }
                 let data = try Data(contentsOf: url)
                 guard data.count <= 1024*1024, let text = String(data:data,encoding:.utf8) else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"需要UTF8时间表"]) }
-                let document = try TaskRoutineImport.parse(text, source:url.lastPathComponent, anchor:Date(), zone:TimeZone.current.identifier)
+                let document = try TaskRoutineImport.load(text, source:url.lastPathComponent, anchor:Date(), zone:TimeZone.current.identifier)
                 result = try self.store.importRtns(document as! TaskFields) as? TaskFields
             } catch { failure = error }
             DispatchQueue.main.async {
                 self.importing = false
                 guard let host=self.host,host.viewIfLoaded?.window != nil else { return }
                 if let failure { tu_err(host,failure); return }
-                let alert = UIAlertController(title:"已导入草稿",message:"新增\((result?["added"] as? NSNumber)?.intValue ?? 0)项",preferredStyle:.alert)
-                alert.addAction(UIAlertAction(title:"查看草稿",style:.default) { [weak self] _ in self?.changed() }); host.present(alert,animated:true)
+                let alert = UIAlertController(title:"已导入常律",message:"新增\((result?["added"] as? NSNumber)?.intValue ?? 0)项",preferredStyle:.alert); alert.view.tintColor = lb_acnt()
+                alert.addAction(UIAlertAction(title:"完成",style:.default) { [weak self] _ in self?.changed() }); host.present(alert,animated:true)
             }
         }
     }
     // 系统取消导入不改变任何常律。
-    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { importing = false }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { importing = false; clear() }
 }
 
 // 周期模板只在显式管理入口展示，不混入每日时间轴。
@@ -82,7 +110,7 @@ final class TaskRoutineRules: TaskScreen, UITableViewDataSource, UITableViewDele
     // 禁用归档初始化。
     required init?(coder: NSCoder) { fatalError("Use init(store:)") }
     // 保留模板新增入口。
-    override func viewDidLoad() { super.viewDidLoad(); title = "常律"; table.dataSource = self; table.delegate = self; table.backgroundColor = .clear; table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 72; table.accessibilityIdentifier = "agenda.rules"; view.addSubview(table); tu_wdth(table, view, inset: 0); NSLayoutConstraint.activate([table.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), table.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)]); navigationItem.rightBarButtonItems = [UIBarButtonItem(customView: tu_ibtn("add", "新增常律", "rules.create", self, #selector(crt))), UIBarButtonItem(customView: tu_ibtn("upload", "导入时间表", "rules.import", self, #selector(imp)))] }
+    override func viewDidLoad() { super.viewDidLoad(); title = "常律"; table.dataSource = self; table.delegate = self; table.backgroundColor = .clear; table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 72; table.accessibilityIdentifier = "agenda.rules"; view.addSubview(table); tu_wdth(table, view, inset: 0); NSLayoutConstraint.activate([table.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), table.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)]); navigationItem.rightBarButtonItems = [UIBarButtonItem(customView: tu_ibtn("add", "新增常律", "rules.create", self, #selector(crt))), UIBarButtonItem(customView: tu_ibtn("upload", "导入常律", "rules.import", self, #selector(imp)))] }
     // 编辑返回后重新读取，不展示删除记录。
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated);navigationController?.setNavigationBarHidden(false,animated:false);rfrsh() }
     // 导入或编辑返回后更新同一模板列表。
@@ -94,7 +122,7 @@ final class TaskRoutineRules: TaskScreen, UITableViewDataSource, UITableViewDele
     // 返回模板数量。
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { rows.count }
     // 显示启用状态和原定时刻。
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell { let row = rows[indexPath.row], cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil); cell.backgroundColor = .clear; var content = tu_cell(); content.text = row["title"] as? String; content.textProperties.font = lb_fnt(.body, traitCollection); content.textProperties.color = TaskTheme.ink; content.textProperties.numberOfLines = 0; let format = DateFormatter(); format.dateFormat = "HH:mm"; content.secondaryText = ((row["routine_enabled"] as? NSNumber)?.boolValue == true ? "已启用" : "草稿") + " · " + ((row["due_at"] as? NSNumber).map { format.string(from: Date(timeIntervalSince1970: $0.doubleValue)) } ?? "未设时刻"); content.secondaryTextProperties.color = TaskTheme.muted; cell.contentConfiguration = content; cell.accessoryType = .disclosureIndicator; return cell }
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell { let row = rows[indexPath.row], cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil); cell.backgroundColor = .clear; var content = tu_cell(); content.text = row["title"] as? String; content.textProperties.font = lb_fnt(.body, traitCollection); content.textProperties.color = TaskTheme.ink; content.textProperties.numberOfLines = 0; let format = DateFormatter(); format.dateFormat = "HH:mm"; content.secondaryText = ((row["routine_enabled"] as? NSNumber)?.boolValue == true ? "已启用" : "已停用") + " · " + ((row["due_at"] as? NSNumber).map { format.string(from: Date(timeIntervalSince1970: $0.doubleValue)) } ?? "未设时刻"); content.secondaryTextProperties.color = TaskTheme.muted; cell.contentConfiguration = content; cell.accessoryType = .disclosureIndicator; return cell }
     // 点击模板编辑现有规则。
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { tableView.deselectRow(at: indexPath, animated: true); navigationController?.pushViewController(TaskEdit(store: store, task: rows[indexPath.row], saved: nil), animated: true) }
 }

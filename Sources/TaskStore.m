@@ -449,8 +449,8 @@ static BOOL ts_pth(NSString *path, NSError **error) {
         || ![enabled isKindOfClass:NSNumber.class] || ![@[@0,@1] containsObject:enabled]
         || (end != NSNull.null && (!ts_num(end) || [end doubleValue] != [end integerValue] || [end integerValue] < 0 || [end integerValue] > 1439))
         || (source != NSNull.null && !ts_txt(source,1024))) return [self dbErr:SQLITE_CONSTRAINT message:@"常律参数无效" error:error];
-    if (![role isEqual:@"none"] && (![task[@"list_id"] isEqual:TS_RTN_LST] || task[@"parent_id"] != NSNull.null
-        || ([enabled boolValue] && (![task[@"schedule_kind"] isEqual:@"timed"] || end == NSNull.null || !recurrence.count))))
+    if (![role isEqual:@"none"] && ![task[@"deleted"] boolValue] && (![task[@"list_id"] isEqual:TS_RTN_LST] || task[@"parent_id"] != NSNull.null
+        || ![task[@"schedule_kind"] isEqual:@"timed"] || end == NSNull.null || !recurrence.count))
         return [self dbErr:SQLITE_CONSTRAINT message:@"常律需设置时段和重复" error:error];
     if ([role isEqual:@"none"] && ([task[@"list_id"] isEqual:TS_RTN_LST] || end != NSNull.null))
         return [self dbErr:SQLITE_CONSTRAINT message:@"请选择常律类型" error:error];
@@ -566,6 +566,39 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     return [self qry:sql.UTF8String values:values error:error] != nil;
 }
 
+// 共用新任务字段，批量预检和实际创建保持相同语义。
+- (NSDictionary *)newTsk:(NSString *)uuid {
+    NSNumber *now = @(NSDate.date.timeIntervalSince1970);
+    return @{@"task_id": uuid.lowercaseString, @"title": @"", @"notes": @"",
+        @"due_at": NSNull.null, @"timezone_id": NSTimeZone.localTimeZone.name, @"recurrence_type": @"none", @"recurrence_interval": @1,
+        @"status": @"needsAction", @"snooze_until": NSNull.null, @"created_at": now, @"updated_at": now,
+        @"list_id": TS_DFLT_LST, @"parent_id": NSNull.null, @"position": @0, @"starred": @0, @"starred_at": NSNull.null,
+        @"schedule_kind": @"none", @"planned_duration": NSNull.null, @"deadline_at": NSNull.null, @"deadline_kind": @"none",
+        @"recurrence": @[], @"completed_at": NSNull.null, @"deleted": @0, @"urgency": @0, @"difficulty": @0, @"reminder_version": @1,
+        @"routine_kind": @"none", @"routine_end": NSNull.null, @"routine_enabled": @1, @"routine_source": NSNull.null, @"planning_mode": @"fixed"};
+}
+
+// 在写入事务中核对所有常律，冲突携带完整事项与时段。
+- (BOOL)chkRtn:(NSArray *)tasks error:(NSError **)error {
+    NSPredicate *filter = [NSPredicate predicateWithBlock:^BOOL(NSDictionary *task, NSDictionary *bindings) {
+        (void)bindings;
+        return ![task[@"routine_kind"] isEqual:@"none"] && ![task[@"deleted"] boolValue] && ![task[@"status"] isEqual:@"completed"];
+    }];
+    NSArray *candidates = [tasks filteredArrayUsingPredicate:filter];
+    if (!candidates.count) return YES;
+    NSArray *rows = [self qry:"SELECT * FROM tasks WHERE deleted=0 AND status='needsAction' AND routine_kind!='none'" values:@[] error:error];
+    if (!rows) return NO;
+    NSMutableArray *peers = [NSMutableArray array];
+    for (NSDictionary *row in rows) { NSDictionary *task = [self dec:row error:error]; if (!task) return NO; [peers addObject:task]; }
+    NSArray *conflicts = [TaskRoutineCheck check:candidates against:peers at:NSDate.date.timeIntervalSince1970 error:error];
+    if (!conflicts) return NO;
+    if (conflicts.count) {
+        if (error) *error = [NSError errorWithDomain:@"routine" code:2 userInfo:@{NSLocalizedDescriptionKey:@"常律时段冲突",@"routine_conflicts":conflicts}];
+        return NO;
+    }
+    return YES;
+}
+
 // 创建稳定UUID任务并保存默认字段。
 - (NSDictionary *)crtTsk:(NSDictionary *)fields error:(NSError **)error {
     return [self crtTsk:fields uuid:NSUUID.UUID.UUIDString error:error];
@@ -576,16 +609,10 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     __block NSDictionary *result = nil;
     BOOL success = [self wrTxn:^BOOL(NSError **failure) {
         if (!ts_uuid(uuid)) return [self dbErr:SQLITE_MISMATCH message:@"任务UUID无效" error:failure];
-        NSNumber *now = @(NSDate.date.timeIntervalSince1970);
-        NSDictionary *task = @{@"task_id": uuid.lowercaseString, @"title": @"", @"notes": @"",
-            @"due_at": NSNull.null, @"timezone_id": NSTimeZone.localTimeZone.name, @"recurrence_type": @"none", @"recurrence_interval": @1,
-            @"status": @"needsAction", @"snooze_until": NSNull.null, @"created_at": now, @"updated_at": now,
-            @"list_id": TS_DFLT_LST, @"parent_id": NSNull.null, @"position": @0, @"starred": @0, @"starred_at": NSNull.null,
-            @"schedule_kind": @"none", @"planned_duration": NSNull.null, @"deadline_at": NSNull.null, @"deadline_kind": @"none",
-            @"recurrence": @[], @"completed_at": NSNull.null, @"deleted": @0, @"urgency": @0, @"difficulty": @0, @"reminder_version": @1,
-            @"routine_kind": @"none", @"routine_end": NSNull.null, @"routine_enabled": @1, @"routine_source": NSNull.null, @"planning_mode": @"fixed"};
+        NSDictionary *task = [self newTsk:uuid];
         result = [self mrg:fields into:task error:failure];
-        NSDictionary *row = result ? [self enc:result error:failure] : nil;
+        if (!result || ![self chkRtn:@[result] error:failure]) return NO;
+        NSDictionary *row = [self enc:result error:failure];
         return row && [self wrt:row table:@"tasks" key:@"task_id" insert:YES error:failure];
     } error:error];
     return success ? result : nil;
@@ -596,7 +623,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     return [self wrTxn:^BOOL(NSError **failure) {
         NSDictionary *old = [self rdTsk:taskID error:failure];
         NSDictionary *task = old ? [self mrg:fields into:old error:failure] : nil;
-        if (!task) return NO;
+        if (!task || ![self chkRtn:@[task] error:failure]) return NO;
         BOOL reschedule = NO;
         for (NSString *key in @[@"due_at", @"timezone_id", @"recurrence", @"schedule_kind", @"deadline_at", @"deadline_kind", @"snooze_until", @"status", @"deleted", @"routine_kind", @"routine_end", @"routine_enabled", @"planning_mode"])
             if (![old[key] isEqual:task[key]]) reschedule = YES;
@@ -1214,13 +1241,6 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
         NSArray *existing = [self qry:"SELECT content FROM routine_documents WHERE name=?" values:@[document[@"source"]] error:failure]; if (!existing) return NO;
         if (existing.count && ![existing.firstObject[@"content"] isEqual:document[@"text"]]) return [self dbErr:SQLITE_CONSTRAINT message:@"同名时间表已导入" error:failure];
         if (active && existing.count) { skipped = [document[@"tasks"] count]; return YES; }
-        for (id task in document[@"tasks"]) {
-            if (![task isKindOfClass:NSDictionary.class] || ![task[@"list_id"] isEqual:TS_RTN_LST] || ![task[@"routine_enabled"] isEqual:@(active)]
-                || !ts_txt(task[@"routine_source"],1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"常律启用状态无效" error:failure];
-            NSArray *rows = [self qry:"SELECT task_id FROM tasks WHERE routine_source=?" values:@[task[@"routine_source"]] error:failure]; if (!rows) return NO;
-            if (rows.count) { skipped++; continue; }
-            if (![self crtTsk:task error:failure]) return NO; added++;
-        }
         if (active) {
             NSString *prefix = document[@"replaces"];
             if (!ts_txt(prefix,1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"原时间表来源无效" error:failure];
@@ -1228,14 +1248,33 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
                 values:@[@(prefix.length),prefix] error:failure]; if (!drafts) return NO;
             for (NSDictionary *draft in drafts) { if (![self delTsk:draft[@"task_id"] error:failure]) return NO; archived++; }
         }
+        NSMutableArray *normalized = [NSMutableArray array];
+        NSMutableSet *sources = [NSMutableSet set];
+        for (id task in document[@"tasks"]) {
+            if (![task isKindOfClass:NSDictionary.class] || ![task[@"list_id"] isEqual:TS_RTN_LST] || ![task[@"routine_enabled"] isEqual:@1]
+                || !ts_txt(task[@"routine_source"],1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"常律启用状态无效" error:failure];
+            if ([sources containsObject:task[@"routine_source"]]) return [self dbErr:SQLITE_CONSTRAINT message:@"时间表含重复事项" error:failure];
+            [sources addObject:task[@"routine_source"]];
+            NSArray *rows = [self qry:"SELECT task_id FROM tasks WHERE routine_source=?" values:@[task[@"routine_source"]] error:failure]; if (!rows) return NO;
+            if (rows.count) { skipped++; continue; }
+            NSDictionary *checked = [self mrg:task into:[self newTsk:NSUUID.UUID.UUIDString] error:failure];
+            if (!checked) return NO;
+            [normalized addObject:checked];
+        }
+        if (![self chkRtn:normalized error:failure]) return NO;
+        for (NSDictionary *task in normalized) {
+            NSDictionary *row = [self enc:task error:failure];
+            if (!row || ![self wrt:row table:@"tasks" key:@"task_id" insert:YES error:failure]) return NO;
+            added++;
+        }
         return [self qry:"INSERT INTO routine_documents(name,content,created_at) VALUES(?,?,?) ON CONFLICT(name) DO NOTHING"
             values:@[document[@"source"],document[@"text"],@(NSDate.date.timeIntervalSince1970)] error:failure]!=nil;
     } error:error];
     return success ? (active ? @{@"added":@(added),@"skipped":@(skipped),@"archived":@(archived)} : @{@"added":@(added),@"skipped":@(skipped)}) : nil;
 }
 
-// 通用Markdown导入保持禁用草稿，不执行原文内容。
-- (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:NO error:error]; }
+// 通用Markdown整批验证并创建正式常律。
+- (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:YES error:error]; }
 // 已核验的周表使用同一导入实现与唯一数据库。
 - (NSDictionary *)applyRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:YES error:error]; }
 

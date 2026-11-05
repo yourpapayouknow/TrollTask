@@ -109,6 +109,7 @@
     private let monitor = UISwitch()
     private var preview: UIButton!, recovery: UIButton!
     private var status: UIButton!, planned: UIButton!, timer: DispatchSourceTimer?, watcher: DispatchSourceProcess?
+    private var routinePicker: TaskRtnPicker?
     private var watched: pid_t = 0
     private var pending = false
     private var request = 0
@@ -127,7 +128,8 @@
         preview = tu_btn("测试全屏提醒","list",self,#selector(tst));preview.accessibilityIdentifier="settings.preview"
         recovery = tu_btn("恢复提醒","repeat",self,#selector(rstr));recovery.accessibilityIdentifier="settings.recovery"
         let assistant=tu_btn("智能助手","subtask",self,#selector(aiCfg));assistant.accessibilityIdentifier="settings.assistant"
-        for button in [status!,planned!,preview!,recovery!,assistant] {
+        let routineImport=tu_btn("导入常律","file",self,#selector(rtnImp));routineImport.accessibilityIdentifier="settings.routineImport"
+        for button in [status!,planned!,preview!,recovery!,assistant,routineImport] {
             var config=button.configuration;config?.imagePadding=8;config?.background.cornerRadius=12;config?.contentInsets=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12)
             config?.titleLineBreakMode = .byWordWrapping;config?.subtitleLineBreakMode = .byWordWrapping
             config?.titleTextAttributesTransformer=UIConfigurationTextAttributesTransformer { attributes in var result=attributes;result.font=lb_fnt(.body,nil);return result }
@@ -141,13 +143,20 @@
         let icon=UIImageView(image:lb_icon("settings"));icon.tintColor=TaskTheme.ink;icon.contentMode = .scaleAspectFit;NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant:24),icon.heightAnchor.constraint(equalToConstant:24)])
         let service=tu_stk([icon,tu_lbl("后台服务"),monitor]);service.axis = .horizontal;service.alignment = .center;service.spacing=8;service.isLayoutMarginsRelativeArrangement=true;service.directionalLayoutMargins=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12);service.accessibilityIdentifier="settings.service";service.heightAnchor.constraint(greaterThanOrEqualToConstant:56).isActive=true
         let divider=UIView();divider.backgroundColor = .separator;divider.heightAnchor.constraint(equalToConstant:1/UIScreen.main.scale).isActive=true
-        let fields=tu_stk([service,status,planned,preview,recovery,divider,assistant]);fields.spacing=16
+        let fields=tu_stk([service,status,planned,preview,recovery,divider,assistant,routineImport]);fields.spacing=16
         _ = tu_form(self,fields,"settings.content",top:header);fields.setCustomSpacing(TaskTheme.section,after:recovery);fields.setCustomSpacing(TaskTheme.section,after:divider)
         let result = notify_register_dispatch(LB_READY_NOTE, &token, .main) { [weak self] _ in
             guard let self = self, self.pending else { return }; self.pending = false; self.stat("测试全屏提醒"); self.sync(); notify_post(LB_TEST_NOTE)
         }
         if result != NOTIFY_STATUS_OK { token = -1 }; sync()
         activation = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.rfrsh() }
+    }
+    // 导入入口复用首页模板与事务，不启用HUD服务。
+    @objc private func rtnImp() {
+        do {
+            if routinePicker == nil { routinePicker = TaskRtnPicker(store:try TaskStore.shrd(),host:self) {} }
+            routinePicker?.open()
+        } catch { tu_err(self,error) }
     }
     // 连接设置保存在App内，密钥进入系统钥匙串。
     @objc private func aiCfg() { navigationController?.pushViewController(TaskAISettings(), animated: true) }

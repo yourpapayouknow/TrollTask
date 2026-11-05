@@ -15,9 +15,16 @@ static void ut_rtn(void) {
     ut_wait(^BOOL{return ut_find(ut_surface(),@"home.list") && !ut_nav.transitionCoordinator;},@"常律页签直接进入列表");
     ut_tap(@"home.create");ut_title(@"常律页面验收");
     ut_ui(^{
+        UIViewController *page=ut_top();
+        ut_req(ut_nav.viewControllers.count==1 && page.navigationController.presentingViewController!=nil,@"常律从底部创建且首页不压入二级页");
+        ut_req(!ut_find(ut_surface(),@"edit.star") && ut_find(ut_surface(),@"edit.repeat"),@"常律快捷卡片用重复入口且不含星标");
+        ut_req(page.navigationController.navigationBarHidden,@"常律底部卡片不显示二级导航栏");
+    });ut_tap(@"edit.more");
+    ut_ui(^{
         ut_req(ut_find(ut_surface(),@"routine.kind") && ut_find(ut_surface(),@"routine.end") && ut_find(ut_surface(),@"routine.enabled"),@"常律共用编辑器并提供类型结束及启用");
-        ut_req(ut_find(ut_surface(),@"edit.clearDate").hidden && (!ut_find(ut_surface(),@"edit.subtask") || ut_find(ut_surface(),@"edit.subtask").hidden),@"常律不提供破坏时间或子任务入口");
+        ut_req((!ut_find(ut_surface(),@"edit.clearDate") || ut_find(ut_surface(),@"edit.clearDate").hidden) && (!ut_find(ut_surface(),@"edit.subtask") || ut_find(ut_surface(),@"edit.subtask").hidden),@"常律不提供破坏时间或子任务入口");
         UIDatePicker *end=(UIDatePicker *)ut_find(ut_surface(),@"routine.end");end.date=[NSCalendar.currentCalendar dateBySettingHour:9 minute:30 second:0 ofDate:end.date options:0];[end sendActionsForControlEvents:UIControlEventValueChanged];
+        ut_req(ut_top().preferredContentSize.height>200,@"展开后修改结束时刻不收缩卡片");
     });ut_tap(@"routine.work");ut_tap(@"edit.repeat");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskRepeat.class];},@"常律进入共用重复页");
     ut_ui(^{ut_req(!ut_find(ut_surface(),@"repeat.type.none"),@"常律不能移除重复留下半成品");});

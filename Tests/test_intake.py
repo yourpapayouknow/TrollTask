@@ -13,7 +13,7 @@ def req(value,name):
 
 # 创建可复用的全天工作模板。
 def seed(db,day):
- tstcmd(db,'routine-import','## 周一\n1. 9:00~17:00 根据一般待办按顺序完成任务\n','work.md')
+ tstcmd(db,'routine-import','# TrollTask常律模板v1\n## 周一\n- 09:00~17:00 [工作] 工作\n','work.md')
  row=next(r for r in tstcmd(db,'tasks') if r['routine_kind']=='work')
  tstcmd(db,'update',row['task_id'],jdmp({'routine_enabled':1,'due_at':day+9*3600,'timezone_id':'UTC','routine_end':1020,'recurrence_type':'daily','recurrence':['RRULE:FREQ=DAILY;INTERVAL=1']}))
  return row['task_id']

@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.21.21.tipa
+TIPA := $(BUILD)/TrollTask-0.21.24.tipa
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
@@ -31,7 +31,7 @@ SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -IVendor/libica
 HEADERS := $(wildcard Sources/*.h)
 HEADERS += Sources/TaskAgenda.inc
 HEADERS += Vendor/TrollSpeed/head.h
-CORE_SWIFT := Sources/SwiftHead.swift Sources/ReminderQueue.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift Sources/TaskRoutineImport.swift Sources/TaskRoutineView.swift Sources/TaskAI.swift Sources/TaskIntake.swift Sources/TaskToday.swift Sources/TaskDayOrder.swift Sources/TaskDivision.swift Sources/TaskTimeMap.swift
+CORE_SWIFT := Sources/SwiftHead.swift Sources/ReminderQueue.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift Sources/TaskRoutineImport.swift Sources/TaskRoutineCheck.swift Sources/TaskRoutineView.swift Sources/TaskAI.swift Sources/TaskIntake.swift Sources/TaskToday.swift Sources/TaskDayOrder.swift Sources/TaskDivision.swift Sources/TaskTimeMap.swift
 HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical
 HOST_OBJECTS := $(BUILD)/host/TaskStore.o $(BUILD)/host/TaskRule.o $(BUILD)/host/LBShared.o $(BUILD)/host/TaskScheduler.o
 ICAL_HEADERS := $(wildcard Vendor/libical/*.h)
@@ -130,6 +130,7 @@ test: | $(BUILD)
 	$(MAKE) test-signal
 	$(MAKE) store
 	PYTHONPATH=scripts python3 -B Tests/test_cli.py
+	PYTHONPATH=scripts:Tests python3 -B Tests/test_routine_guard.py
 	PYTHONPATH=scripts python3 -B Tests/test_serve.py
 
 test-rule: $(BUILD)/test_rule
@@ -239,7 +240,7 @@ $(BUILD)/ui/touch/%.o: Vendor/TrollSpeed/%.m $(HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 
-$(BUILD)/ui/test_ui.o: Tests/test_ui.m Tests/test_hud.inc Tests/test_signal.inc Tests/test_parity.inc Tests/test_routine_ui.inc Tests/test_assistant_ui.inc Tests/test_today_ui.inc Tests/test_design_ui.inc Tests/test_weekly_ui.inc $(HEADERS) Makefile
+$(BUILD)/ui/test_ui.o: Tests/test_ui.m Tests/test_hud.inc Tests/test_signal.inc Tests/test_parity.inc Tests/test_routine_ui.inc Tests/test_assistant_ui.inc Tests/test_today_ui.inc Tests/test_design_ui.inc Tests/test_weekly_ui.inc Tests/test_create_ui.inc $(HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 

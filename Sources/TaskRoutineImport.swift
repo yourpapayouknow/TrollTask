@@ -31,7 +31,7 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
 @objc(TaskRoutineImport) final class TaskRoutineImport: NSObject {
     // 展开周模板、显式异步及有时刻的套装，原文完整随结果返回。
     @objc(parse:source:anchor:zone:error:) static func parse(_ text: String, source: String, anchor: Date, zone: String) throws -> NSDictionary {
-        guard text.utf8.count <= 1024*1024, !source.isEmpty, source.count <= 255, let tz = TimeZone(identifier: zone) else {
+        guard text.utf8.count <= 1024*1024, !source.isEmpty, source.count <= 255, TimeZone(identifier: zone) != nil else {
             throw NSError(domain: "routine", code: 1, userInfo: [NSLocalizedDescriptionKey:"时间表格式无效"])
         }
         let dayNames = ["一","二","三","四","五","六","日"]
@@ -103,21 +103,27 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
                 }
             }
         }
+        let tasks = fields(drafts, anchor:anchor, zone:zone, enabled:false)
+        guard !tasks.isEmpty else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"未找到按周时间表"]) }
+        return ["source":source,"text":text,"tasks":tasks,"warnings":warnings] as NSDictionary
+    }
+    // 共用按周合并与当地时刻生成，保留标题原文和明确类型。
+    private static func fields(_ rows: [RoutineDraft], anchor: Date, zone: String, enabled: Bool) -> [TaskFields] {
         // 同一时间同一内容合并为每周多日，不创建七份相同模板。
         var merged: [RoutineDraft] = [], indexes: [String:Int] = [:]
-        for row in drafts {
+        for row in rows {
             let key = row.title+"|\(row.start ?? -1)|\(row.end ?? -1)|"+row.role
             if let index = indexes[key] { merged[index].days.formUnion(row.days); if !merged[index].notes.contains(row.notes) { merged[index].notes += "\n"+row.notes } }
             else { indexes[key] = merged.count; merged.append(row) }
         }
-        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = tz
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier:zone)!
         let today = calendar.startOfDay(for: anchor), offset = (calendar.component(.weekday,from:today)+5)%7
         let monday = calendar.date(byAdding:.day,value:-offset,to:today)!, codes = ["MO","TU","WE","TH","FR","SA","SU"]
         var tasks: [TaskFields] = []
         for (index,row) in merged.enumerated() {
-            let days = row.days.sorted(), label = days.map { "周"+dayNames[$0-1] }.joined(separator:"、")
+            let days = row.days.sorted(), label = days.map { "周"+["一","二","三","四","五","六","日"][$0-1] }.joined(separator:"、")
             var fields: TaskFields = ["title":row.title,"notes":row.notes+"\n重复日："+label,"list_id":TS_RTN_LST,"routine_kind":row.role,
-                "routine_end":row.end.map { NSNumber(value:$0) as Any } ?? NSNull(),"routine_enabled":0,"routine_source":"md:"+row.source,"timezone_id":zone,"position":index]
+                "routine_end":row.end.map { NSNumber(value:$0) as Any } ?? NSNull(),"routine_enabled":enabled ? 1 : 0,"routine_source":"md:"+row.source,"timezone_id":zone,"position":index]
             if let start = row.start {
                 let base = calendar.date(byAdding:.day,value:days[0]-1,to:monday)!
                 fields["due_at"] = calendar.date(bySettingHour:start/60,minute:start%60,second:0,of:base)!.timeIntervalSince1970; fields["schedule_kind"] = "timed"
@@ -125,9 +131,45 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
             }
             tasks.append(fields)
         }
-        guard !tasks.isEmpty else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"未找到按周时间表"]) }
-        return ["source":source,"text":text,"tasks":tasks,"warnings":warnings] as NSDictionary
+        return tasks
     }
+    // 导出可直接编辑的标准Markdown模板。
+    @objc static func template() -> String {
+        let days = ["一", "二", "三", "四", "五", "六", "日"]
+        return "# TrollTask常律模板v1\n# 每行：- 开始~结束 [固定/工作/休息/并行] 标题\n# 使用24小时制；结束早于开始表示次日；起止不得相同。\n# 每周重复；不同行不可重叠；工作占位会自动避让；并行内容写在同一行。\n# 删除示例后填写，不用的日期可留空。\n\n" + days.map { "## 周" + $0 + "\n- 08:00~08:30 [固定] 早餐\n" }.joined(separator: "\n")
+    }
+    // 严格逐行校验模板，禁止跳过错误行或导入半成品。
+    @objc(load:source:anchor:zone:error:) static func load(_ text: String, source: String, anchor: Date, zone: String) throws -> NSDictionary {
+        let rows = text.components(separatedBy: .newlines), days = ["一", "二", "三", "四", "五", "六", "日"]
+        let roles = ["固定":"fixed", "工作":"work", "休息":"rest", "并行":"background"]
+        guard rows.first == "# TrollTask常律模板v1", text.utf8.count <= 1024*1024 else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"请使用常律模板"]) }
+        var day: String?, seen = Set<String>(), headings = Set<String>(), entries: [RoutineDraft] = [], count = 0
+        for (index, raw) in rows.enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if line.hasPrefix("## 周"), days.contains(String(line.dropFirst(4))) {
+                let next = String(line.dropFirst(4))
+                guard headings.insert(next).inserted else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"重复的星期标题"]) }
+                day = next; continue
+            }
+            if line.hasPrefix("# ") { continue }
+            let match = tr_match(#"^- ([0-9]{2}:[0-9]{2})~([0-9]{2}:[0-9]{2}) \[([^]]+)\] (.+)$"#, line).first
+            guard let day, let match, let start = tr_clock(match[0], near:nil), let end = tr_clock(match[1], near:nil), start != end,
+                  let role = roles[match[2]], !match[3].trimmingCharacters(in:.whitespaces).isEmpty else {
+                throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"第\(index+1)行格式有误"])
+            }
+            let title = match[3].trimmingCharacters(in:.whitespaces)
+            try TaskStore.vldTxt(title, notes: "")
+            let identity = day + "|" + line
+            guard seen.insert(identity).inserted, count < 1000 else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"存在重复或过多行"]) }
+            entries.append(RoutineDraft(title:title, role:role, start:start, end:end, notes:"来源："+source, days:[days.firstIndex(of:day)!+1], source:source+":\(count)")); count += 1
+        }
+        guard count > 0 else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"模板没有常律内容"]) }
+        guard !source.isEmpty, source.count <= 255, TimeZone(identifier:zone) != nil, anchor.timeIntervalSince1970.isFinite else { throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"时间表格式无效"]) }
+        let tasks = fields(entries, anchor:anchor, zone:zone, enabled:true)
+        return ["source":source, "text":text, "replaces":"md:"+source+":", "tasks":tasks] as NSDictionary
+    }
+
     // 验证整周并启用正式常律，跨夜按当地日历计算。
     @objc(formal:document:anchor:zone:error:) static func formal(_ store: TaskStore, document: NSDictionary, anchor: Date, zone: String) throws -> NSDictionary {
         let issue = NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"正式时间表无效"])
@@ -138,7 +180,7 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
             let tz = TimeZone(identifier:zone), anchor.timeIntervalSince1970.isFinite else { throw issue }
         var calendar = Calendar(identifier:.gregorian); calendar.timeZone = tz
         let today = calendar.startOfDay(for:anchor), codes = ["MO","TU","WE","TH","FR","SA","SU"]
-        var tasks:[TaskFields] = [], keys = Set<String>(), intervals:[(Int,Int)] = []
+        var tasks:[TaskFields] = [], keys = Set<String>()
         for (index,entry) in entries.enumerated() {
             guard let key=entry["key"] as? String, !key.isEmpty, keys.insert(key).inserted,
                 let title=entry["title"] as? String, let notes=entry["notes"] as? String,
@@ -148,8 +190,6 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
                 let days=entry["days"] as? [Int], !days.isEmpty, Set(days).count==days.count,
                 days.allSatisfy({(1...7).contains($0)}) else { throw issue }
             try TaskStore.vldTxt(title,notes:notes)
-            let duration=(end-start+1440)%1440
-            for day in days where role != "background" { let lo=(day-1)*1440+start; intervals.append((lo,lo+duration)) }
             var first:Date?
             for offset in 0...7 {
                 let date=calendar.date(byAdding:.day,value:offset,to:today)!
@@ -163,10 +203,6 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
                 "timezone_id":zone,"position":index,"due_at":first.timeIntervalSince1970,"schedule_kind":"timed",
                 "recurrence_type":"custom","recurrence":["RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY="+days.sorted().map{codes[$0-1]}.joined(separator:",")]])
         }
-        // 把周日跨夜复制到周一边界，非后台时段重叠即拒绝整体提交。
-        guard !intervals.isEmpty else { throw issue }
-        let ordered=(intervals+intervals.map{($0.0-10080,$0.1-10080)}).sorted{$0.0<$1.0}
-        for index in 1..<ordered.count where ordered[index].0<ordered[index-1].1 { throw NSError(domain:"routine",code:2,userInfo:[NSLocalizedDescriptionKey:"时间表存在重叠"]) }
         guard Set(entries.flatMap{ $0["days"] as? [Int] ?? [] }).count==7 else { throw issue }
         return try store.applyRtns(["source":source,"text":text,"replaces":replaces,"tasks":tasks]) as NSDictionary
     }

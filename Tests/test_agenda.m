@@ -18,8 +18,8 @@ static void ag_day(NSString *path) {
     TaskStore *s=ag_store(path);double day=ag_time(@"2026-11-02 00:00"),now=day+6*3600;
     ag_rtn(s,@"一般任务",@"work",day+9*3600,12*60,YES);
     NSDictionary *meal=ag_rtn(s,@"用餐",@"fixed",day+10*3600,10*60+30,YES);
-    ag_rtn(s,@"并行听歌",@"background",day+10*3600,11*60,YES);
-    ag_rtn(s,@"尚未启用",@"fixed",day+9*3600,12*60,NO);
+    ag_rtn(s,@"听歌",@"background",day+11.5*3600,12*60,YES);
+    ag_rtn(s,@"已停用",@"fixed",day+6*3600,7*60,NO);
     NSDictionary *a=[s crtTsk:@{@"title":@"任务A",@"planned_duration":@2400,@"position":@1} error:nil];
     NSDictionary *b=[s crtTsk:@{@"title":@"任务B",@"planned_duration":@3600,@"position":@2} error:nil];
     NSDictionary *c=[s crtTsk:@{@"title":@"放不下",@"planned_duration":@7200,@"position":@3} error:nil];
@@ -27,11 +27,11 @@ static void ag_day(NSString *path) {
     NSDictionary *finished=[s crtTsk:@{@"title":@"已提前完成的固定任务",@"due_at":@(day+9.5*3600)} error:nil];
     ag_req([s cmplTsk:finished[@"task_id"] error:nil],@"已完成但未估时的旧任务不阻塞新安排");
     NSDictionary *plan=[s dayAt:day zone:@"UTC" now:now error:nil];
-    ag_req([plan[@"conflicts"] count]==0,@"窗口和明确并行不构成固定冲突");ag_req([plan[@"allocations"] count]==2,@"只安排能放下的两个任务");
+    ag_req([plan[@"conflicts"] count]==0,@"工作占位避让具体安排");ag_req([plan[@"allocations"] count]==2,@"只安排能放下的两个任务");
     ag_req([ag_find(plan[@"allocations"],a[@"task_id"])[@"start_at"] doubleValue]==day+9*3600,@"按既有顺序安排任务A");
     ag_req([ag_find(plan[@"allocations"],b[@"task_id"])[@"start_at"] doubleValue]==day+10.5*3600,@"任务B整项跨过用餐占用");
     ag_req(ag_find(plan[@"allocations"],c[@"task_id"])==nil && [plan[@"unplaced"] count]==2,@"超容量和无预计用时明确列出");
-    ag_req([plan[@"draft_count"] integerValue]==1,@"草稿不占时间也不提醒");
+    ag_req([plan[@"draft_count"] integerValue]==1,@"停用事项不占时间也不提醒");
     ag_req([s arrangeAt:now zone:@"UTC" error:nil],@"同库原子安排成功");long long revision=[s revision:nil];
     ag_req([s arrangeAt:now zone:@"UTC" error:nil] && [s revision:nil]==revision,@"重复事件不反复写入或发送通知");
     NSDictionary *snapshot=[s planAt:now error:nil];
@@ -77,7 +77,11 @@ static void ag_edges(NSString *path) {
     TaskStore *s=ag_store(path);double day=ag_time(@"2026-11-02 00:00");
     ag_rtn(s,@"工作",@"work",day+9*3600,12*60,YES);
     ag_rtn(s,@"会议A",@"fixed",day+10*3600,11*60,YES);
-    ag_rtn(s,@"会议B",@"fixed",day+10.5*3600,12*60,YES);
+    NSDictionary *legacy=ag_rtn(s,@"会议B",@"fixed",day+12*3600,13*60,YES);
+    // 模拟旧版重叠记录，读取时仍须暴露冲突。
+    sqlite3 *db=NULL;ag_req(sqlite3_open(path.fileSystemRepresentation,&db)==SQLITE_OK,@"打开旧版冲突夹具");
+    NSString *sql=[NSString stringWithFormat:@"UPDATE tasks SET due_at=%.0f,routine_end=720 WHERE task_id='%@'",day+10.5*3600,legacy[@"task_id"]];
+    ag_req(sqlite3_exec(db,sql.UTF8String,NULL,NULL,NULL)==SQLITE_OK,@"写入旧版重叠夹具");sqlite3_close(db);
     [s crtTsk:@{@"title":@"普通待办",@"planned_duration":@60} error:nil];
     NSDictionary *plan=[s dayAt:day zone:@"UTC" now:day error:nil];ag_req([plan[@"conflicts"] count]>0 && [plan[@"allocations"] count]==0,@"固定冲突不靠挤占普通任务掩盖");ag_req([plan[@"entries"] count]>=2,@"冲突安排仍按真实时间显示供用户修正");
     ag_req([s dayAt:day zone:@"Invalid/Zone" now:day error:nil]==nil,@"非法时区不生成日程");
@@ -92,16 +96,15 @@ static void ag_import(NSString *path) {
     NSError *error=nil;NSDictionary *doc=[TaskRoutineImport parse:text source:@"test.md" anchor:[NSDate dateWithTimeIntervalSince1970:ag_time(@"2026-11-02 12:00")] zone:@"UTC" error:&error];
     ag_req(doc!=nil,error.localizedDescription);ag_req([doc[@"tasks"] count]>=6 && [doc[@"warnings"] count]>0,@"展开套装和继承，并保留次日结束歧义");
     for(NSDictionary *task in doc[@"tasks"])ag_req([task[@"routine_enabled"] isEqual:@0],@"全部导入项明确禁用");
-    NSDictionary *result=[s importRtns:doc error:&error];ag_req(result!=nil,error.localizedDescription);
-    ag_req([result[@"added"] unsignedIntegerValue]==[doc[@"tasks"] count],@"同一事务导入全部步骤");
+    ag_req([s importRtns:doc error:nil]==nil && [s lsTsks:nil].count==0,@"旧版不完整草稿禁止入库");
+    NSString *template=@"# TrollTask常律模板v1\n## 周一\n- 07:00~07:10 [固定] 起床\n- 07:10~07:20 [固定] 洗漱\n";
+    doc=[TaskRoutineImport load:template source:@"test.md" anchor:NSDate.date zone:@"UTC" error:&error];
+    NSDictionary *result=doc ? [s importRtns:doc error:&error] : nil;ag_req(result!=nil,error.localizedDescription);
+    ag_req([result[@"added"] unsignedIntegerValue]==2,@"整批创建正式常律");
     long long revision=[s revision:nil];result=[s importRtns:doc error:nil];
     ag_req([result[@"added"] integerValue]==0 && [s revision:nil]==revision,@"重复导入无重复任务和通知");
-    NSDictionary *plan=[s planAt:ag_time(@"2026-11-02 08:00") error:nil];ag_req([plan[@"alerts"] count]==0,@"导入不污染现有提醒链路");
-    plan=[s draftDay:ag_time(@"2026-11-02 08:00") zone:@"UTC" now:ag_time(@"2026-11-02 00:00") error:nil];
-    ag_req([plan[@"entries"] count]>0 && [plan[@"conflicts"] count]>0,@"草稿能预览且缺失时间明确待调整");
-    ag_req([s revision:nil]==revision,@"草稿预览不改变数据库");
-    NSMutableDictionary *bad=[doc mutableCopy];bad[@"text"]=[text stringByAppendingString:@"修改"];
-    ag_req([s importRtns:bad error:nil]==nil && [s revision:nil]==revision,@"同名变化不覆盖用户已编辑草稿");
+    NSMutableDictionary *bad=[doc mutableCopy];bad[@"text"]=[template stringByAppendingString:@"修改"];
+    ag_req([s importRtns:bad error:nil]==nil && [s revision:nil]==revision,@"同名变化不覆盖用户常律");
     ag_req([TaskRoutineImport parse:@"没有时间表" source:@"empty.md" anchor:NSDate.date zone:@"UTC" error:nil]==nil,@"无按周条目明确报错");
 }
 

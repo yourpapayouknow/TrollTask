@@ -869,6 +869,7 @@ static void ut_svc(void) {
 #include "test_today_ui.inc"
 #include "test_design_ui.inc"
 #include "test_weekly_ui.inc"
+#include "test_create_ui.inc"
 
 // 前台呈现失败保持待接管状态，超时取消后可再次打开采集。
 static void ut_bridge(void) {
@@ -994,7 +995,8 @@ static void ut_hdbg(BOOL seed) {
                 BOOL settingsOnly = [ut_args containsObject:@"--settings-only"];
                 BOOL signalOnly = [ut_args containsObject:@"--signal"];
                 BOOL parityOnly = [ut_args containsObject:@"--parity"];
-                if ([ut_args containsObject:@"--routine-view"]) {ut_rtnview();}
+                if ([ut_args containsObject:@"--create-fix"]) {if (@available(iOS 16.0,*)) ut_crtfix();}
+                else if ([ut_args containsObject:@"--routine-view"]) {ut_rtnview();}
                 else if ([ut_args containsObject:@"--routine-edit"]) {ut_rptedit();}
                 else if ([ut_args containsObject:@"--formal"]) {ut_weekly();}
                 else if ([ut_args containsObject:@"--design-editor"]) {ut_dflds();}

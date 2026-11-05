@@ -1,5 +1,5 @@
 # 验证拆分事务、每日时间轴和真实HTTP退化路径。
-from head import ROOT, TemporaryDirectory, Path, jdmp, jld, ThreadingHTTPServer, SimpleHTTPRequestHandler, Thread, datetime, timezone
+from head import ROOT, TemporaryDirectory, Path, jdmp, jld, ThreadingHTTPServer, SimpleHTTPRequestHandler, Thread, datetime, timezone, connect
 from test_cli import tstcmd
 
 checks = 0
@@ -81,7 +81,7 @@ def division(root):
 def calendar(root):
     db = root / 'calendar.db'; day = stamp('2030-01-07T00:00:00')
     # 常律UUID从同库常驻列表读取，避免复制存储常量。
-    tstcmd(db, 'routine-import', '## 周一\n1. 9:00~12:00 根据一般待办按顺序完成任务\n2. 12:00~12:30 早餐\n## 周二\n1. 15:00~16:00 洗澡\n', 'week.md')
+    tstcmd(db, 'routine-import', '# TrollTask常律模板v1\n## 周一\n- 09:00~12:00 [工作] 工作\n- 12:00~12:30 [固定] 早餐\n## 周二\n- 15:00~16:00 [固定] 洗澡\n', 'week.md')
     mon = tstcmd(db,'day',str(day),'UTC','drafts'); tue = tstcmd(db,'day',str(day+86400),'UTC','drafts')
     req([e['task']['title'] for e in mon['entries']] != [e['task']['title'] for e in tue['entries']], '每天只展示匹配当日的常律')
     req(all(day <= e['start_at'] < e['end_at'] <= day+86400 for e in mon['entries']), '日程不会串入次日')
@@ -139,7 +139,10 @@ def calendar(root):
     # 大量并行事件不压成负宽度。
     overlap = root/'overlap.db'
     for index in range(12):
-        tstcmd(overlap,'create',jdmp({'title':f'并行{index}','list_id':work['list_id'],'routine_kind':'background','routine_end':600,'due_at':day+9*3600,'routine_enabled':1,'recurrence_type':'daily','timezone_id':'UTC'}))
+        tstcmd(overlap,'create',jdmp({'title':f'并行{index}','list_id':work['list_id'],'routine_kind':'background','routine_end':index*10+10,'due_at':day+index*600,'routine_enabled':1,'recurrence_type':'daily','timezone_id':'UTC'}))
+    # 模拟旧版数据库中的重叠记录，验证读取几何；新建已禁止这些重叠。
+    with connect(overlap) as sql:
+        sql.execute('UPDATE tasks SET due_at=?,routine_end=600', (day+9*3600,))
     geometry = tstcmd(overlap,'timeline',str(day),'UTC')
     req(max(geometry['columns'])==12 and all(f[2]>=96 for f in geometry['frames']), '并行列可以横向滚动且保留可读宽度')
     single=tstcmd(overlap,'create',jdmp({'title':'独立事件','planned_duration':1800,'due_at':day+12*3600}))

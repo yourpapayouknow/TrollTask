@@ -162,6 +162,21 @@ func tu_wdth(_ content: UIView, _ parent: UIView, inset: CGFloat = TaskTheme.edg
 func tu_err(_ parent: UIViewController, _ error: Error) {
     NSLog("待办界面操作失败：%@", error as NSError)
     let names = ["invalid_fields":"请检查输入", "not_found":"任务已删除", "database_busy":"数据库忙碌", "duplicate_uuid":"任务编号重复"]
+    if let conflicts = (error as NSError).userInfo["routine_conflicts"] as? [TaskFields] {
+        let format = DateFormatter(); format.dateFormat = "MM-dd HH:mm"
+        // 完整保留全部冲突标题及各自时段，系统提示在内容较多时可滚动。
+        let message = conflicts.map { row -> String in
+            let a = row["task"] as! TaskFields, b = row["peer"] as! TaskFields
+            func span(_ start: String, _ end: String, _ task: TaskFields) -> String {
+                format.timeZone = TimeZone(identifier:task["timezone_id"] as! String)
+                return format.string(from:Date(timeIntervalSince1970:(row[start] as! NSNumber).doubleValue)) + "—" + format.string(from:Date(timeIntervalSince1970:(row[end] as! NSNumber).doubleValue))
+            }
+            return (a["title"] as! String) + "\n" + span("start_at", "end_at", a) + "\n与" + (b["title"] as! String) + "\n" + span("peer_start", "peer_end", b)
+        }.joined(separator:"\n\n")
+        let alert = UIAlertController(title:"常律时段冲突", message:message, preferredStyle:.alert); alert.view.tintColor = lb_acnt()
+        alert.addAction(UIAlertAction(title:"返回修改", style:.cancel))
+        if parent.presentedViewController == nil { parent.present(alert, animated:true) }; return
+    }
     let detail = (error as NSError).userInfo[NSLocalizedDescriptionKey] as? String
     let title = detail.flatMap { !$0.isEmpty && $0.count <= 13 ? $0 : nil }
     let alert = UIAlertController(title: title ?? names[(error as NSError).userInfo["kind"] as? String ?? ""] ?? "操作失败", message: nil, preferredStyle: .alert)
@@ -185,7 +200,7 @@ func tu_act(_ title: String, _ icon: String?, _ id: String, _ work: @escaping ()
     UIAction(title: title, image: icon.flatMap { lb_icon($0) }, identifier: UIAction.Identifier(id)) { _ in work() }
 }
 // 用原生呈现控制器将快捷草稿贴在键盘上方。
-private final class TaskDock: UIPresentationController {
+private final class TaskDock: UIPresentationController, UIGestureRecognizerDelegate {
     private let shade = UIControl()
     private var keyboard: CGRect = .zero
     private var observer: NSObjectProtocol?
@@ -208,10 +223,21 @@ private final class TaskDock: UIPresentationController {
             let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
             UIView.animate(withDuration: duration) { container.setNeedsLayout(); container.layoutIfNeeded() }
         }
-        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swp)); swipe.direction = .down; presentedView?.addGestureRecognizer(swipe)
+        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swp)); swipe.direction = .down; swipe.delegate = self; presentedView?.addGestureRecognizer(swipe)
     }
-    // 取消紧凑草稿，展开后保留表单滚动。
-    @objc private func swp() { if contentHeight <= 200 { cls() } }
+    // 顶部下拉退出，正文滚动和控件操作不触发取消。
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard !presentedViewController.isModalInPresentation, touch.location(in: presentedView).y <= 72 else { return false }
+        var view = touch.view
+        while let current = view {
+            if current is UIControl { return false }
+            if let scroll = current as? UIScrollView, scroll.contentOffset.y > -scroll.adjustedContentInset.top + 1 { return false }
+            view = current.superview
+        }
+        return true
+    }
+    // 共用退出保护，不以卡片高度限制取消。
+    @objc private func swp() { cls() }
     // 退出未提交草稿。
     @objc private func cls() { guard !presentedViewController.isModalInPresentation else{return};presentedViewController.dismiss(animated: true) }
     // 根据键盘和动态字号更新原生容器尺寸。

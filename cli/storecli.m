@@ -101,9 +101,9 @@ static id ts_cmd(TaskStore *store, NSArray *args, NSError **error) {
         return [document isKindOfClass:NSDictionary.class] && ts_num(stamp) ? [TaskRoutineImport formal:store document:document anchor:[NSDate dateWithTimeIntervalSince1970:[stamp doubleValue]] zone:args[3] error:error] : ts_bad(error);
     }
     if ([command isEqual:@"routine-import"] && (args.count==2 || args.count==3)) {
-        NSDictionary *document=[TaskRoutineImport parse:args[1] source:args.count==3 ? args[2] : @"时间表.md" anchor:NSDate.date zone:NSTimeZone.localTimeZone.name error:error];
+        NSDictionary *document=[TaskRoutineImport load:args[1] source:args.count==3 ? args[2] : @"时间表.md" anchor:NSDate.date zone:NSTimeZone.localTimeZone.name error:error];
         NSDictionary *result=document ? [store importRtns:document error:error] : nil;
-        if(!result)return nil;NSMutableDictionary *value=result.mutableCopy;value[@"warnings"]=document[@"warnings"];return value;
+        if(!result)return nil;NSMutableDictionary *value=result.mutableCopy;value[@"warnings"]=document[@"warnings"] ?: @[];return value;
     }
     if ([command isEqual:@"new-list"] && args.count == 2) return [store crtLst:args[1] error:error];
     if ([command isEqual:@"rename-list"] && args.count == 3)

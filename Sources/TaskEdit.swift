@@ -41,9 +41,10 @@ final class TaskDate {
     private var saving = false, splitAfterSave = false, forceReview = false
     private var extraActions: [UIAction] = []
     private let titleField = UITextView(), notes = UITextView(), hint = tu_lbl("新建任务")
+    private let schedule = tu_lbl(nil)
     private var plan: TaskDate!, deadline: TaskDate!
     private var save: UIButton!, notesBtn: UIButton!, dateBtn: UIButton!, ddlBtn: UIButton!, starBtn: UIButton!, listBtn: UIButton!, repeatBtn: UIButton!, subBtn: UIButton!
-    private var advanced: UIStackView!, detail: UIStackView!
+    private var advanced: UIStackView!, detail: UIStackView!, formStack: UIStackView!
     private var childRow: UIStackView?, childField: UITextField?, childBusy = false, childBack = false
     private var textHeights: [NSLayoutConstraint] = []
     private var actionRow: UIStackView?
@@ -66,7 +67,8 @@ final class TaskDate {
     required init?(coder: NSCoder) { fatalError("Use init(store:task:saved:)") }
     // 构建完整详情和可展开的额外字段。
     override func viewDidLoad() {
-        super.viewDidLoad(); title = task == nil ? "添加待办" : "任务详情"
+        super.viewDidLoad(); title = task == nil ? (routine ? "新建常律" : "添加待办") : "任务详情"
+        hint.text = routine ? "新建常律" : "新建任务"
         save = tu_btn(task==nil && !routine ? "下一步":"保存", nil, self, #selector(sv)); save.accessibilityIdentifier = "edit.save"; var saveStyle = save.configuration; saveStyle?.baseForegroundColor = lb_acnt(); save.configuration = saveStyle
         if quick { navigationController?.setNavigationBarHidden(true, animated: false) }
         else {
@@ -89,6 +91,7 @@ final class TaskDate {
             field.textContainerInset = .init(top: 8, left: 8, bottom: 8, right: 8); field.textContainer.lineFragmentPadding = 0; let height = field.heightAnchor.constraint(equalToConstant: field === titleField ? (quick ? 44 : 72) : 120); height.isActive = true; textHeights.append(height)
         }
         titleField.text = task?["title"] as? String ?? draft["title"] as? String ?? ""; notes.text = task?["notes"] as? String ?? draft["notes"] as? String ?? ""; notes.isHidden = notes.text.isEmpty
+        if quick { titleField.returnKeyType = .done }
         hint.font = titleField.font; hint.textColor = TaskTheme.muted; hint.isHidden = !titleField.text.isEmpty; hint.translatesAutoresizingMaskIntoConstraints = false; titleField.addSubview(hint)
         NSLayoutConstraint.activate([hint.leadingAnchor.constraint(equalTo: titleField.leadingAnchor, constant: 8), hint.topAnchor.constraint(equalTo: titleField.topAnchor, constant: 8)])
         plan = TaskDate(task ?? draft, deadline: false, zone: zone, target: self); deadline = TaskDate(task ?? draft, deadline: true, zone: zone, target: self)
@@ -100,9 +103,10 @@ final class TaskDate {
         repeatBtn = tu_btn(nil, "repeat", self, #selector(rpt)); repeatBtn.accessibilityIdentifier = "edit.repeat"
         subBtn = tu_btn("添加子任务", "subtask", self, #selector(sub)); subBtn.accessibilityIdentifier = "edit.subtask"; subBtn.isHidden = task == nil
         dateChip = tu_btn(nil, "calendar", self, #selector(chip)); dateChip.accessibilityIdentifier = "edit.dateChip"
+        schedule.numberOfLines = 0; schedule.font = lb_fnt(.subheadline, nil); schedule.textColor = TaskTheme.muted; schedule.accessibilityIdentifier = "edit.schedule"
         clearDate = tu_ibtn("close", "移除日期", "edit.clearDate", self, #selector(clrDate(_:)))
-        dateLine = tu_stk([quick ? dateChip! : dateBtn!, clearDate!]); dateLine.axis = .horizontal
-        if quick { dateLine.layer.cornerRadius = 20; dateLine.layer.cornerCurve = .continuous; dateLine.layer.borderWidth = 1 / UIScreen.main.scale; dateLine.layer.borderColor = UIColor.separator.cgColor; var config = dateChip.configuration; config?.baseForegroundColor = lb_acnt(); dateChip.configuration = config }
+        dateLine = tu_stk(quick && routine ? [schedule] : [quick ? dateChip! : dateBtn!, clearDate!]); dateLine.axis = .horizontal
+        if quick && !routine { dateLine.layer.cornerRadius = 20; dateLine.layer.cornerCurve = .continuous; dateLine.layer.borderWidth = 1 / UIScreen.main.scale; dateLine.layer.borderColor = UIColor.separator.cgColor; var config = dateChip.configuration; config?.baseForegroundColor = lb_acnt(); dateChip.configuration = config }
         clearDeadline = tu_ibtn("close", "移除截止日期", "edit.clearDeadline", self, #selector(clrDate(_:)))
         for button in [clearDate!, clearDeadline!] { button.widthAnchor.constraint(equalToConstant: 44).isActive = true }
         deadlineLine = tu_stk([ddlBtn!, clearDeadline!]); deadlineLine.axis = .horizontal
@@ -133,7 +137,9 @@ final class TaskDate {
             endConfirm = tu_btn("确认结束时间", nil, self, #selector(endCnfrm)); endConfirm.accessibilityIdentifier = "routine.end.confirm"
             detail.arrangedSubviews.forEach { detail.removeArrangedSubview($0); $0.removeFromSuperview() }; advanced.removeArrangedSubview(repeatBtn); repeatBtn.removeFromSuperview()
             endRow = tu_row("结束时间", routineEnd)
-            [routineKind!, dateLine!, endRow!, endConfirm!, tu_row("启用常律", routineEnabled), repeatBtn!].forEach { detail.addArrangedSubview($0) }; duration.isEnabled = false
+            var rows: [UIView] = quick ? [routineKind!, endRow!, endConfirm!] : [routineKind!, dateLine!, endRow!, endConfirm!, repeatBtn!]
+            if task != nil { rows.append(tu_row("启用常律", routineEnabled)) } else { extras["routine_enabled"] = 1; dirty.insert("routine_enabled") }
+            rows.forEach { detail.addArrangedSubview($0) }; duration.isEnabled = false
         }
         let extra = tu_btn(quick ? nil : "更多选项", quick ? "more" : "down", self, #selector(more)); extra.accessibilityIdentifier = "edit.more"; extra.accessibilityLabel = "更多选项"
         var titleLine: UIView = titleField
@@ -149,15 +155,17 @@ final class TaskDate {
             }
         }
         let fields: [UIView] = quick ? [titleLine, notes, dateLine, detail, advanced] : [listBtn, titleField, notes, notesBtn, detail, extra, advanced]
-        let scroll = tu_form(self, tu_stk(fields), "edit.form")
+        formStack = tu_stk(fields)
+        let scroll = tu_form(self, formStack, "edit.form")
         let footer: UIStackView
         if quick {
             var config = save.configuration; config?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
                 var value = attributes; let scaled = lb_fnt(.headline, nil)!; value.font = scaled.withSize(min(32, scaled.pointSize)); return value
             }; save.configuration = config
             scroll.contentInset.top = 8
-            footer = tu_stk([notesBtn, dateBtn, starBtn, UIView(), save]); footer.axis = .horizontal; footer.distribution = .fill
-            for button in [notesBtn!, dateBtn!, starBtn!] {var style=button.configuration;style?.contentInsets = .init(top:8,leading:8,bottom:8,trailing:8);button.configuration=style; button.widthAnchor.constraint(equalToConstant: 44).isActive = true }
+            let tools = [notesBtn!, dateBtn!, routine ? repeatBtn! : starBtn!]
+            footer = tu_stk(tools + [UIView(), save]); footer.axis = .horizontal; footer.distribution = .fill
+            for button in tools {var style=button.configuration;style?.contentInsets = .init(top:8,leading:8,bottom:8,trailing:8);button.configuration=style; button.widthAnchor.constraint(equalToConstant: 44).isActive = true }
             save.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         } else {
             save.isHidden = task != nil;footer=tu_stk([save,UIView()]);footer.axis = .horizontal
@@ -181,6 +189,7 @@ final class TaskDate {
             let natural = field.layoutManager.usedRect(for: field.textContainer).height + field.textContainerInset.top + field.textContainerInset.bottom
             textHeights[index].constant = max(44, min(320, ceil(natural)))
         }
+        rtnSize()
         if !quick, let row = actionRow {
             let large = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
             row.axis = large ? .vertical : .horizontal; row.arrangedSubviews.last?.isHidden = large
@@ -189,7 +198,7 @@ final class TaskDate {
     // 使用系统键盘输入快捷标题。
     override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); if quick && titleField.text.isEmpty { titleField.becomeFirstResponder() } }
     // 保留草稿并刷新子任务。
-    override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); if task != nil && subBtn != nil { children() } }
+    override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); navigationController?.setNavigationBarHidden(quick, animated: false); if task != nil && subBtn != nil { children() } }
     // 构建紧急程度与难度菜单。
     private func grade(_ key: String) -> UIButton {
         let label = key == "urgency" ? "紧急程度" : "难易程度", titles = key == "urgency" ? ["未设置", "低", "中", "高"] : ["未评估", "简单", "一般", "困难"]
@@ -225,11 +234,31 @@ final class TaskDate {
             (routineKind?.menu?.children as? [UIAction])?.forEach { $0.state = $0.identifier.rawValue == "routine."+role ? .on : .off }
         }
         dateChip.setTitle(dateBtn.accessibilityLabel, for: .normal)
-        if quick && notes.isHidden && advanced.isHidden { preferredContentSize.height = plan.enabled.isOn ? 184 : 128 }
-        repeatBtn.setTitle(rptTitle(), for: .normal)
+        if quick && routine, let minute = (extras["routine_end"] as? NSNumber)?.intValue {
+            let time = String(format: "%02d:%02d", minute / 60, minute % 60)
+            let overnight = (endRow.arrangedSubviews.first as? UILabel)?.text == "次日结束"
+            var start = dateBtn.accessibilityLabel ?? ""
+            var fields = extras; fields.merge(plan.flds(zone)) { _, new in new }
+            if let stamp = fields["due_at"] as? NSNumber, let values = try? TaskRule.cycles(fields, at:stamp.doubleValue, limit:1) as? [NSNumber], let first = values.first(where:{$0.doubleValue >= stamp.doubleValue}) {
+                let format = DateFormatter(); format.timeZone = zone; format.dateFormat = "MM-dd HH:mm"; start = format.string(from:Date(timeIntervalSince1970:first.doubleValue))
+            }
+            schedule.text = detail.isHidden ? start + "–" + (overnight ? "次日" : "") + time : "开始：" + start
+            schedule.text! += "\n" + rptTitle()
+            dateBtn.accessibilityLabel = "开始时间，" + start
+        }
+        if quick && !routine && notes.isHidden && advanced.isHidden { preferredContentSize.height = plan.enabled.isOn ? 184 : 128 }
+        rtnSize()
+        repeatBtn.setTitle(quick && routine ? nil : rptTitle(), for: .normal); repeatBtn.accessibilityLabel = rptTitle()
         subBtn.isEnabled = (extras["recurrence"] as? [String])?.isEmpty == true
         repeatBtn.isEnabled = extras["parent_id"] is NSNull && !detail.arrangedSubviews.contains { $0.accessibilityIdentifier?.hasPrefix("child.") == true }
         if let lists = try? store.lsLsts() as? [TaskFields], let list = lists.first(where: { $0["list_id"] as? String == extras["list_id"] as? String }) { listBtn.setTitle(lb_shrt(list["title"] as? String), for: .normal) }
+    }
+    // 由实际内容高度撑开常律卡片。
+    private func rtnSize() {
+        guard quick && routine, let formStack else { return }
+        let content = formStack.systemLayoutSizeFitting(CGSize(width: max(44, view.bounds.width - 32), height: 0), withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel).height
+        let height = ceil(content) + max(44, actionRow?.bounds.height ?? 44) + 44
+        if abs(preferredContentSize.height - height) > 1 { preferredContentSize.height = height }
     }
     // 日期气泡复用同一月历。
     @objc private func chip() { clndr(dateBtn) }
@@ -248,18 +277,23 @@ final class TaskDate {
     @objc private func clrDate(_ sender: UIButton) { let value = sender === clearDeadline ? deadline! : plan!; value.enabled.isOn = false; value.timed.isOn = false; dtChg(value.enabled) }
     // 返回短重复标签。
     private func rptTitle(_ fields: TaskFields? = nil) -> String {
-        let fields = fields ?? extras
-        let type = fields["recurrence_type"] as! String, interval = (fields["recurrence_interval"] as! NSNumber).intValue
-        if let unit = ["daily":"天", "weekly":"周", "monthly":"月", "yearly":"年"][type], interval > 1 { return "每\(interval)\(unit)" }
-        return ["none":"不重复", "daily":"每天", "weekly":"每周", "monthly":"每月", "yearly":"每年", "custom":"完整重复规则"][type] ?? "不重复"
+        TaskRoutineCheck.rptTxt(fields ?? extras)
     }
     // 展开全部额外字段。
     @objc private func more() {
+        if quick && routine {
+            detail.isHidden.toggle(); rfrshDtl(); return
+        }
         advanced.isHidden.toggle(); detail.isHidden = false; rfrshDtl()
         if quick { preferredContentSize.height = UIScreen.main.bounds.height }
     }
     // 显示备注输入。
-    @objc private func nts() { notes.isHidden = false; if quick { preferredContentSize.height = UIScreen.main.bounds.height }; if !quick { notesBtn.isHidden = true }; notes.becomeFirstResponder() }
+    @objc private func nts() { notes.isHidden = false; if quick && !routine { preferredContentSize.height = UIScreen.main.bounds.height }; if !quick { notesBtn.isHidden = true }; notes.becomeFirstResponder() }
+    // 标题完成键只收起键盘，中文组词和备注仍按原生输入。
+    func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        if quick && textView === titleField && text == "\n" && textView.markedTextRange == nil { textView.resignFirstResponder(); return false }
+        return true
+    }
     // 记录文本修改并禁用空标题保存。
     func textViewDidChange(_ textView: UITextView) { if textView === timezone {extraChg(timezone);return}; dirty.insert(textView === titleField ? "title" : "notes"); hint.isHidden = !titleField.text.isEmpty; view.setNeedsLayout(); rfrshSv() }
     // 为新建与编辑统一禁用空白标题保存。
@@ -425,6 +459,7 @@ final class TaskDate {
         }
         if fields.isEmpty { finish(); return }
         saving = true; save.isEnabled = false; view.isUserInteractionEnabled = false
+        if quick { navigationController?.isModalInPresentation = true }
         navigationItem.leftBarButtonItem?.isEnabled = false; navigationItem.rightBarButtonItems?.forEach { $0.isEnabled = false }; view.endEditing(true)
         DispatchQueue.global(qos: .userInitiated).async {
             var issue: Error?
@@ -435,6 +470,7 @@ final class TaskDate {
             } } catch { issue = error }
             DispatchQueue.main.async {
                 self.saving = false; self.rfrshSv(); self.view.isUserInteractionEnabled = true; self.navigationItem.leftBarButtonItem?.isEnabled = true; self.navigationItem.rightBarButtonItems?.forEach { $0.isEnabled = true }
+                if self.quick { self.navigationController?.isModalInPresentation = false }
                 if let issue = issue { self.splitAfterSave = false; tu_err(self, issue) } else { self.finish() }
             }
         }

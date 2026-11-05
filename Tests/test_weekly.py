@@ -25,8 +25,10 @@ def run(root):
     count = len(document['entries'])
     db = root / 'weekly.db'
     original = tstcmd(db, 'create', jdmp({'title': '原有普通任务', 'planned_duration': 60}))
-    old = tstcmd(db, 'routine-import', document['text'], 'legacy-weekly.md')
-    other = tstcmd(db, 'create', jdmp({'title': '其他来源草稿', 'list_id': '00000000-0000-4000-8000-000000000002', 'routine_kind': 'fixed', 'routine_enabled': 0}))
+    # 旧版数据从真实存储中模拟，正式导入不再创建草稿。
+    legacy = tstcmd(db, 'create', jdmp({'title':'旧版停用项','list_id':'00000000-0000-4000-8000-000000000002','routine_kind':'fixed','routine_enabled':0,'due_at':1700000000,'routine_end':10,'recurrence_type':'custom','recurrence':['RRULE:FREQ=DAILY;COUNT=1'],'routine_source':'md:legacy-weekly.md:old'}))
+    old = {'added':1}
+    other = tstcmd(db, 'create', jdmp({'title': '其他来源草稿', 'list_id': '00000000-0000-4000-8000-000000000002', 'routine_kind': 'fixed', 'routine_enabled': 0, 'due_at':1700000000, 'routine_end':20, 'recurrence_type':'custom','recurrence':['RRULE:FREQ=DAILY;COUNT=1']}))
     start = at('2026-11-01T16:00')  # 上海周一00:00。
     revision = tstcmd(db, 'snapshot')['revision']
     result = apply(db, path, start)
@@ -64,7 +66,7 @@ def run(root):
     req(all(x['remind_at'] >= now for x in tstcmd(late, 'plan', str(now))['alerts']), '没有安装前积压提醒')
     # 再次打开不覆盖编辑、停用、删除或复活已完成轮次。
     changed, deleted, completed = official[:3]
-    tstcmd(db, 'update', changed['task_id'], jdmp({'title': '保留用户编辑', 'routine_enabled': 0}))
+    tstcmd(db, 'update', changed['task_id'], jdmp({'title': '保留用户编辑', 'routine_enabled': 0, 'due_at':1700000000, 'routine_end':20, 'recurrence_type':'custom','recurrence':['RRULE:FREQ=DAILY;COUNT=1']}))
     tstcmd(db, 'delete', deleted['task_id'])
     tstcmd(db, 'complete-next', completed['task_id'])
     before = tstcmd(db, 'snapshot')
@@ -80,12 +82,14 @@ def run(root):
     ]):
         bad = jld(path.read_text()); mutate(bad)
         badpath = root / f'bad-{index}.json'; badpath.write_text(jdmp(bad))
-        before = tstcmd(db, 'snapshot')
-        apply(db, badpath, start, success=False)
-        req(tstcmd(db, 'snapshot') == before, '无效输入没有数据库副作用')
+        invalid = root / f'invalid-{index}.db'
+        tstcmd(invalid, 'create', jdmp({'title':'保留普通任务'}))
+        before = tstcmd(invalid, 'snapshot')
+        apply(invalid, badpath, start, success=False)
+        req(tstcmd(invalid, 'snapshot') == before, '无效输入没有数据库副作用')
     # 实际SQLite中途故障必须连同前面已插入事项一起回滚。
     fault = root / 'fault.db'
-    tstcmd(fault, 'routine-import', document['text'], 'legacy-weekly.md')
+    tstcmd(fault, 'schema')
     before = tstcmd(fault, 'snapshot')
     with connect(fault) as sql:
         sql.execute("CREATE TRIGGER reject_formal BEFORE INSERT ON tasks WHEN NEW.routine_source LIKE 'formal:%item-002' BEGIN SELECT RAISE(ABORT,'test fault'); END")
