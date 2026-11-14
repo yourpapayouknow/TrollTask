@@ -1,25 +1,17 @@
 // 保存助手连接设置，密钥只存系统钥匙串。
 enum TaskAIConfig {
-    // 使用当前App身份隔离验收配置。
-    private static var query:[String:Any] { [kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:(Bundle.main.bundleIdentifier ?? "TrollTask")+".assistant",kSecAttrAccount as String:"default"] }
     // 读取现有Tailscale服务与可选认证。
     static func ld()->TaskFields {
         // 只迁移旧默认档，用户后续仍可修改每档真实模型ID。
         if UserDefaults.standard.integer(forKey:"assistant.tiers")==0 {if UserDefaults.standard.string(forKey:"assistant.model")=="fast-model"{UserDefaults.standard.set("deepseek-v4.1-flash",forKey:"assistant.model")};UserDefaults.standard.set(1,forKey:"assistant.tiers")}
-        var probe=query;probe[kSecReturnData as String]=true;probe[kSecMatchLimit as String]=kSecMatchLimitOne;var item:CFTypeRef?;let code=SecItemCopyMatching(probe as CFDictionary,&item)
-        let key=code==errSecSuccess ? (item as? Data).flatMap{String(data:$0,encoding:.utf8)} ?? "":""
+        let key=(try? TaskKeychain.rd("assistant")).flatMap{String(data:$0,encoding:.utf8)} ?? ""
         return ["endpoint":UserDefaults.standard.string(forKey:"assistant.endpoint") ?? "http://100.121.131.101:8765/v1","model":UserDefaults.standard.string(forKey:"assistant.model") ?? "deepseek-v4.1-flash","hard_model":UserDefaults.standard.string(forKey:"assistant.hard_model") ?? "glm-5.3","ddl_model":UserDefaults.standard.string(forKey:"assistant.ddl_model") ?? "glm-5.3","key":key]
     }
     // 先验证连接信息再保存，认证失败不覆盖旧密钥。
     static func sv(_ config:TaskFields) throws {
         _ = try TaskAI.req(["goal":"验证设置"],config)
-        let key=config["key"] as? String ?? "",data=Data(key.utf8);let status:OSStatus
-        if key.isEmpty { let value=SecItemDelete(query as CFDictionary);status=value==errSecItemNotFound ? errSecSuccess:value }
-        else {
-            let changed=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
-            if changed==errSecItemNotFound { var item=query;item[kSecValueData as String]=data;item[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;status=SecItemAdd(item as CFDictionary,nil) } else { status=changed }
-        }
-        guard status==errSecSuccess else{throw TaskAI.err("认证未保存")}
+        let key=config["key"] as? String ?? ""
+        try TaskKeychain.sv("assistant",key.isEmpty ? nil : Data(key.utf8))
         UserDefaults.standard.set(config["endpoint"],forKey:"assistant.endpoint");UserDefaults.standard.set(config["model"],forKey:"assistant.model");for key in ["hard_model","ddl_model"]{if let value=config[key] as? String,!value.isEmpty{UserDefaults.standard.set(value,forKey:"assistant."+key)}}
     }
 }

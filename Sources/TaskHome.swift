@@ -157,11 +157,11 @@ final class TaskCell: UITableViewCell {
     private var create:UIButton!,dueTimer:Timer?
     fileprivate var todayOnly:Bool {listID=="today"}
     fileprivate var routineOnly:Bool {listID==TS_RTN_LST}
-    private var pending: [TaskFields] = [], completed: [TaskFields] = [], allPnd: [TaskFields] = [], allCmpl: [TaskFields] = [], lists: [TaskFields] = []
+    private var pending: [TaskFields] = [], allPnd: [TaskFields] = [], lists: [TaskFields] = []
     private var listID = "today", sort = "date", busy: Set<String> = []
     private let queue = DispatchQueue(label: "com.iwmei.taskforiwmei.home")
     private var load = 0, token: Int32 = -1
-    private var expanded = false, loaded = false, failed = false
+    private var loaded = false, failed = false
     private var dayRequest:URLSessionDataTask?,dayTicket=UUID(),dayBusy=false
     private var todayRows:[TaskFields]=[]
     private var tdyDay: Date?, tdyAnchor: String?, tdyManual = false
@@ -253,7 +253,7 @@ final class TaskCell: UITableViewCell {
         load += 1; let current = load, previous = store
         queue.async {
             var todayRows:[TaskFields]=[]
-            var active = previous, pnd: [TaskFields] = [], cmpl: [TaskFields] = [], lists: [TaskFields] = [], issue: Error?
+            var active = previous, pnd: [TaskFields] = [], lists: [TaskFields] = [], issue: Error?
             do {
                 if active == nil { active = try TaskStore.shrd() }
                 guard let active = active else { throw NSError(domain: "store", code: 1) }
@@ -262,7 +262,6 @@ final class TaskCell: UITableViewCell {
                     let at = Date().timeIntervalSince1970, zone = TimeZone.current.identifier
                     let plan = try active.plan(at:at) as! TaskFields
                     pnd = TaskStore.pndRows(plan) as! [TaskFields]
-                    cmpl = try active.lsCmpl() as! [TaskFields]
                     lists = try active.lsLsts() as! [TaskFields]
                     todayRows = try TaskToday.rows(active,snapshot:plan,at:at,zone:zone)
                 }
@@ -270,10 +269,10 @@ final class TaskCell: UITableViewCell {
             DispatchQueue.main.async {
                 guard current == self.load else { return }; self.store = active; self.loaded = true; self.failed = issue != nil
                 self.onStore?(issue == nil ? active : nil)
-                if let error = issue { self.pending = []; self.completed = [];self.rtnSections=[];self.rtnRevision+=1;self.tdyReset(); NSLog("读取待办失败：%@", error as NSError) }
+                if let error = issue { self.pending = [];self.rtnSections=[];self.rtnRevision+=1;self.tdyReset(); NSLog("读取待办失败：%@", error as NSError) }
                 else {
                     if let note = active?.changeNote { self.sort = UserDefaults.standard.string(forKey: "\(note).\(self.listID).sort") ?? "date" }
-                    self.allPnd = pnd; self.allCmpl = cmpl;self.todayRows=todayRows
+                    self.allPnd = pnd;self.todayRows=todayRows
                     self.lists = lists.filter { $0["list_id"] as? String == TS_RTN_LST } + lists.filter { $0["list_id"] as? String != TS_RTN_LST }
                     self.fltr(); self.bldTabs(); self.reg()
                     if self.routineOnly && !self.rtnSections.isEmpty { self.rtnRead(0) }
@@ -468,11 +467,11 @@ final class TaskCell: UITableViewCell {
         table.contentInset.bottom=todayOnly ? tdyBottom:44;create.isEnabled = !todayOnly;toolbar.isHidden=todayOnly;listBottom.constant=todayOnly ? 0:-56;heading.text="TrollTask"
         if routineOnly && rtnSections.isEmpty { rtnRead(0) }
         create.accessibilityLabel=routineOnly ? "新增常律":"新建待办"
-        if listID=="today" {pending=todayRows.filter{$0["status"] as? String != "completed"};completed=todayRows.filter{$0["status"] as? String=="completed"};return}
+        if listID=="today" {pending=todayRows.filter{$0["status"] as? String != "completed"};return}
         let star = listID == "starred"
         if !star && !lists.contains(where: { $0["list_id"] as? String == listID }) { listID = TS_DFLT_LST }
         let filter: (TaskFields) -> Bool = { star ? ($0["starred"] as? NSNumber)?.boolValue == true && $0["routine_kind"] as? String=="none" : $0["list_id"] as? String == self.listID }
-        pending = allPnd.filter(filter); completed = allCmpl.filter(filter)
+        pending = allPnd.filter(filter)
         pending = TaskTraits.order(pending, by: sort)
     }
     // 页签文字和图标采用同一居中布局。
@@ -513,7 +512,7 @@ final class TaskCell: UITableViewCell {
         let selected = String(button.accessibilityIdentifier!.dropFirst(5))
         let reset = selected != listID && (routineOnly || selected == TS_RTN_LST)
         if reset { rtnSections = []; rtnRevision += 1 }
-        listID = selected; expanded = false
+        listID = selected
         if todayOnly { tdyReset() }
         sort = UserDefaults.standard.string(forKey: "\(store.changeNote!).\(listID).sort") ?? "date"
         table.setEditing(false, animated: false); fltr(); bldTabs(); table.reloadData()
@@ -535,7 +534,7 @@ final class TaskCell: UITableViewCell {
             self?.wrt({ store in
                 if create {
                     let row = try store.crtLst(name) as! TaskFields
-                    DispatchQueue.main.async { self?.listID = row["list_id"] as! String; self?.sort = "date"; self?.expanded = false }
+                    DispatchQueue.main.async { self?.listID = row["list_id"] as! String; self?.sort = "date" }
                 } else { try store.updLst(id, title: name) }
             }, done: done)
         }
@@ -596,12 +595,11 @@ final class TaskCell: UITableViewCell {
         let header = tu_act(extra.map { "排序依据：" + $0 } ?? "排序依据", nil, "sort.more") { [weak self] in self?.srtMenu() }
         let rename = tu_act("重命名任务列表", nil, "list.rename") { [weak self] in self?.lstName(false) }, id = listID
         let remove = tu_act("删除任务列表", nil, "list.delete") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除清单及全部任务") { self.wrt { try $0.delLst(id) } } }; remove.attributes = .destructive
-        let clear = tu_act("删除所有已完成的任务", nil, "list.clear") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除完成项及子任务") { self.wrt { try $0.clrCmpl(id) } } }; clear.attributes = .destructive
-        if ["today","starred"].contains(id) { rename.attributes = .disabled; remove.attributes = .disabled; clear.attributes = .disabled }
-        if id == TS_DFLT_LST { remove.attributes = .disabled }; if completed.isEmpty { clear.attributes.insert(.disabled) }
+        if ["today","starred"].contains(id) { rename.attributes = .disabled; remove.attributes = .disabled }
+        if id == TS_DFLT_LST { remove.attributes = .disabled }
         if id == TS_RTN_LST { rename.attributes = .disabled; remove.attributes = .disabled }
         actions.append(tu_act("智能安排","subtask","today.arrange"){[weak self] in self?.arrange()})
-        actions += [issues, tu_act("智能创建", "subtask", "home.assistant") { [weak self] in guard let self, let store = self.store else { return }; self.navigationController?.setNavigationBarHidden(false, animated: false); self.navigationController?.pushViewController(TaskAssistantScreen(store: store, listID: ["today","starred"].contains(self.listID) ? TS_DFLT_LST : self.listID), animated: true) }, rename, remove, clear]; tu_menu(self, "清单选项", actions, breaks: [3], header: header)
+        actions += [issues, tu_act("智能创建", "subtask", "home.assistant") { [weak self] in guard let self, let store = self.store else { return }; self.navigationController?.setNavigationBarHidden(false, animated: false); self.navigationController?.pushViewController(TaskAssistantScreen(store: store, listID: ["today","starred"].contains(self.listID) ? TS_DFLT_LST : self.listID), animated: true) }, rename, remove]; tu_menu(self, "清单选项", actions, breaks: [3], header: header)
     }
     // 一次只运行一轮AI建议，成功后仍核对数据库版本。
     private func arrange(){guard let store,!dayBusy else{return};dayBusy=true;let ticket=UUID();dayTicket=ticket
@@ -660,8 +658,6 @@ final class TaskCell: UITableViewCell {
         var order = pending; order.insert(order.remove(at: from.row), at: to.row); tableView.reloadData()
         wrt { store in for (index, task) in order.enumerated() { let id = task["task_id"] as! String; try tu_live(try store.rdTsk(id) as! TaskFields); try store.updTsk(id, fields: ["position": index]) } }
     }
-    // 切换完成区。
-    @objc private func fld() { expanded.toggle(); table.reloadData() }
     // 空态重试或创建。
     @objc private func empt() { guard loaded else { return }; if failed { rfrsh() } else { crt() } }
     // 同一事项跨日期复用UUID，提交期间只允许一次写入。
@@ -697,10 +693,10 @@ final class TaskCell: UITableViewCell {
             DispatchQueue.main.async {self.busy.remove(id);self.rfrsh();if let failure{tu_err(self,failure)}}
         }
     }
-    // 将完成任务独立分区。
-    func numberOfSections(in tableView: UITableView) -> Int { routineOnly ? max(1,rtnSections.count):2 }
-    // 提供空态和折叠完成项。
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { if routineOnly{return rtnSections.isEmpty ? 1:max(1,(rtnSections[section]["rows"] as! [TaskFields]).count)};return section == 0 ? max(pending.count, 1) : (expanded ? completed.count : 0) }
+    // 常律按日期分区，待办保持单一列表。
+    func numberOfSections(in tableView: UITableView) -> Int { routineOnly ? max(1,rtnSections.count):1 }
+    // 提供待办行和空态。
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { if routineOnly{return rtnSections.isEmpty ? 1:max(1,(rtnSections[section]["rows"] as! [TaskFields]).count)};return max(pending.count, 1) }
     // 显示原生待办行或功能空态。
     func tableView(_ tableView: UITableView, cellForRowAt path: IndexPath) -> UITableViewCell {
         if path.section == 0 && (routineOnly ? rtnSections.isEmpty:pending.isEmpty) {
@@ -724,9 +720,9 @@ final class TaskCell: UITableViewCell {
             NSLayoutConstraint.activate([contents.leadingAnchor.constraint(equalTo:cell.contentView.leadingAnchor,constant:16),contents.trailingAnchor.constraint(equalTo:cell.contentView.trailingAnchor,constant:-16),contents.topAnchor.constraint(equalTo:cell.contentView.topAnchor,constant:8),contents.bottomAnchor.constraint(equalTo:cell.contentView.bottomAnchor,constant:-8)]);return cell
         }
         let cell = tableView.dequeueReusableCell(withIdentifier: "task", for: path) as! TaskCell
-        let task = routineOnly ? rtnRow(path)!:(path.section == 0 ? pending : completed)[path.row]; cell.bnd(task, self); cell.sz(tableView.bounds.width); cell.check.isEnabled = cell.check.isEnabled && !busy.contains(task["task_id"] as! String); return cell
+        let task = routineOnly ? rtnRow(path)!:pending[path.row]; cell.bnd(task, self); cell.sz(tableView.bounds.width); cell.check.isEnabled = cell.check.isEnabled && !busy.contains(task["task_id"] as! String); return cell
     }
-    // 显示完成区唯一入口。
+    // 显示常律日期标题。
     func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
         if routineOnly {
             guard rtnSections.indices.contains(section) else{return nil};let header=UIView();header.backgroundColor=TaskTheme.base
@@ -734,18 +730,15 @@ final class TaskCell: UITableViewCell {
             if let stamp=rtnSections[section]["day_at"] as? NSNumber {let format=DateFormatter();format.locale=Locale(identifier:"zh_CN");format.dateFormat=Calendar.current.component(.year,from:Date(timeIntervalSince1970:stamp.doubleValue))==Calendar.current.component(.year,from:Date()) ? "M月d日EEE":"yyyy年M月d日";label.text=format.string(from:Date(timeIntervalSince1970:stamp.doubleValue))}else{label.text="无后续时刻"}
             header.addSubview(label);label.translatesAutoresizingMaskIntoConstraints=false;NSLayoutConstraint.activate([label.leadingAnchor.constraint(equalTo:header.leadingAnchor,constant:16),label.trailingAnchor.constraint(equalTo:header.trailingAnchor,constant:-16),label.topAnchor.constraint(equalTo:header.topAnchor,constant:12),label.bottomAnchor.constraint(equalTo:header.bottomAnchor,constant:-12)]);return header
         }
-        guard section != 0, !completed.isEmpty else { return nil }
-        let fold = tu_btn("已完成", "down", self, #selector(fld)); var config = fold.configuration; config?.preferredSymbolConfigurationForImage = .init(pointSize: 20); fold.configuration = config
-        fold.accessibilityIdentifier = "home.completed"; fold.accessibilityValue = expanded ? "已展开" : "已折叠"; return fold
+        return nil
     }
-    // 避免大字号折叠标题溢出。
+    // 按常律标题实际字号计算高度。
     func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        if routineOnly {return rtnSections.isEmpty ? 0.01:UITableView.automaticDimension}
-        return section != 0 && !completed.isEmpty ? max(44, ceil(lb_fnt(.headline, traitCollection).lineHeight + 16)) : 0.01
+        routineOnly && !rtnSections.isEmpty ? UITableView.automaticDimension : 0.01
     }
     // 点击文字区域编辑。
     func tableView(_ tableView: UITableView, didSelectRowAt path: IndexPath) {
-        tableView.deselectRow(at: path, animated: true); if path.section == 0 && (routineOnly ? rtnSections.isEmpty:pending.isEmpty) { empt(); return };if routineOnly{guard let task=rtnRow(path),(task["routine_marker"] as? Bool) != true else{return};edt(task);return};edt((path.section == 0 ? pending : completed)[path.row])
+        tableView.deselectRow(at: path, animated: true); if path.section == 0 && (routineOnly ? rtnSections.isEmpty:pending.isEmpty) { empt(); return };if routineOnly{guard let task=rtnRow(path),(task["routine_marker"] as? Bool) != true else{return};edt(task);return};edt(pending[path.row])
     }
     // 根据日期分区取真实任务或只读时间分隔行。
     private func rtnRow(_ path:IndexPath)->TaskFields?{guard rtnSections.indices.contains(path.section),let rows=rtnSections[path.section]["rows"] as? [TaskFields],rows.indices.contains(path.row) else{return nil};return rows[path.row]}

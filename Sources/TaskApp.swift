@@ -10,10 +10,13 @@
         do { store = try TaskStore.shrd() } catch { NSLog("TaskStore初始化失败：%@", error as NSError) }
         seed()
         let home = TaskHome(store: store) { [weak self] navigation in
-            let settings = TaskSettings(); settings.storeIssue = { [weak self] in self?.store == nil }
+            let settings = TaskSettings(); settings.taskStore = self?.store; settings.storeIssue = { [weak self] in self?.store == nil }
             let panel=UINavigationController(rootViewController:settings);panel.modalPresentationStyle = .fullScreen;navigation.present(panel,animated:true)
         }
-        home.onStore = { [weak self, weak home] active in self?.store = active; if self?.seed()==true { home?.rfrsh() }; self?.seedIssue(); self?.rstr(); self?.capStart() }
+        home.onStore = { [weak self, weak home] active in
+            self?.store = active; if self?.seed()==true { home?.rfrsh() }; self?.seedIssue(); self?.rstr(); self?.capStart()
+            if let active { TaskArchiveSync.schedule(active) }
+        }
         let navigation = UINavigationController(rootViewController: home); navigation.overrideUserInterfaceStyle = .unspecified
         let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = navigation; self.window = window; window.makeKeyAndVisible()
         DispatchQueue.main.async { [weak self] in self?.seedIssue() }
@@ -42,7 +45,10 @@
         alert.addAction(UIAlertAction(title:"知道了",style:.default));root.present(alert,animated:true)
     }
     // 只在正常前台生命周期中开启系统采集。
-    func applicationDidBecomeActive(_ application: UIApplication) { rstr(); capStart() }
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        rstr(); capStart()
+        if let store { TaskArchiveSync.schedule(store) }
+    }
     // 每次回到App核对真实进程锁，按已有启用意图恢复服务。
     private func rstr() {
         guard store != nil, (lb_ldcfg()["enabled"] as? NSNumber)?.boolValue == true, !lb_svcup() else { return }
@@ -106,6 +112,7 @@
 @objc(LBSetCtl) final class TaskSettings: TaskScreen {
     @objc var storeFailed = false
     @objc var storeIssue: (() -> Bool)?
+    @objc var taskStore: TaskStore?
     private let monitor = UISwitch()
     private var preview: UIButton!, recovery: UIButton!
     private var status: UIButton!, planned: UIButton!, timer: DispatchSourceTimer?, watcher: DispatchSourceProcess?
@@ -129,7 +136,9 @@
         recovery = tu_btn("恢复提醒","repeat",self,#selector(rstr));recovery.accessibilityIdentifier="settings.recovery"
         let assistant=tu_btn("智能助手","subtask",self,#selector(aiCfg));assistant.accessibilityIdentifier="settings.assistant"
         let routineImport=tu_btn("导入常律","file",self,#selector(rtnImp));routineImport.accessibilityIdentifier="settings.routineImport"
-        for button in [status!,planned!,preview!,recovery!,assistant,routineImport] {
+        let archive=tu_btn("归档","file",self,#selector(archivePage));archive.accessibilityIdentifier="settings.archive"
+        let cloud=tu_btn("云端存储","upload",self,#selector(cloudPage));cloud.accessibilityIdentifier="settings.cloud"
+        for button in [status!,planned!,preview!,recovery!,assistant,routineImport,archive,cloud] {
             var config=button.configuration;config?.imagePadding=8;config?.background.cornerRadius=12;config?.contentInsets=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12)
             config?.titleLineBreakMode = .byWordWrapping;config?.subtitleLineBreakMode = .byWordWrapping
             config?.titleTextAttributesTransformer=UIConfigurationTextAttributesTransformer { attributes in var result=attributes;result.font=lb_fnt(.body,nil);return result }
@@ -143,7 +152,7 @@
         let icon=UIImageView(image:lb_icon("settings"));icon.tintColor=TaskTheme.ink;icon.contentMode = .scaleAspectFit;NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant:24),icon.heightAnchor.constraint(equalToConstant:24)])
         let service=tu_stk([icon,tu_lbl("后台服务"),monitor]);service.axis = .horizontal;service.alignment = .center;service.spacing=8;service.isLayoutMarginsRelativeArrangement=true;service.directionalLayoutMargins=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12);service.accessibilityIdentifier="settings.service";service.heightAnchor.constraint(greaterThanOrEqualToConstant:56).isActive=true
         let divider=UIView();divider.backgroundColor = .separator;divider.heightAnchor.constraint(equalToConstant:1/UIScreen.main.scale).isActive=true
-        let fields=tu_stk([service,status,planned,preview,recovery,divider,assistant,routineImport]);fields.spacing=16
+        let fields=tu_stk([archive,cloud,assistant,routineImport,divider,service,status,planned,preview,recovery]);fields.spacing=16
         _ = tu_form(self,fields,"settings.content",top:header);fields.setCustomSpacing(TaskTheme.section,after:recovery);fields.setCustomSpacing(TaskTheme.section,after:divider)
         let result = notify_register_dispatch(LB_READY_NOTE, &token, .main) { [weak self] _ in
             guard let self = self, self.pending else { return }; self.pending = false; self.stat("测试全屏提醒"); self.sync(); notify_post(LB_TEST_NOTE)
@@ -160,6 +169,16 @@
     }
     // 连接设置保存在App内，密钥进入系统钥匙串。
     @objc private func aiCfg() { navigationController?.pushViewController(TaskAISettings(), animated: true) }
+    // 查看常律和普通待办的归档记录。
+    @objc private func archivePage() {
+        do { navigationController?.pushViewController(TaskArchiveScreen(store: try taskStore ?? TaskStore.shrd()), animated: true) }
+        catch { tu_err(self, error) }
+    }
+    // 管理当前归档位置和已验证的连接。
+    @objc private func cloudPage() {
+        do { navigationController?.pushViewController(TaskCloudScreen(store: try taskStore ?? TaskStore.shrd()), animated: true) }
+        catch { tu_err(self, error) }
+    }
     // 更新唯一功能按钮文字。
     private func stat(_ title: String) { var config = preview.configuration; config?.title = title; preview.configuration = config }
     // 页面可见时才检查共享快照，离开后停止前台诊断。

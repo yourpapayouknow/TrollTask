@@ -201,7 +201,12 @@
     }
     // 在唯一数据库内原子提交整组附件。
     @objc(check:attachments:) func chk(_ occID: String, attachments: [TaskFields]) {
-        wrk(occID) { store in try store.chkOcc(occID, attachments: attachments) }
+        wrk(occID) { store in
+            try store.chkOcc(occID, attachments: attachments)
+            #if os(iOS)
+            TaskArchiveSync.schedule(store)
+            #endif
+        }
     }
     // 只处理仍然显示的同一轮次，失败保留原界面。
     private func wrk(_ id: String, _ work: @escaping (TaskStore) throws -> Void) {

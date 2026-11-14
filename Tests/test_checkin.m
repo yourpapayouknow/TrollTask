@@ -31,6 +31,7 @@ static NSDictionary *ck_clm(TaskStore *store, BOOL repeat) {
 
 // 恢复真实旧版Occurrence结构，供既有迁移用例降级隔离库。
 static void ck_old(NSString *path) {
+    ck_sql(path,[NSString stringWithContentsOfFile:@"Tests/Fixtures/archive-v12.sql" encoding:NSUTF8StringEncoding error:nil]);
     ck_sql(path,[NSString stringWithContentsOfFile:@"Tests/Fixtures/agenda-v10.sql" encoding:NSUTF8StringEncoding error:nil]);
     NSString *fixture=[NSString stringWithContentsOfFile:@"Tests/Fixtures/occurrence-v8.sql" encoding:NSUTF8StringEncoding error:nil];
     NSString *schema=nil;
@@ -248,6 +249,52 @@ static void ck_run(NSString *root) {
     printf("Checkin: %lu checks passed; valid images, atomic rollback, stale intents, occurrence holds, persisted limits, migration and process race\n",(unsigned long)ck_checks);
 }
 
+// 验证旧库归档、单轮恢复、远端确认和数据库实际缩减。
+static void ck_archive(NSString *root) {
+    NSUInteger before = ck_checks;
+    NSString *path = [root stringByAppendingPathComponent:@"archive.sqlite3"];
+    TaskStore *store = [[TaskStore alloc] initAt:path error:nil];
+    NSDictionary *ordinary = ck_clm(store, NO);
+    NSString *occurrence = ordinary[@"occurrence_id"];
+    NSData *bytes = [NSMutableData dataWithLength:2*1024*1024];
+    NSDictionary *file = @{@"method":@"file", @"name":@"证据.bin", @"content_type":@"public.data", @"image":bytes};
+    ck_req([store chkOcc:occurrence attachments:@[file] error:nil]);
+    ck_req([store arcRows:nil].count == 1 && [[store arcRows:nil].firstObject[@"occurrence_id"] isEqual:occurrence]);
+    ck_req([[store arcRows:nil].firstObject[@"can_restore"] boolValue]);
+    NSDictionary *repeat = ck_clm(store, YES);
+    ck_req([store chkOcc:repeat[@"occurrence_id"] attachments:@[file] error:nil]);
+    ck_req([store arcRows:nil].count == 2 && [[store rdTsk:repeat[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"]);
+    ck_req(![store rstrArc:repeat[@"occurrence_id"] error:nil]);
+    NSString *fixture = [NSString stringWithContentsOfFile:@"Tests/Fixtures/archive-v12.sql" encoding:NSUTF8StringEncoding error:nil];
+    store = nil;
+    ck_sql(path, fixture);
+    ck_sql(path, @"CREATE TRIGGER reject_archive BEFORE UPDATE ON store_meta WHEN NEW.schema_version=13 BEGIN SELECT RAISE(ABORT,'test');END;");
+    ck_req(![[TaskStore alloc] initAt:path error:nil] && ck_int(path, "SELECT schema_version FROM store_meta")==12);
+    ck_req(ck_int(path, "SELECT count(*) FROM reminder_checkins")==2 && ck_int(path, "SELECT count(*) FROM sqlite_master WHERE name='task_archive'")==0);
+    ck_sql(path, @"DROP TRIGGER reject_archive;");
+    store = [[TaskStore alloc] initAt:path error:nil];
+    ck_req([store schver:nil]==TS_SCH_VER && [store arcRows:nil].count==2 && [store arcPend:nil].count==2);
+    ck_req([[store rdPrf:occurrence position:0 error:nil][@"image"] isEqual:bytes]);
+    NSString *provider = NSUUID.UUID.UUIDString.lowercaseString;
+    NSDateFormatter *calendar = [NSDateFormatter new];
+    calendar.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    calendar.dateFormat = @"yyMMdd";
+    NSString *day = [calendar stringFromDate:NSDate.date];
+    ck_req(![store arcDone:occurrence provider:provider day:@"bad" files:@[] error:nil]);
+    ck_req(![store arcDone:occurrence provider:provider day:day files:@[] error:nil]);
+    ck_req([[store rdPrf:occurrence position:0 error:nil][@"image"] isEqual:bytes]);
+    NSDictionary *receipt = @{@"position":@0,@"remote_key":@"archive/261111/proof", @"sha256":[@"" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0]};
+    unsigned long long full = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil].fileSize;
+    ck_req([store arcDone:occurrence provider:provider day:day files:@[receipt] error:nil]);
+    ck_req([store arcPend:nil].count==1 && ![store lsChk:occurrence images:YES error:nil]);
+    NSDictionary *remote = [store rdPrf:occurrence position:0 error:nil];
+    ck_req([remote[@"remote_key"] isEqual:receipt[@"remote_key"]] && [remote[@"image_bytes"] unsignedIntegerValue]==bytes.length && !remote[@"image"]);
+    ck_req([store arcTrim:nil] && [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil].fileSize + 1024*1024 < full);
+    ck_req([store rstrArc:occurrence error:nil] && ![store rstrArc:occurrence error:nil]);
+    ck_req([[store rdTsk:ordinary[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"] && [store arcRows:nil].count==2);
+    printf("Archive store: %lu checks passed; migration, repeat, retry, receipts and physical reclaim\n",(unsigned long)(ck_checks-before));
+}
+
 // 运行隔离核心检查或并发子进程。
 int main(int argc, char **argv) {
     @autoreleasepool {
@@ -260,7 +307,7 @@ int main(int argc, char **argv) {
             return [store hldOcc:@(argv[3]) mode:@"snooze" error:nil] ? 0 : 1;
         }
         NSString *root=[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
-        [NSFileManager.defaultManager createDirectoryAtPath:root withIntermediateDirectories:YES attributes:nil error:nil]; ck_run(root); ck_cap(root); ck_files(root);
+        [NSFileManager.defaultManager createDirectoryAtPath:root withIntermediateDirectories:YES attributes:nil error:nil]; ck_run(root); ck_cap(root); ck_files(root); ck_archive(root);
         [NSFileManager.defaultManager removeItemAtPath:root error:nil];
     } return 0;
 }

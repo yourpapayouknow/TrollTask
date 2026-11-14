@@ -3,7 +3,7 @@
 #define TS_DB_PATH @"/var/mobile/Library/Application Support/com.iwmei.taskforiwmei/tasks.sqlite3"
 #define TS_DFLT_LST @"00000000-0000-4000-8000-000000000001"
 #define TS_RTN_LST @"00000000-0000-4000-8000-000000000002"
-#define TS_SCH_VER 12
+#define TS_SCH_VER 13
 #define TS_ATT_MAX 6
 #define TS_DATA_NOTE "com.iwmei.taskforiwmei.data"
 #define TS_CAPTURE_NOTE "com.iwmei.taskforiwmei.capture"
@@ -82,6 +82,16 @@
 + (NSArray *)pndRows:(NSDictionary *)snapshot;
 // 独立读取未删除的已完成任务。
 - (NSArray *)lsCmpl:(NSError **)error;
+// 读取已完成任务和已完成轮次的归档快照。
+- (NSArray *)arcRows:(NSError **)error;
+// 只读取待上传快照。
+- (NSArray *)arcPend:(NSError **)error;
+// 恢复与归档记录对应的当前普通待办。
+- (BOOL)rstrArc:(NSString *)entryID error:(NSError **)error;
+// 记录已上传的原件位置，原子释放本地附件内容。
+- (BOOL)arcDone:(NSString *)entryID provider:(NSString *)provider day:(NSString *)day files:(NSArray *)files error:(NSError **)error;
+// 回收历史附件释放的数据库页。
+- (BOOL)arcTrim:(NSError **)error;
 // 读取持久化数据修订号。
 - (long long)revision:(NSError **)error;
 // 取得同一数据库快照中的任务和提醒处理记录。

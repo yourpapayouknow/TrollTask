@@ -8,7 +8,7 @@
         <true/>
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>连接你的Mac智能助手</string>
+    <string>连接Mac上的智能助手和网盘代理</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>zh_Hans</string>
     <key>CFBundleDisplayName</key>
@@ -48,6 +48,15 @@
     </dict>
     <key>CFBundleIdentifier</key>
     <string>com.iwmei.taskforiwmei</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>msauth.com.iwmei.taskforiwmei</string>
+            </array>
+        </dict>
+    </array>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -55,9 +64,13 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.21.24</string>
+    <string>0.21.28</string>
     <key>CFBundleVersion</key>
-    <string>67</string>
+    <string>71</string>
+    <key>GoogleDriveClientID</key>
+    <string></string>
+    <key>OneDriveClientID</key>
+    <string></string>
     <key>NSMotionUsageDescription</key>
     <string>检测抬起以停止提醒声振</string>
     <key>NSCameraUsageDescription</key>

@@ -1,4 +1,5 @@
 #import "LBHead.h"
+#import <Security/Security.h>
 
 NSString *lb_tstpath;
 const char *lb_tstlock;
@@ -70,8 +71,9 @@ static void ut_wait(BOOL (^check)(void), NSString *name) {
 static void ut_tap(NSString *name) {
     ut_wait(^BOOL {
         UIView *view = ut_find(ut_surface(), name); UIAction *action = ut_action(ut_surface(),name);
+        UINavigationController *active = ut_top().navigationController ?: ut_nav;
         return (([view isKindOfClass:UIButton.class] && [(UIButton *)view isEnabled]) || [view isKindOfClass:UITableViewCell.class] || action)
-            && !ut_nav.transitionCoordinator && !ut_top().isBeingPresented && !ut_top().isBeingDismissed;
+            && !active.transitionCoordinator && !ut_nav.transitionCoordinator && !ut_top().isBeingPresented && !ut_top().isBeingDismissed;
     }, [@"按钮可点击：" stringByAppendingString:name]);
     ut_ui(^{ UIView *view = ut_find(ut_surface(), name);
         if ([view isKindOfClass:UIButton.class]) [(UIButton *)view sendActionsForControlEvents:UIControlEventTouchUpInside];
@@ -383,15 +385,12 @@ static void ut_run(void) {
     ut_shot(@"home-large-320.png", 320, 850, YES);
     ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;});ut_shot(@"home-light-375.png",375,850,NO);
     ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleDark;});
-    ut_tap([@"task." stringByAppendingString:early[@"task_id"]]);
-    ut_wait(^BOOL { return [ut_store lsCmpl:nil].count == 1 && [ut_table() numberOfRowsInSection:1] == 0 && ut_find(ut_table(), @"home.completed") != nil; }, @"勾选提交后移动到折叠完成区");
-    ut_tap(@"home.completed");
-    ut_wait(^BOOL { return [ut_table() numberOfRowsInSection:1] == 1; }, @"展开已完成");
-    ut_shot(@"completed-375.png", 375, 667, NO);
-    ut_shot(@"completed-large-320.png", 320, 850, YES);
-    ut_ui(^{ [ut_table() scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:1] atScrollPosition:UITableViewScrollPositionBottom animated:NO]; });
-    ut_tap([@"task." stringByAppendingString:early[@"task_id"]]);
-    ut_wait(^BOOL { return [ut_store lsCmpl:nil].count == 0 && [ut_table() numberOfRowsInSection:0] == 3; }, @"勾选已完成恢复待办");
+    ut_req([ut_store cmplTsk:early[@"task_id"] error:nil], @"完成隔离待办");
+    ut_wait(^BOOL { return ut_table().numberOfSections == 1 && [ut_table() numberOfRowsInSection:0] == 2
+        && !ut_find(ut_table(), @"home.completed"); }, @"完成任务离开首页，首页没有折叠区");
+    NSDictionary *archived = [ut_store arcRows:nil].firstObject;
+    ut_req([archived[@"task_id"] isEqual:early[@"task_id"]] && [ut_store rstrArc:archived[@"entry_id"] error:nil], @"从归档恢复待办");
+    ut_wait(^BOOL { return [ut_store lsCmpl:nil].count == 0 && [ut_table() numberOfRowsInSection:0] == 3; }, @"待办恢复到原列表");
     ut_ui(^{ NSArray *pending = [ut_store lsPnd:nil]; NSUInteger index = [pending indexOfObjectPassingTest:^BOOL(NSDictionary *task, NSUInteger idx, BOOL *stop) {
         (void)idx; (void)stop; return [task[@"task_id"] isEqual:late[@"task_id"]]; }];
         [ut_table().delegate tableView:ut_table() didSelectRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
@@ -871,6 +870,175 @@ static void ut_svc(void) {
 #include "test_weekly_ui.inc"
 #include "test_create_ui.inc"
 
+// 通过真实设置页面和回环WebDAV验证归档闭环。
+static void ut_archive(void) {
+    NSUInteger urlIndex = [ut_args indexOfObject:@"--archive-url"];
+    ut_req(urlIndex != NSNotFound && urlIndex + 1 < ut_args.count, @"指定隔离WebDAV测试服务");
+    NSString *service = [NSBundle.mainBundle.bundleIdentifier stringByAppendingString:@".archive"];
+    OSStatus reset = SecItemDelete((__bridge CFDictionaryRef)@{
+        (__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService:service, (__bridge id)kSecAttrAccount:@"default"});
+    ut_req(reset==errSecSuccess || reset==errSecItemNotFound, @"清空隔离云端账户");
+    ut_home(); ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);
+    NSDictionary *task = [ut_store crtTsk:@{@"title":@"普通待办验收"} error:nil];
+    ut_req([ut_store cmplTsk:task[@"task_id"] error:nil], @"普通待办记录完成");
+    NSString *ordinary = [ut_store arcRows:nil].firstObject[@"entry_id"];
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    NSCalendar *calendar = NSCalendar.currentCalendar;
+    NSDate *due = [calendar dateBySettingUnit:NSCalendarUnitSecond value:0 ofDate:[NSDate dateWithTimeIntervalSince1970:now-120] options:0];
+    NSDateComponents *clock = [calendar components:NSCalendarUnitHour|NSCalendarUnitMinute fromDate:due];
+    NSNumber *end = @((clock.hour*60+clock.minute+20)%1440);
+    NSDictionary *routine = [ut_store crtTsk:@{@"title":@"常律归档验收",@"notes":@"保留归档说明",
+        @"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_end":end,@"due_at":@(due.timeIntervalSince1970),
+        @"timezone_id":calendar.timeZone.name,@"recurrence_type":@"daily",@"recurrence":@[@"RRULE:FREQ=DAILY"]} error:nil];
+    ut_req(routine!=nil, @"创建会继续重复的常律");
+    NSDictionary *plan = [ut_store planAt:now error:nil], *candidate = nil;
+    // 预取包含未来轮次，验收只认领已到期的指定轮次。
+    for (NSDictionary *alert in plan[@"alerts"]) {
+        if ([alert[@"task_id"] isEqual:routine[@"task_id"]] && [alert[@"cycle_at"] isEqual:routine[@"due_at"]]
+            && [alert[@"remind_at"] doubleValue] <= now) { candidate = alert; break; }
+    }
+    ut_req(candidate != nil, @"选中已到期的常律轮次");
+    NSDictionary *claimed = [ut_store claim:candidate revision:[plan[@"revision"] longLongValue] at:now error:nil];
+    NSString *occ = claimed[@"occurrence_id"];
+    ut_req(occ != nil, @"成功认领指定常律轮次");
+    NSData *proof = [@"原始归档凭证" dataUsingEncoding:NSUTF8StringEncoding];
+    ut_req([ut_store chkOcc:occ attachments:@[
+        @{@"method":@"file",@"name":@"原件.txt",@"content_type":@"public.plain-text",@"image":proof},
+        @{@"method":@"file",@"name":@"空附件.txt",@"content_type":@"public.plain-text",@"image":[NSData data]}] error:nil],
+        @"常律提交凭证和零字节附件");
+    ut_wait(^BOOL {
+        return ut_table().numberOfSections==1 && !ut_find(ut_table(),@"home.completed") &&
+            [[ut_store rdTsk:routine[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"];
+    }, @"首页无完成区且常律仍有后续轮次");
+    ut_tap(@"home.settings"); ut_tap(@"settings.archive");
+    ut_wait(^BOOL {
+        UITableView *table=(UITableView *)ut_find(ut_top().view,@"archive.table");
+        return [table numberOfRowsInSection:0]==2;
+    }, @"设置归档同时显示普通待办和常律轮次");
+    ut_shot(@"archive-list-dark-320.png",320,693,NO);
+    ut_tap([@"archive." stringByAppendingString:ordinary]); ut_tap(@"archive.restore");
+    ut_wait(^BOOL{return [[ut_store rdTsk:task[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"];}, @"在归档恢复原任务");
+    ut_tap(@"archive.back"); ut_tap(@"settings.cloud");
+    ut_wait(^BOOL {
+        UITableView *table=(UITableView *)ut_find(ut_top().view,@"cloud.table");
+        return table.numberOfSections==2 && [table numberOfRowsInSection:0]==1 && [table numberOfRowsInSection:1]==4
+            && ut_find(ut_top().view,@"cloud.default")!=nil;
+    }, @"云端设置提供四种存储入口");
+    ut_tap(@"cloud.provider.baidu");
+    ut_ui(^{ut_req(!ut_find(ut_top().view,@"cloud.dav.name") && ut_find(ut_top().view,@"cloud.dav.url"),@"百度网盘复用Mac代理表单");});
+    ut_tap(@"cloud.dav.back"); ut_tap(@"cloud.provider.dav");
+    NSString *baseURL=ut_args[urlIndex+1];
+    NSURL *base=[NSURL URLWithString:baseURL];
+    void (^fill)(NSString *, NSString *, NSString *)=^(NSString *name, NSString *url, NSString *secret) {
+        ut_ui(^{
+            ((UITextField *)ut_find(ut_top().view,@"cloud.dav.name")).text=name;
+            ((UITextField *)ut_find(ut_top().view,@"cloud.dav.url")).text=url;
+            ((UITextField *)ut_find(ut_top().view,@"cloud.dav.user")).text=@"test";
+            UITextField *password=(UITextField *)ut_find(ut_top().view,@"cloud.dav.password");
+            ut_req(password.secureTextEntry,@"密码字段不显示原文"); password.text=secret;
+        });
+    };
+    fill(@"验收网盘",baseURL,@"invalid");
+    ut_tap(@"cloud.dav.save");
+    ut_wait(^BOOL{return [ut_top() isKindOfClass:UIAlertController.class];},@"认证失败不加入列表");
+    ut_ui(^{[ut_top() dismissViewControllerAnimated:NO completion:nil];});
+    ut_wait(^BOOL{return ut_find(ut_top().view,@"cloud.dav.password")!=nil;},@"认证失败保留表单");
+    fill(@"验收网盘",[base URLByAppendingPathComponent:@"readonly" isDirectory:YES].absoluteString,@"archive-fixture");
+    ut_tap(@"cloud.dav.save");
+    ut_wait(^BOOL {
+        UIViewController *top=ut_top();
+        return [top isKindOfClass:UIAlertController.class] && [top.title isEqual:@"归档目录不能上传（405）"];
+    }, @"可以建目录却拒绝上传的网盘不通过连接验证");
+    ut_ui(^{[ut_top() dismissViewControllerAnimated:NO completion:nil];});
+    ut_wait(^BOOL{return ut_find(ut_top().view,@"cloud.dav.password")!=nil;},@"只读错误保留原连接表单");
+    fill(@"验收网盘",baseURL,@"archive-fixture");
+    ut_tap(@"cloud.dav.save");
+    ut_wait(^BOOL {
+        UITableView *table=(UITableView *)ut_find(ut_top().view,@"cloud.table");
+        return table.numberOfSections==3 && [table numberOfRowsInSection:2]==1;
+    }, @"WebDAV目录验证后加入列表");
+    __block NSString *firstProvider;
+    ut_ui(^{
+        UITableView *table=(UITableView *)ut_find(ut_top().view,@"cloud.table");
+        UITableViewCell *summary=(UITableViewCell *)ut_find(table,@"cloud.default");
+        ut_req([((UIListContentConfiguration *)summary.contentConfiguration).secondaryText isEqual:@"BaiduNetDisk"],
+               @"百度排在初始归档顺序首位");
+        UITableViewCell *account=[table.dataSource tableView:table cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:2]];
+        firstProvider=[account.accessibilityIdentifier substringFromIndex:[@"cloud.account." length]];
+    });
+    ut_req([ut_store arcPend:nil].count==2, @"未加入顺序的自定义网盘不接收归档");
+    ut_tap(@"cloud.default");
+    ut_wait(^BOOL {return ut_find(ut_top().view,@"cloud.order.baidu") && ut_find(ut_top().view,@"cloud.order.one");},
+            @"初始顺序包含百度与OneDrive");
+    ut_tap([@"cloud.order.add." stringByAppendingString:firstProvider]);
+    ut_tap([@"cloud.order." stringByAppendingString:firstProvider]); ut_tap(@"cloud.order.up");
+    ut_tap([@"cloud.order." stringByAppendingString:firstProvider]); ut_tap(@"cloud.order.up");
+    ut_wait(^BOOL {return ut_find(ut_top().view,[@"cloud.order." stringByAppendingString:firstProvider]) != nil;}, @"顺序操作返回列表");
+    ut_ui(^{[ut_top() dismissViewControllerAnimated:NO completion:nil];});
+    ut_wait(^BOOL {
+        UITableViewCell *summary=(UITableViewCell *)ut_find(ut_top().view,@"cloud.default");
+        return [((UIListContentConfiguration *)summary.contentConfiguration).secondaryText isEqual:@"验收网盘"];
+    }, @"保存后显示排序首位");
+    ut_ui(^{ut_top().navigationController.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;});
+    ut_shot(@"archive-cloud-light-320.png",320,693,YES);
+    ut_tap(@"cloud.back"); ut_tap(@"settings.archive");
+    ut_tap([@"archive." stringByAppendingString:occ]);
+    ut_wait(^BOOL {
+        UILabel *state=(UILabel *)ut_find(ut_top().view,@"archive.upload");
+        return [state.text isEqual:@"上传失败"];
+    }, @"远端校验失败明确显示状态");
+    ut_req([[ut_store rdPrf:occ position:0 error:nil][@"image"] isEqual:proof], @"云端字节不符时保留原件");
+    ut_ui(^{[ut_top().navigationController popViewControllerAnimated:NO];});
+    ut_tap(@"archive.sync");
+    ut_wait(^BOOL {return [ut_store arcPend:nil].count==0;},@"重试成功后全部记录已归档");
+    NSDictionary *remote = [ut_store rdPrf:occ position:0 error:nil];
+    ut_req(!remote[@"image"] && [remote[@"remote_key"] containsString:@"/TrollTaskArchive/"] &&
+        [[ut_store rdPrf:occ position:1 error:nil][@"image_bytes"] unsignedIntegerValue]==0, @"只保留原件引用和准确大小");
+
+    // 添加第二连接时保留默认，切换后验证新归档去向。
+    ut_tap(@"archive.back"); ut_tap(@"settings.cloud"); ut_tap(@"cloud.provider.dav");
+    fill(@"第二网盘",[base URLByAppendingPathComponent:@"other" isDirectory:YES].absoluteString,@"archive-fixture");
+    ut_tap(@"cloud.dav.save");
+    ut_wait(^BOOL {
+        UITableView *table=(UITableView *)ut_find(ut_top().view,@"cloud.table");
+        return table.numberOfSections==3 && [table numberOfRowsInSection:2]==2;
+    }, @"第二个读写账户加入列表");
+    __block NSString *otherProvider;
+    ut_ui(^{
+        UITableView *table=(UITableView *)ut_find(ut_top().view,@"cloud.table");
+        UITableViewCell *summary=(UITableViewCell *)ut_find(table,@"cloud.default");
+        ut_req([((UIListContentConfiguration *)summary.contentConfiguration).secondaryText isEqual:@"验收网盘"], @"添加第二网盘保留原默认");
+        UITableViewCell *account=[table.dataSource tableView:table cellForRowAtIndexPath:[NSIndexPath indexPathForRow:1 inSection:2]];
+        otherProvider=[account.accessibilityIdentifier substringFromIndex:[@"cloud.account." length]];
+    });
+    ut_tap(@"cloud.default"); ut_tap([@"cloud.order.add." stringByAppendingString:otherProvider]);
+    for (NSUInteger step=0; step<3; step++) {
+        ut_tap([@"cloud.order." stringByAppendingString:otherProvider]); ut_tap(@"cloud.order.up");
+    }
+    ut_wait(^BOOL {return ut_find(ut_top().view,[@"cloud.order." stringByAppendingString:otherProvider]) != nil;}, @"第二网盘已调整至首位");
+    ut_ui(^{[ut_top() dismissViewControllerAnimated:NO completion:nil];});
+    ut_wait(^BOOL {
+        UITableViewCell *summary=(UITableViewCell *)ut_find(ut_top().view,@"cloud.default");
+        return [((UIListContentConfiguration *)summary.contentConfiguration).secondaryText isEqual:@"第二网盘"];
+    }, @"显示切换后的首选网盘");
+    NSDictionary *fresh=[ut_store crtTsk:@{@"title":@"首位验收"} error:nil];
+    NSDictionary *fallback=[ut_store crtTsk:@{@"title":@"fallback fixture"} error:nil];
+    ut_req([ut_store cmplTsk:fresh[@"task_id"] error:nil] && [ut_store cmplTsk:fallback[@"task_id"] error:nil], @"提交首选与回退用例");
+    ut_tap(@"cloud.back"); ut_tap(@"settings.archive"); ut_tap(@"archive.sync");
+    ut_wait(^BOOL {
+        BOOL preferred = NO, recovered = NO;
+        for (NSDictionary *row in [ut_store arcRows:nil]) {
+            if (![row[@"uploaded"] boolValue]) continue;
+            if ([row[@"task_id"] isEqual:fresh[@"task_id"]]) preferred = [row[@"provider_id"] isEqual:otherProvider];
+            if ([row[@"task_id"] isEqual:fallback[@"task_id"]]) recovered = [row[@"provider_id"] isEqual:firstProvider];
+        }
+        return preferred && recovered;
+    }, @"首选可写时使用首选，拒绝写入时回退并记录成功目标");
+    ut_tap([@"archive." stringByAppendingString:occ]); ut_tap(@"archive.proof"); ut_tap(@"proof.item.0");
+    ut_wait(^BOOL{return [NSStringFromClass(ut_top().class) containsString:@"QLPreviewController"];},@"切换默认后仍从原网盘预览旧附件");
+}
+
 // 前台呈现失败保持待接管状态，超时取消后可再次打开采集。
 static void ut_bridge(void) {
     __block id<UIApplicationDelegate> delegate; __block UIWindow *window; __block UTHost *host;
@@ -965,7 +1133,14 @@ static void ut_hdbg(BOOL seed) {
     NSString *path = [ut_docs stringByAppendingPathComponent:hudInspect ? (signalInspect ? @"SignalInspect.sqlite3" : @"HUDInspect.sqlite3") : [NSUUID.UUID.UUIDString stringByAppendingString:@".sqlite3"]];
     BOOL seed = hudInspect && ![NSFileManager.defaultManager fileExistsAtPath:path];
     ut_store = [[TaskStore alloc] initAt:path error:nil]; ut_checks = [NSMutableArray array];
-    TaskHome *home = [[TaskHome alloc] initWithStore:ut_store settings:nil];
+    TaskHome *home = [[TaskHome alloc] initWithStore:ut_store settings:^(UINavigationController *nav) {
+        UIViewController *settings = [NSClassFromString(@"LBSetCtl") new];
+        [settings setValue:ut_store forKey:@"taskStore"];
+        UINavigationController *panel = [[UINavigationController alloc] initWithRootViewController:settings];
+        panel.modalPresentationStyle = UIModalPresentationFullScreen;
+        panel.overrideUserInterfaceStyle = nav.overrideUserInterfaceStyle;
+        [nav presentViewController:panel animated:YES completion:nil];
+    }];
     ut_nav = [[UINavigationController alloc] initWithRootViewController:home]; ut_nav.overrideUserInterfaceStyle = [ut_args containsObject:@"--design-light"] ? UIUserInterfaceStyleLight:UIUserInterfaceStyleDark;
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds]; ut_window = self.window;
     UIViewController *host = [UIViewController new]; self.window.rootViewController = host;
@@ -1002,6 +1177,7 @@ static void ut_hdbg(BOOL seed) {
                 else if ([ut_args containsObject:@"--design-editor"]) {ut_dflds();}
                 else if ([ut_args containsObject:@"--design-pages"]) {ut_dpages();}
                 else if ([ut_args containsObject:@"--today"]) {ut_tdy();}
+                else if ([ut_args containsObject:@"--archive"]) {ut_archive();}
                 else if (parityOnly) { ut_prty(); if (@available(iOS 16.0,*)) { ut_refs(); ut_clsr(); ut_edit(); ut_rtn(); } }
                 else if ([ut_args containsObject:@"--assistant"]) { ut_rtn(); ut_ast(); }
                 else if ([ut_args containsObject:@"--routines"]) { ut_rtn(); }

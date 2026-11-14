@@ -346,6 +346,44 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             "ALTER TABLE tasks ADD COLUMN planning_mode TEXT NOT NULL DEFAULT 'fixed' CHECK(planning_mode IN ('fixed','window'));"
             "CREATE TABLE task_reviews(task_id TEXT PRIMARY KEY NOT NULL REFERENCES tasks(task_id),data TEXT NOT NULL);"
             "UPDATE store_meta SET schema_version=12 WHERE singleton=1;" error:failure]) return NO;
+        // 归档快照和云端附件索引与任务使用同一个数据库。
+        if (version <= 12 && ![self exec:
+            "CREATE TABLE IF NOT EXISTS task_archive(entry_id TEXT PRIMARY KEY NOT NULL,task_id TEXT NOT NULL REFERENCES tasks(task_id),"
+            "occurrence_id TEXT UNIQUE REFERENCES reminder_occurrences(occurrence_id),"
+            "title TEXT NOT NULL,notes TEXT NOT NULL,routine_kind TEXT NOT NULL,completed_at REAL NOT NULL,scheduled_at REAL,"
+            "restore_at REAL,provider_id TEXT,archive_day TEXT,uploaded INTEGER NOT NULL DEFAULT 0);"
+            "CREATE INDEX IF NOT EXISTS task_archive_time ON task_archive(completed_at DESC,entry_id);"
+            "CREATE INDEX IF NOT EXISTS task_archive_pending ON task_archive(completed_at,entry_id) WHERE uploaded=0;"
+            "CREATE TABLE IF NOT EXISTS archive_files(occurrence_id TEXT NOT NULL REFERENCES reminder_occurrences(occurrence_id),"
+            "position INTEGER NOT NULL,method TEXT NOT NULL,created_at REAL NOT NULL,name TEXT,content_type TEXT,image_bytes INTEGER NOT NULL,"
+            "provider_id TEXT NOT NULL,remote_key TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(occurrence_id,position));"
+            "INSERT OR IGNORE INTO task_archive(entry_id,task_id,occurrence_id,title,notes,routine_kind,completed_at,scheduled_at,restore_at) "
+            "SELECT o.occurrence_id,t.task_id,o.occurrence_id,t.title,t.notes,t.routine_kind,o.handled_at,o.scheduled_at,"
+            "CASE WHEN t.status='completed' AND abs(t.completed_at-o.handled_at)<1 THEN t.completed_at END "
+            "FROM reminder_occurrences o JOIN tasks t ON t.task_id=o.task_id WHERE o.action='complete' AND o.handled_at IS NOT NULL "
+            "AND o.occurrence_id=(SELECT r.occurrence_id FROM reminder_occurrences r WHERE r.task_id=o.task_id AND r.generation=o.generation "
+            "AND r.cycle_at=o.cycle_at AND r.action='complete' AND r.handled_at IS NOT NULL "
+            "ORDER BY EXISTS(SELECT 1 FROM reminder_checkins c WHERE c.occurrence_id=r.occurrence_id) DESC,"
+            "r.triggered_at IS NOT NULL DESC,r.scheduled_at DESC,r.occurrence_id LIMIT 1);"
+            "INSERT INTO task_archive(entry_id,task_id,title,notes,routine_kind,completed_at,restore_at) "
+            "SELECT lower(hex(randomblob(16))),t.task_id,t.title,t.notes,t.routine_kind,t.completed_at,t.completed_at FROM tasks t "
+            "WHERE t.status='completed' AND t.deleted=0 AND NOT EXISTS(SELECT 1 FROM task_archive a WHERE a.task_id=t.task_id AND a.restore_at=t.completed_at);"
+            "UPDATE task_archive SET archive_day=substr(strftime('%Y%m%d',completed_at,'unixepoch','localtime'),3,6);"
+            "CREATE TRIGGER IF NOT EXISTS archive_local_day AFTER INSERT ON task_archive WHEN NEW.archive_day IS NULL BEGIN "
+            "UPDATE task_archive SET archive_day=substr(strftime('%Y%m%d',NEW.completed_at,'unixepoch','localtime'),3,6) WHERE entry_id=NEW.entry_id; END;"
+            "CREATE TRIGGER IF NOT EXISTS archive_task_new AFTER INSERT ON tasks WHEN NEW.status='completed' BEGIN "
+            "INSERT INTO task_archive(entry_id,task_id,title,notes,routine_kind,completed_at,restore_at) "
+            "VALUES(lower(hex(randomblob(16))),NEW.task_id,NEW.title,NEW.notes,NEW.routine_kind,NEW.completed_at,NEW.completed_at); END;"
+            "CREATE TRIGGER IF NOT EXISTS archive_task_done AFTER UPDATE OF status ON tasks WHEN NEW.status='completed' AND OLD.status!='completed' BEGIN "
+            "INSERT INTO task_archive(entry_id,task_id,title,notes,routine_kind,completed_at,restore_at) "
+            "VALUES(lower(hex(randomblob(16))),NEW.task_id,NEW.title,NEW.notes,NEW.routine_kind,NEW.completed_at,NEW.completed_at); END;"
+            "CREATE TRIGGER IF NOT EXISTS archive_occ_new AFTER INSERT ON reminder_occurrences WHEN NEW.status='completed' BEGIN "
+            "INSERT OR IGNORE INTO task_archive(entry_id,task_id,occurrence_id,title,notes,routine_kind,completed_at,scheduled_at) "
+            "SELECT NEW.occurrence_id,task_id,NEW.occurrence_id,title,notes,routine_kind,NEW.handled_at,NEW.scheduled_at FROM tasks WHERE task_id=NEW.task_id; END;"
+            "CREATE TRIGGER IF NOT EXISTS archive_occ_done AFTER UPDATE OF status ON reminder_occurrences WHEN NEW.status='completed' AND OLD.status!='completed' BEGIN "
+            "INSERT OR IGNORE INTO task_archive(entry_id,task_id,occurrence_id,title,notes,routine_kind,completed_at,scheduled_at) "
+            "SELECT NEW.occurrence_id,task_id,NEW.occurrence_id,title,notes,routine_kind,NEW.handled_at,NEW.scheduled_at FROM tasks WHERE task_id=NEW.task_id; END;"
+            "UPDATE store_meta SET schema_version=13 WHERE singleton=1;" error:failure]) return NO;
         return YES;
     } error:error];
 }
@@ -697,6 +735,71 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"completed_at"] compare:a[@"completed_at"]]; }];
 }
 
+// 归档显示完成当时的字段，恢复只对应当前普通任务状态。
+- (NSArray *)arcRows:(NSError **)error {
+    @synchronized(self) {
+        return [self qry:"SELECT a.*, (a.routine_kind='none' AND t.deleted=0 AND t.status='completed' "
+            "AND COALESCE(a.restore_at=t.completed_at,0)) AS can_restore FROM task_archive a JOIN tasks t ON a.task_id=t.task_id "
+            "ORDER BY a.completed_at DESC,a.entry_id" values:@[] error:error];
+    }
+}
+
+// 同步只读取未确认记录，按完成先后处理。
+- (NSArray *)arcPend:(NSError **)error {
+    @synchronized(self) {
+        return [self qry:"SELECT * FROM task_archive WHERE uploaded=0 ORDER BY completed_at,entry_id" values:@[] error:error];
+    }
+}
+
+// 在事务内重新核对待恢复的是同一次完成。
+- (BOOL)rstrArc:(NSString *)entryID error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        NSDictionary *row = [self qry:"SELECT t.task_id FROM task_archive a JOIN tasks t ON a.task_id=t.task_id "
+            "WHERE a.entry_id=? AND a.routine_kind='none' AND t.deleted=0 AND t.status='completed' AND a.restore_at=t.completed_at"
+            values:@[entryID] error:failure].firstObject;
+        if (!row) return [self dbErr:SQLITE_NOTFOUND message:@"当前任务不可恢复" error:failure];
+        return [self rstrTsk:row[@"task_id"] error:failure];
+    } error:error];
+}
+
+// 校验每一份远端回执，再在同一事务保留索引和删除原件。
+- (BOOL)arcDone:(NSString *)entryID provider:(NSString *)provider day:(NSString *)day files:(NSArray *)files error:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure) {
+        if (!ts_uuid(provider) || day.length != 6 || [day rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789"] invertedSet]].location != NSNotFound)
+            return [self dbErr:SQLITE_MISMATCH message:@"归档目标无效" error:failure];
+        NSDictionary *entry = [self qry:"SELECT occurrence_id FROM task_archive WHERE entry_id=? AND uploaded=0 "
+            "AND (archive_day IS NULL OR archive_day=?)" values:@[entryID,day] error:failure].firstObject;
+        if (!entry) return [self dbErr:SQLITE_NOTFOUND message:@"找不到待上传归档" error:failure];
+        id occurrence = entry[@"occurrence_id"];
+        NSArray *positions = [self qry:"SELECT position FROM reminder_checkins WHERE occurrence_id=? ORDER BY position"
+            values:@[occurrence] error:failure];
+        if (!positions || positions.count != files.count)
+            return [self dbErr:SQLITE_CONSTRAINT message:@"附件回执数量不符" error:failure];
+        for (NSUInteger index=0; index<positions.count; index++) {
+            NSDictionary *receipt = files[index];
+            NSNumber *position = positions[index][@"position"];
+            if (![receipt isKindOfClass:NSDictionary.class] || ![receipt[@"position"] isEqual:position]
+                || !ts_txt(receipt[@"remote_key"],4096) || !ts_txt(receipt[@"sha256"],64) || [receipt[@"sha256"] length] != 64)
+                return [self dbErr:SQLITE_MISMATCH message:@"附件回执无效" error:failure];
+            if (![self qry:"INSERT INTO archive_files SELECT occurrence_id,position,method,created_at,name,content_type,length(image),?,?,? "
+                "FROM reminder_checkins WHERE occurrence_id=? AND position=?"
+                values:@[provider,receipt[@"remote_key"],receipt[@"sha256"],occurrence,position] error:failure]) return NO;
+        }
+        if (positions.count && ![self qry:"DELETE FROM reminder_checkins WHERE occurrence_id=?" values:@[occurrence] error:failure]) return NO;
+        return [self qry:"UPDATE task_archive SET uploaded=1,provider_id=?,archive_day=? WHERE entry_id=?"
+            values:@[provider,day,entryID] error:failure] != nil;
+    } error:error];
+}
+
+// 批量上传后释放足够大的空闲页，日常小文件复用空闲空间。
+- (BOOL)arcTrim:(NSError **)error {
+    @synchronized(self) {
+        NSArray *rows = [self qry:"SELECT freelist_count*page_size AS bytes FROM pragma_freelist_count,pragma_page_size" values:@[] error:error];
+        if (!rows) return NO;
+        return [rows.firstObject[@"bytes"] longLongValue] < 1024*1024 || [self exec:"VACUUM" error:error];
+    }
+}
+
 // 读取持久化修订号，通知合并或丢失也可发现更新。
 - (long long)revision:(NSError **)error {
     @synchronized(self) {
@@ -893,11 +996,21 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
     if (![self qry:"UPDATE reminder_occurrences SET status='resolved',action='complete',handled_at=?,next_fire_at=NULL,updated_at=? "
         "WHERE task_id=? AND generation=? AND cycle_at=? AND status!='resolved'"
         values:@[now,now,task[@"task_id"],occ[@"generation"],occ[@"cycle_at"]] error:error]) return NO;
-    if (![task[@"recurrence"] count]) return [self cmplTsk:task[@"task_id"] error:error];
-    NSArray *history=[self lsOcc:task[@"task_id"] error:error];
-    NSArray *alerts=history ? [TaskRule alerts:task history:history at:now.doubleValue error:error] : nil;
+    NSArray *alerts = @[];
+    if ([task[@"recurrence"] count]) {
+        NSArray *history=[self lsOcc:task[@"task_id"] error:error];
+        alerts=history ? [TaskRule alerts:task history:history at:now.doubleValue error:error] : nil;
+    }
     if (!alerts) return NO;
-    if (!alerts.count) return [self cmplTsk:task[@"task_id"] error:error];
+    if (!alerts.count) {
+        if (![self cmplTsk:task[@"task_id"] error:error]) return NO;
+        NSArray *rows = [self qry:"UPDATE task_archive SET restore_at=(SELECT completed_at FROM tasks WHERE task_id=?) "
+            "WHERE task_id=? AND occurrence_id IN (SELECT occurrence_id FROM reminder_occurrences WHERE task_id=? AND generation=? AND cycle_at=?)"
+            values:@[task[@"task_id"],task[@"task_id"],task[@"task_id"],occ[@"generation"],occ[@"cycle_at"]] error:error];
+        return rows && [self qry:"DELETE FROM task_archive WHERE occurrence_id IS NULL AND task_id=? "
+            "AND completed_at=(SELECT completed_at FROM tasks WHERE task_id=?)"
+            values:@[task[@"task_id"],task[@"task_id"]] error:error] != nil;
+    }
     NSNumber *cycle=alerts.firstObject[@"cycle_at"];
     for (NSDictionary *next in alerts) if ([next[@"cycle_at"] isEqual:cycle]) {
         if (![self qry:"INSERT INTO reminder_occurrences(occurrence_id,task_id,scheduled_at,cycle_at,generation,kind,next_fire_at,created_at,updated_at) "
@@ -1109,9 +1222,16 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
 - (NSArray<NSDictionary *> *)lsChk:(NSString *)occID images:(BOOL)images error:(NSError **)error {
     @synchronized(self) {
         if (!ts_uuid(occID)) { [self dbErr:SQLITE_MISMATCH message:@"打卡标识无效" error:error]; return nil; }
-        return [self qry:images ? "SELECT * FROM reminder_checkins WHERE occurrence_id=? ORDER BY position"
+        NSArray *local = [self qry:images ? "SELECT * FROM reminder_checkins WHERE occurrence_id=? ORDER BY position"
             : "SELECT occurrence_id,position,method,created_at,name,content_type,length(image) AS image_bytes FROM reminder_checkins WHERE occurrence_id=? ORDER BY position"
             values:@[occID.lowercaseString] error:error];
+        if (!local || local.count) return local;
+        NSArray *remote = [self qry:"SELECT * FROM archive_files WHERE occurrence_id=? ORDER BY position" values:@[occID.lowercaseString] error:error];
+        if (images && remote.count) {
+            [self dbErr:SQLITE_NOTFOUND message:@"附件已转存云端，请在归档中打开" error:error];
+            return nil;
+        }
+        return remote;
     }
 }
 
@@ -1120,6 +1240,7 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
     @synchronized(self) {
         if (!ts_uuid(occID) || position<0 || position>=TS_ATT_MAX) { [self dbErr:SQLITE_CONSTRAINT message:@"附件序号无效" error:error]; return nil; }
         NSArray *rows = [self qry:"SELECT * FROM reminder_checkins WHERE occurrence_id=? AND position=?" values:@[occID.lowercaseString,@(position)] error:error];
+        if (rows && !rows.count) rows = [self qry:"SELECT * FROM archive_files WHERE occurrence_id=? AND position=?" values:@[occID.lowercaseString,@(position)] error:error];
         if (rows && !rows.count) [self dbErr:SQLITE_NOTFOUND message:@"附件不存在" error:error]; return rows.firstObject;
     }
 }

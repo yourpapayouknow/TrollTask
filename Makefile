@@ -4,7 +4,8 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.21.24.tipa
+TIPA := $(BUILD)/TrollTask-0.21.28.tipa
+CLOUD_CLIENTS ?=
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
@@ -75,10 +76,14 @@ $(APP_DIR)/ThirdParty/libical-source.zip: $(BUILD)/libical-source.zip Vendor/LIB
 	cp $< $@
 	cp Vendor/LIBICAL.md $(APP_DIR)/ThirdParty/NOTICE.md
 
-$(APP_DIR)/$(APP): $(OBJECTS) Resources/Info.plist Resources/entitlements.plist Resources/Reminder.wav Resources/WeeklyRoutine.json $(MING_FILES) $(TOUCH_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
+.PHONY: cloud-info
+$(BUILD)/AppInfo.plist: Resources/Info.plist scripts/cloud_plist.py scripts/head.py cloud-info | $(BUILD)
+	python3 -B scripts/cloud_plist.py "$<" "$@" "$(CLOUD_CLIENTS)"
+
+$(APP_DIR)/$(APP): $(OBJECTS) $(BUILD)/AppInfo.plist Resources/entitlements.plist Resources/Reminder.wav Resources/WeeklyRoutine.json $(MING_FILES) $(TOUCH_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
 	mkdir -p $(APP_DIR)
 	xcrun --sdk iphoneos swiftc -target arm64-apple-ios15.0 -sdk $(SDK) $(OBJECTS) -Xlinker -dead_strip -framework Foundation -framework ImageIO -framework IOKit -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-ios.a -o $@
-	cp Resources/Info.plist $(APP_DIR)/Info.plist
+	cp $(BUILD)/AppInfo.plist $(APP_DIR)/Info.plist
 	cp -R Resources/MingCute $(APP_DIR)/
 	cp Resources/Reminder.wav Resources/WeeklyRoutine.json $(APP_DIR)/
 	mkdir -p $(APP_DIR)/ThirdParty/TrollSpeed

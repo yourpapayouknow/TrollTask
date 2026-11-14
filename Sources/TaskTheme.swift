@@ -346,6 +346,10 @@ final class TaskMenu: UITableViewController {
         let item = actions[indexPath.row]; let cell = UITableViewCell(style: .default, reuseIdentifier: nil); cell.backgroundColor = .clear
         var content = UIListContentConfiguration.cell(); content.text = item.title; content.image = item.image; content.textProperties.numberOfLines = 0
         content.textProperties.font = lb_fnt(.body, traitCollection)
+        content.secondaryText = item.subtitle
+        content.secondaryTextProperties.font = lb_fnt(.subheadline, traitCollection)
+        content.secondaryTextProperties.color = TaskTheme.muted
+        content.secondaryTextProperties.numberOfLines = 0
         let selected = item.state == .on
         content.textProperties.color = item.attributes.contains(.disabled) ? TaskTheme.muted : ((lists || caption != nil) && selected ? lb_acnt()! : TaskTheme.ink)
         content.imageProperties.tintColor = content.textProperties.color; content.imageToTextPadding = 16

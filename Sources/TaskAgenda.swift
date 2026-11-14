@@ -163,11 +163,11 @@ final class TaskProofScreen: TaskScreen, UITableViewDataSource, UITableViewDeleg
         if let failure { tu_err(self, failure); read(); return }
         guard !items.isEmpty, !loading else { return }; loading = true
         let index = indexPath.row
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task { [self] in
             var result: URL?, folder: URL?, failure: Error?
             do {
                 let item = try self.store.rdPrf(self.occurrence, position: index) as! TaskFields
-                let data = item["image"] as! Data
+                let data = try await TaskArchiveSync.fetch(item)
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true); folder = directory
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                 var suffix = (item["content_type"] as? String).flatMap { (UTType($0) ?? UTType(mimeType: $0))?.preferredFilenameExtension }
@@ -177,12 +177,14 @@ final class TaskProofScreen: TaskScreen, UITableViewDataSource, UITableViewDeleg
                 let url = directory.appendingPathComponent(name == "." || name == ".." || name.isEmpty ? fallback : name)
                 try data.write(to: url, options: .atomic); try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path); result = url
             } catch { failure = error }
-            DispatchQueue.main.async {
-                self.loading = false
-                if let failure { if let folder { try? FileManager.default.removeItem(at: folder) }; tu_err(self,failure); return }
-                if let previous = self.directory { try? FileManager.default.removeItem(at: previous) }; self.directory = folder; self.preview = result
-                let controller = QLPreviewController(); controller.dataSource = self; self.navigationController?.pushViewController(controller, animated: true)
+            self.loading = false
+            guard self.navigationController?.topViewController === self else {
+                if let folder { try? FileManager.default.removeItem(at: folder) }
+                return
             }
+            if let failure { if let folder { try? FileManager.default.removeItem(at: folder) }; tu_err(self,failure); return }
+            if let previous = self.directory { try? FileManager.default.removeItem(at: previous) }; self.directory = folder; self.preview = result
+            let controller = QLPreviewController(); controller.dataSource = self; self.navigationController?.pushViewController(controller, animated: true)
         }
     }
     // 一次只向原生预览提供一个文件。

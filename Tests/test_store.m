@@ -343,7 +343,8 @@ static void tstv3(NSString *root) {
         __block NSString *uuid; __block NSNumber *updated;
         @autoreleasepool { TaskStore *store = tstopn(path); NSDictionary *task = [store crtTsk:@{@"title":@"第三版数据",@"starred":@1} error:nil]; uuid = task[@"task_id"]; updated = task[@"updated_at"]; }
         // 降级夹具先移除新版专有结构，保留真实第三版形态。
-        tstsql(path,@"DROP TABLE task_reviews;ALTER TABLE tasks DROP COLUMN planning_mode;DROP TABLE agenda_slots;DROP TABLE routine_documents;DROP INDEX routine_source_unique;ALTER TABLE tasks DROP COLUMN routine_kind;ALTER TABLE tasks DROP COLUMN routine_end;ALTER TABLE tasks DROP COLUMN routine_enabled;ALTER TABLE tasks DROP COLUMN routine_source;");
+        tstsql(path,[NSString stringWithContentsOfFile:@"Tests/Fixtures/archive-v12.sql" encoding:NSUTF8StringEncoding error:nil]);
+        tstsql(path,[NSString stringWithContentsOfFile:@"Tests/Fixtures/agenda-v10.sql" encoding:NSUTF8StringEncoding error:nil]);
         NSString *fixture=[NSString stringWithContentsOfFile:@"Tests/Fixtures/occurrence-v8.sql" encoding:NSUTF8StringEncoding error:nil];
         for (NSString *line in [fixture componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"CREATE TABLE reminder_occurrences "])
             tstsql(path,[@"DROP TABLE reminder_occurrences;" stringByAppendingString:line]);

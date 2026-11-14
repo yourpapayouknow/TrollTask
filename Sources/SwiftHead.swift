@@ -10,5 +10,7 @@
 @_exported import QuickLook
 @_exported import ImageIO
 @_exported import Security
+@_exported import AuthenticationServices
+@_exported import CryptoKit
 #endif
 typealias TaskFields = [String: Any]

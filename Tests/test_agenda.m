@@ -161,6 +161,8 @@ static void ag_migrate(NSString *root) {
         NSString *path=[root stringByAppendingPathComponent:[NSString stringWithFormat:@"migration-%@.db",fail]];__block NSString *id;
         @autoreleasepool { TaskStore *s=ag_store(path);id=[s crtTsk:@{@"title":@"迁移前原任务",@"notes":@"保留原备注"} error:nil][@"task_id"]; }
         sqlite3 *db=NULL;ag_req(sqlite3_open(path.UTF8String,&db)==SQLITE_OK,@"打开隔离迁移库");
+        NSString *archive=[NSString stringWithContentsOfFile:@"Tests/Fixtures/archive-v12.sql" encoding:NSUTF8StringEncoding error:nil];
+        ag_req(sqlite3_exec(db,archive.UTF8String,NULL,NULL,NULL)==SQLITE_OK,@"移除归档新版结构");
         NSString *fixture=[NSString stringWithContentsOfFile:@"Tests/Fixtures/agenda-v10.sql" encoding:NSUTF8StringEncoding error:nil];
         ag_req(sqlite3_exec(db,fixture.UTF8String,NULL,NULL,NULL)==SQLITE_OK,@"使用真实十版结构");
         if(fail.boolValue)ag_req(sqlite3_exec(db,"CREATE TRIGGER agenda_fail BEFORE UPDATE ON store_meta WHEN NEW.schema_version=11 BEGIN SELECT RAISE(ABORT,'test');END",NULL,NULL,NULL)==SQLITE_OK,@"注入迁移提交失败");
