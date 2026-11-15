@@ -1,10 +1,12 @@
 // 为手动新建常律提供可见的次日早间默认值。
 func tr_draft() -> TaskFields {
-    let calendar = Calendar.current
+    let zone = TaskTimeZone.current
+    var calendar = Calendar.current
+    calendar.timeZone = zone
     let start = calendar.nextDate(after: Date(), matching: DateComponents(hour: 8, minute: 0), matchingPolicy: .nextTime)!
     return ["list_id": TS_RTN_LST, "routine_kind": "fixed", "routine_end": 510, "routine_enabled": 1,
             "due_at": start.timeIntervalSince1970, "schedule_kind": "timed", "recurrence_type": "daily", "recurrence_interval": 1,
-            "recurrence": ["RRULE:FREQ=DAILY;INTERVAL=1"], "timezone_id": TimeZone.current.identifier]
+            "recurrence": ["RRULE:FREQ=DAILY;INTERVAL=1"], "timezone_id": zone.identifier]
 }
 
 // 将冲突、未估时和拆分入口保留为可处理的独立页面。

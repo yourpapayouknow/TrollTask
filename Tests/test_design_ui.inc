@@ -48,26 +48,51 @@ static void ut_dpage(NSString *name) {
 static void ut_droot(void) {
     ut_wait(^BOOL{return !(ut_top().navigationController ?: ut_nav).transitionCoordinator;},@"返回前等待子页转场");ut_ui(^{[ut_nav dismissViewControllerAnimated:NO completion:nil];[ut_nav popToRootViewControllerAnimated:NO];[ut_window endEditing:YES];});ut_home();
 }
-// 核对高级字段换行后的时区修改、绝对时刻和取消草稿。
+// 验证系统默认、固定时区与旧任务各自的时间语义。
 static void ut_dflds(void) {
-    for(NSString *kind in @[@"timed",@"date"]){
+    NSString *key=@"task.defaultTimeZone";NSUserDefaults *prefs=NSUserDefaults.standardUserDefaults;
+    NSString *original=[prefs stringForKey:key];[prefs removeObjectForKey:key];
+    @try {
+        ut_tap(@"home.settings");ut_tap(@"settings.timezone");
+        ut_wait(^BOOL{return ((UITableViewCell *)ut_find(ut_surface(),@"timezone.system")).accessoryType==UITableViewCellAccessoryCheckmark;},@"默认勾选跟随系统");
+        ut_ui(^{UISearchBar *search=(UISearchBar *)ut_find(ut_surface(),@"timezone.search");search.text=@"无匹配测试";[search.delegate searchBar:search textDidChange:search.text];});
+        ut_wait(^BOOL{UITableView *table=(UITableView *)ut_find(ut_surface(),@"timezone.list");UITableViewCell *cell=table.visibleCells.firstObject;return [((UIListContentConfiguration *)cell.contentConfiguration).text isEqual:@"无匹配时区"];},@"无结果不修改默认时区");
+        ut_req(![prefs stringForKey:key],@"搜索没有写入时区设置");
+        ut_ui(^{UISearchBar *search=(UISearchBar *)ut_find(ut_surface(),@"timezone.search");search.text=@"纽约";[search.delegate searchBar:search textDidChange:search.text];});
+        ut_tap(@"timezone.America/New_York");
+        ut_wait(^BOOL{return [[(UIButton *)ut_find(ut_surface(),@"settings.timezone") configuration].subtitle isEqual:@"纽约"];},@"点选后设置显示纽约");
+        ut_req([[prefs stringForKey:key]isEqual:@"America/New_York"],@"保存系统时区标识");
+        ut_tap(@"settings.close");ut_home();
+
+        ut_edt(nil);ut_title(@"新任务时区");ut_tap(@"edit.more");
+        ut_ui(^{UIDatePicker *plan=(UIDatePicker *)ut_find(ut_surface(),@"plan.date"),*deadline=(UIDatePicker *)ut_find(ut_surface(),@"deadline.date");ut_req(!ut_find(ut_surface(),@"edit.timezone") && [plan.timeZone.name isEqual:@"America/New_York"] && [deadline.timeZone isEqual:plan.timeZone],@"新任务的计划和截止使用默认时区，无须输入");});
+        ut_tap(@"edit.save");ut_wait(^BOOL{return [[(UIDatePicker *)ut_find(ut_surface(),@"intake.start") timeZone].name isEqual:@"America/New_York"];},@"创建评估沿用新任务时区");
+        ut_ui(^{[ut_top().navigationController popViewControllerAnimated:NO];});ut_tap(@"edit.cancel");ut_home();
+
         NSDateFormatter *fmt=[NSDateFormatter new];fmt.timeZone=[NSTimeZone timeZoneWithName:@"Asia/Shanghai"];fmt.dateFormat=@"yyyy-MM-dd HH:mm";
-        NSDictionary *task=[ut_store crtTsk:@{@"title":@"高级字段回归",@"due_at":@([fmt dateFromString:[kind isEqual:@"timed"] ? @"2026-11-01 09:30":@"2026-11-01 00:00"].timeIntervalSince1970),@"schedule_kind":kind,@"timezone_id":@"Asia/Shanghai",@"planned_duration":@1800} error:nil];ut_req(task!=nil,@"创建隔离时区回归任务");
+        NSDictionary *task=[ut_store crtTsk:@{@"title":@"原任务时区",@"due_at":@([fmt dateFromString:@"2026-11-01 00:00"].timeIntervalSince1970),@"schedule_kind":@"date",@"timezone_id":@"Asia/Shanghai",@"planned_duration":@1800} error:nil];
+        ut_req(task!=nil,@"创建隔离时区回归任务");
         ut_edt(task);ut_tap(@"edit.more");
-        ut_ui(^{UITextView *zone=(UITextView *)ut_find(ut_surface(),@"edit.timezone");ut_req([zone isKindOfClass:UITextView.class] && !zone.scrollEnabled,@"时区使用可完整换行的输入");ut_req([[(UITextField *)ut_find(ut_surface(),@"edit.duration")text]isEqual:@"30"],@"预计分钟保持原值");zone.text=@"America/New_York";[zone.delegate textViewDidChange:zone];UIDatePicker *day=(UIDatePicker *)ut_find(ut_surface(),@"plan.date");ut_req([day.timeZone.name isEqual:@"America/New_York"],@"修改时区同步原生日历");if([kind isEqual:@"date"]){NSDateFormatter *local=[NSDateFormatter new];local.timeZone=day.timeZone;local.dateFormat=@"yyyy-MM-dd";ut_req([[local stringFromDate:day.date]isEqual:@"2026-11-01"],@"仅日期更换时区保留当地日期");}});
-        if([kind isEqual:@"timed"]){ut_save();ut_home();NSDictionary *saved=[ut_store rdTsk:task[@"task_id"] error:nil];ut_req([saved[@"timezone_id"]isEqual:@"America/New_York"] && fabs([saved[@"due_at"]doubleValue]-[task[@"due_at"]doubleValue])<0.1 && [saved[@"planned_duration"]isEqual:task[@"planned_duration"]],@"时区保存不改变绝对提醒或预计投入");}
-        else{long long revision=[ut_store revision:nil];ut_tap(@"edit.cancel");ut_home();ut_req([ut_store revision:nil]==revision && [[ut_store rdTsk:task[@"task_id"] error:nil][@"timezone_id"]isEqual:@"Asia/Shanghai"],@"取消时区草稿不写入数据库");}
+        ut_ui(^{UIDatePicker *day=(UIDatePicker *)ut_find(ut_surface(),@"plan.date");ut_req([day.timeZone.name isEqual:@"Asia/Shanghai"] && [[fmt stringFromDate:day.date]isEqual:@"2026-11-01 00:00"] && [[(UITextField *)ut_find(ut_surface(),@"edit.duration")text]isEqual:@"30"],@"旧任务时区和本地日期不受设置影响");});
+        long long revision=[ut_store revision:nil];ut_save();ut_home();
+        ut_req([ut_store revision:nil]==revision && [[ut_store rdTsk:task[@"task_id"] error:nil][@"timezone_id"]isEqual:@"Asia/Shanghai"],@"未改动旧任务时不重写时区");
         ut_req([ut_store delTsk:task[@"task_id"] error:nil],@"清理隔离时区夹具");
-    }
+
+        ut_tap(@"home.settings");ut_tap(@"settings.timezone");ut_tap(@"timezone.system");ut_tap(@"settings.close");ut_home();
+        ut_req(![prefs stringForKey:key],@"可切回跟随系统");
+        ut_edt(nil);ut_tap(@"edit.more");
+        ut_ui(^{ut_req([[(UIDatePicker *)ut_find(ut_surface(),@"plan.date") timeZone]isEqual:NSTimeZone.localTimeZone],@"新建任务重新使用系统时区");});
+        ut_tap(@"edit.cancel");ut_home();
+    } @finally {if(original)[prefs setObject:original forKey:key];else [prefs removeObjectForKey:key];}
 }
 // 通过真实入口遍历主App及各级子页，测试任务只存在于隔离库。
 static void ut_dpages(void) {
     for(NSString *file in [[NSFileManager defaultManager]contentsOfDirectoryAtPath:ut_docs error:nil])if([file hasPrefix:@"PageAudit-"] || [file hasPrefix:@"PageFailure-"])[[NSFileManager defaultManager]removeItemAtPath:[ut_docs stringByAppendingPathComponent:file] error:nil];
-    if([ut_args containsObject:@"--date-probe"]){ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);ut_tap(@"home.create");ut_title(@"日期布局测量");ut_tap(@"edit.save");ut_wait(^BOOL{return ut_find(ut_surface(),@"intake.start")!=nil;},@"测量日期组合行");ut_dpage(@"date-probe");ut_droot();return;}
+    if([ut_args containsObject:@"--date-probe"]){ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);ut_tap(@"home.create");ut_title(@"日期布局测量");ut_tap(@"edit.date");ut_win_done();ut_tap(@"edit.save");ut_wait(^BOOL{return ut_find(ut_surface(),@"intake.start")!=nil;},@"测量日期组合行");ut_dpage(@"date-probe");ut_droot();return;}
     ut_home();ut_dpage(@"today-empty");ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);ut_dpage(@"inventory-empty");
     ut_tap(@"home.lists");ut_dwin(@"list-drawer");ut_tap(@"list.create");ut_wait(^BOOL{return ut_find(ut_surface(),@"list.name")!=nil;},@"清单名称页就绪");ut_dpage(@"list-name");ut_droot();
     ut_tap(@"home.more");ut_dwin(@"sort-drawer");long long version=[ut_store revision:nil];ut_ui(^{UITableViewController *menu=(UITableViewController *)ut_top();UITableViewCell *cell=(UITableViewCell *)ut_find(menu.view,@"list.delete");UIListContentConfiguration *content=(UIListContentConfiguration *)cell.contentConfiguration;ut_req(!content.secondaryText.length && cell.accessibilityHint.length && (cell.accessibilityTraits & UIAccessibilityTraitNotEnabled),@"禁用原因移入悬浮提示且保留禁用语义");[menu.tableView.delegate tableView:menu.tableView didSelectRowAtIndexPath:[menu.tableView indexPathForCell:cell]];ut_req(ut_top()==menu,@"禁用项点击不会关闭或执行");});ut_req([ut_store revision:nil]==version,@"禁用项点击不修改数据库");ut_tap(@"sort.more");ut_dwin(@"sort-expanded");ut_droot();
-    ut_tap(@"home.create");ut_title(@"设计审查任务");ut_dwin(@"quick-create");ut_tap(@"edit.more");ut_dpage(@"new-full");ut_dpage(@"new-full-bottom");ut_droot();
+    ut_tap(@"home.create");ut_title(@"设计审查任务");ut_dwin(@"quick-create");ut_tap(@"edit.date");ut_dpage(@"todo-window");ut_tap(@"window.choose");ut_dpage(@"todo-deadline");ut_droot();
     NSDictionary *task=[ut_store crtTsk:@{@"title":@"检查所有子页的对齐与阅读体验",@"notes":@"此处是用户填写的长说明，检查换行、正文边距和可读性。",@"due_at":@([[NSDate date]timeIntervalSince1970]+120),@"planned_duration":@1800} error:nil];ut_req(task!=nil,@"创建隔离设计任务");
     ut_ui(^{[(TaskHome *)ut_nav.viewControllers.firstObject rfrsh];});ut_wait(^BOOL{return ut_find(ut_surface(),[@"star." stringByAppendingString:task[@"task_id"]])!=nil;},@"普通清单数据就绪");ut_dpage(@"inventory-populated");
     ut_tap(@"list.today");ut_dpage(@"today-populated");ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);
@@ -79,7 +104,7 @@ static void ut_dpages(void) {
     for(NSString *title in @[@"日程冲突甲",@"日程冲突乙"]){NSDictionary *row=[ut_store crtTsk:@{@"title":title,@"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_end":@780,@"due_at":@(day+720*60),@"timezone_id":NSTimeZone.localTimeZone.name,@"recurrence_type":@"daily"} error:nil];if(row)[routines addObject:row];}
     ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);ut_tap(@"home.more");ut_tap(@"agenda.issues");
     ut_wait(^BOOL{return ut_find(ut_surface(),@"agenda.problems")!=nil && !ut_nav.transitionCoordinator;},@"待处理列表就绪");ut_dpage(@"agenda-issues");ut_droot();
-    ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);ut_tap(@"home.create");ut_title(@"创建评估界面检查");ut_tap(@"edit.save");ut_wait(^BOOL{return ut_find(ut_surface(),@"intake.start")!=nil;},@"创建评估页就绪");ut_dpage(@"admission-editing");ut_droot();
+    ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);ut_tap(@"home.create");ut_title(@"创建评估界面检查");ut_tap(@"edit.date");ut_win_done();ut_tap(@"edit.save");ut_wait(^BOOL{return ut_find(ut_surface(),@"intake.start")!=nil;},@"创建评估页就绪");ut_dpage(@"admission-editing");ut_droot();
     ut_sttng();ut_droot();
     if([ut_args containsObject:@"--design-light"]){ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;[ut_nav pushViewController:[NSClassFromString(@"TaskAISettings")new] animated:NO];});ut_dpage(@"assistant-config-light");ut_droot();}
     NSDictionary *occ=[ut_store crtOcc:task[@"task_id"] at:task[@"due_at"] error:nil];

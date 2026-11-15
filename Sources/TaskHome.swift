@@ -64,6 +64,8 @@ final class TaskCell: UITableViewCell {
     // 绑定稳定UUID和完成时的显示快照。
     func bnd(_ task: TaskFields, _ owner: TaskHome) {
         let complete = task["status"] as? String == "completed", starred = (task["starred"] as? NSNumber)?.boolValue == true
+        let halfway = TaskWindow.halfway(task).map { $0 <= Date().timeIntervalSince1970 } ?? false
+        let lit = starred || halfway
         let id = task["task_id"] as! String
         let today = owner.todayOnly, routine = task["list_id"] as? String == TS_RTN_LST
         let card = owner.routineOnly
@@ -90,12 +92,12 @@ final class TaskCell: UITableViewCell {
         var mark = check.configuration; mark?.baseForegroundColor = complete ? lb_acnt() : TaskTheme.muted; check.configuration = mark
         trailing.accessibilityIdentifier = (card ? "routine.delete." : "star.") + id
         trailing.accessibilityLabel = card ? "删除常律" : (starred ? "取消星标" : "添加星标")
-        trailing.accessibilityValue = card ? task["title"] as? String : (starred ? "1" : "0")
+        trailing.accessibilityValue = card ? task["title"] as? String : (starred ? "1" : halfway ? "时间已过半" : "0")
         objc_setAssociatedObject(trailing, &taskKey, card ? task : nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        trailing.setImage(lb_icon(card ? "close" : (starred ? "star_fill" : "star")), for: .normal)
+        trailing.setImage(lb_icon(card ? "close" : (lit ? "star_fill" : "star")), for: .normal)
         var action = trailing.configuration
         action?.contentInsets = .init(top:8,leading:card ? 8 : 12,bottom:8,trailing:card ? 8 : 12)
-        action?.baseForegroundColor = card ? TaskTheme.danger : (starred ? TaskTheme.orange : TaskTheme.muted)
+        action?.baseForegroundColor = card ? TaskTheme.danger : (lit ? TaskTheme.orange : TaskTheme.muted)
         trailing.configuration = action
         check.removeTarget(nil, action: nil, for: .touchUpInside); trailing.removeTarget(nil, action: nil, for: .touchUpInside)
         check.addTarget(owner, action: #selector(TaskHome.tglTsk(_:)), for: .touchUpInside)
@@ -123,6 +125,12 @@ final class TaskCell: UITableViewCell {
         if let stamp = stamp {
             let format = DateFormatter(); format.locale = Locale(identifier: "zh_CN"); format.timeZone = .current; format.dateFormat = "yyyy-MM-dd"
             let date = Date(timeIntervalSince1970: stamp.doubleValue); day.text = format.string(from: date); format.dateFormat = "HH:mm"; clock.text = format.string(from: date)
+        }
+        if !today, !complete, TaskWindow.dayOnly(task), let end = task["deadline_at"] as? NSNumber,
+           let zone = TimeZone(identifier: task["timezone_id"] as? String ?? "") {
+            let last = TaskWindow.deadline(Date(timeIntervalSince1970: end.doubleValue), in: TaskWindow.calendar(zone))
+            let format = DateFormatter(); format.timeZone = zone; format.dateFormat = "yyyy-MM-dd"
+            day.text = format.string(from: last); day.isHidden = false; clock.isHidden = true
         }
         if let end=task["today_end"] as? NSNumber,let start=task["remind_at"] as? NSNumber {let format=DateFormatter();format.dateFormat="HH:mm";let boundary=Calendar.current.date(byAdding:.day,value:1,to:Calendar.current.startOfDay(for:Date(timeIntervalSince1970:start.doubleValue)))!.timeIntervalSince1970;day.text=format.string(from:Date(timeIntervalSince1970:start.doubleValue))+"–"+(end.doubleValue==boundary ? "24:00":format.string(from:Date(timeIntervalSince1970:end.doubleValue)));clock.isHidden=true;day.isHidden=false}
         if (task["today_unplaced"] as? Bool)==true {day.text="待安排";day.isHidden=false;clock.isHidden=true}
@@ -439,9 +447,10 @@ final class TaskCell: UITableViewCell {
     @objc private func crt() {
         guard !todayOnly else{return}
         guard let store = store else { rfrsh(); return }; guard presentedViewController == nil else { return }
-        let draft: TaskFields = routineOnly ? tr_draft() : ["list_id": listID == "starred" ? TS_DFLT_LST : listID, "starred": listID == "starred"]
+        let draft: TaskFields = routineOnly ? tr_draft() : ["list_id": listID == "starred" ? TS_DFLT_LST : listID]
         let editor = TaskEdit(store: store, task: nil, draft: draft, quick: true) { [weak self] in self?.rfrsh() }
-        let nav = UINavigationController(rootViewController: editor); nav.preferredContentSize = editor.preferredContentSize; tu_sheet(self, nav, compact: true)
+        let nav = UINavigationController(rootViewController: editor); nav.preferredContentSize = editor.preferredContentSize
+        tu_sheet(self, nav, compact: true) { [weak editor] in editor?.focusDraft() }
     }
     // 筛选当前清单和存储排序。
     private func fltr() {
@@ -456,6 +465,10 @@ final class TaskCell: UITableViewCell {
                     for key in ["remind_at","today_end"] {
                         if let boundary = (row[key] as? NSNumber)?.doubleValue, boundary > at { next = min(next,boundary) }
                     }
+                }
+            } else if !routineOnly && listID != "starred" {
+                for task in allPnd where task["list_id"] as? String == listID {
+                    if let halfway = TaskWindow.halfway(task), halfway > at { next = min(next, halfway) }
                 }
             }
             let timer = Timer(timeInterval: max(0.01,next-at), repeats: false) { [weak self] _ in self?.rfrsh() }

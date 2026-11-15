@@ -92,6 +92,11 @@ static void ut_save(void) {
     ut_ui(^{back=ut_find(ut_surface(),@"edit.save").hidden;});
     ut_tap(back ? @"edit.back" : @"edit.save");
 }
+// 为新建普通待办点选并确认当前截止日。
+static void ut_win_done(void) {
+    ut_tap(@"window.choose");ut_tap(@"window.done");
+    ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController;},@"整日窗口返回创建草稿");
+}
 // 取得当前首页的原生列表。
 static UITableView *ut_table(void) { return (UITableView *)ut_find(ut_nav.viewControllers.firstObject.view, @"home.list"); }
 // 检查可见应用控件在父容器内的水平边界。
@@ -240,11 +245,14 @@ static void ut_refs(void) {
         ut_req(lb_icon(name) && lb_icon(name).size.width == 24,@"MingCute原生资源加载"); });
     NSDictionary *list = [ut_store crtLst:@"学习清单" error:nil]; NSString *listID = list[@"list_id"];
     ut_wait(^BOOL { return ut_find(ut_window,[@"list." stringByAppendingString:listID]) != nil; },@"新清单通知刷新页签");
-    ut_tap([@"list." stringByAppendingString:listID]); ut_tap(@"home.create"); ut_title(@"完整字段任务");
+    ut_tap([@"list." stringByAppendingString:listID]);
+    NSUserDefaults *prefs=NSUserDefaults.standardUserDefaults; NSString *original=[prefs stringForKey:@"task.defaultTimeZone"];
+    [prefs setObject:@"America/New_York" forKey:@"task.defaultTimeZone"];
+    @try{ut_tap(@"home.create");ut_title(@"完整字段任务");}
+    @finally{if(original)[prefs setObject:original forKey:@"task.defaultTimeZone"];else [prefs removeObjectForKey:@"task.defaultTimeZone"];}
     ut_tap(@"edit.details"); ut_ui(^{ UITextView *notes = (UITextView *)ut_find(ut_window,@"edit.notes"); notes.text = @"跨天完成记录"; [notes.delegate textViewDidChange:notes]; });
     ut_tap(@"edit.star"); ut_tap(@"edit.more"); ut_tap(@"edit.urgency.3"); ut_tap(@"edit.difficulty.2");
-    ut_ui(^{ UITextField *field = (UITextField *)ut_find(ut_window,@"edit.duration"); field.text = @"1500"; [field sendActionsForControlEvents:UIControlEventEditingChanged];
-        UITextView *zone=(UITextView *)ut_find(ut_window,@"edit.timezone");zone.text=@"America/New_York";[zone.delegate textViewDidChange:zone]; });
+    ut_ui(^{ UITextField *field = (UITextField *)ut_find(ut_window,@"edit.duration"); field.text = @"1500"; [field sendActionsForControlEvents:UIControlEventEditingChanged]; });
     ut_tap(@"edit.date"); ut_wait(^BOOL { return [ut_top() isKindOfClass:TaskCalendar.class]; },@"日期入口使用系统月历");
     ut_shot(@"calendar-320.png",320,850,NO); ut_shot(@"calendar-768.png",768,1024,NO);
     ut_ui(^{ UICalendarView *calendar = (UICalendarView *)ut_find(ut_window,@"calendar.month");
@@ -696,10 +704,11 @@ static void ut_edit(void) {
     NSDictionary *pending = [ut_store crtTsk:@{@"title":@"待修改计时",@"due_at":@(oldTime),@"deadline_at":@(oldTime+7200),@"urgency":@3,@"difficulty":@2,@"starred":@1,@"planned_duration":@90000,@"timezone_id":@"UTC"} error:nil];
     NSString *pendingID = pending[@"task_id"]; ut_edt(pending); ut_tap(@"edit.more");
     ut_ui(^{
-        ut_req([[(UITextField *)ut_find(ut_top().view,@"edit.duration") text] isEqual:@"1500"] && [[(UITextView *)ut_find(ut_top().view,@"edit.timezone") text] isEqual:@"UTC"],@"时区和预计投入回填");
+        ut_req([[(UITextField *)ut_find(ut_top().view,@"edit.duration") text] isEqual:@"1500"] && !ut_find(ut_top().view,@"edit.timezone"),@"预计投入回填，详情无时区输入");
         ut_req([[(UIButton *)ut_find(ut_top().view,@"edit.urgency") configuration].title isEqual:@"紧急程度：高"] && [[(UIButton *)ut_find(ut_top().view,@"edit.difficulty") configuration].title isEqual:@"难易程度：一般"],@"紧急难度回填");
         ut_req([(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"plan.timed") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.timed") isOn],@"计划和独立截止开关回填");
         UIDatePicker *plan = (UIDatePicker *)ut_find(ut_top().view,@"plan.time"), *ddl = (UIDatePicker *)ut_find(ut_top().view,@"deadline.time");
+        ut_req([plan.timeZone isEqual:[NSTimeZone timeZoneWithName:@"UTC"]] && [ddl.timeZone isEqual:plan.timeZone],@"任务详情沿用原有UTC时区");
         ut_req(fabs(plan.date.timeIntervalSince1970-oldTime)<1 && fabs(ddl.date.timeIntervalSince1970-oldTime-7200)<1,@"计划截止保留原始绝对时刻精度");
     });
     ut_date([NSDate dateWithTimeIntervalSinceNow:3600]); ut_save(); ut_home();
@@ -1170,7 +1179,8 @@ static void ut_hdbg(BOOL seed) {
                 BOOL settingsOnly = [ut_args containsObject:@"--settings-only"];
                 BOOL signalOnly = [ut_args containsObject:@"--signal"];
                 BOOL parityOnly = [ut_args containsObject:@"--parity"];
-                if ([ut_args containsObject:@"--create-fix"]) {if (@available(iOS 16.0,*)) ut_crtfix();}
+                if ([ut_args containsObject:@"--todo-create"]) {ut_todo_create();}
+                else if ([ut_args containsObject:@"--create-fix"]) {if (@available(iOS 16.0,*)) ut_crtfix();}
                 else if ([ut_args containsObject:@"--routine-view"]) {ut_rtnview();}
                 else if ([ut_args containsObject:@"--routine-edit"]) {ut_rptedit();}
                 else if ([ut_args containsObject:@"--formal"]) {ut_weekly();}

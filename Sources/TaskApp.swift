@@ -115,6 +115,7 @@
     @objc var taskStore: TaskStore?
     private let monitor = UISwitch()
     private var preview: UIButton!, recovery: UIButton!
+    private var timezone: UIButton!
     private var status: UIButton!, planned: UIButton!, timer: DispatchSourceTimer?, watcher: DispatchSourceProcess?
     private var routinePicker: TaskRtnPicker?
     private var watched: pid_t = 0
@@ -138,7 +139,8 @@
         let routineImport=tu_btn("导入常律","file",self,#selector(rtnImp));routineImport.accessibilityIdentifier="settings.routineImport"
         let archive=tu_btn("归档","file",self,#selector(archivePage));archive.accessibilityIdentifier="settings.archive"
         let cloud=tu_btn("云端存储","upload",self,#selector(cloudPage));cloud.accessibilityIdentifier="settings.cloud"
-        for button in [status!,planned!,preview!,recovery!,assistant,routineImport,archive,cloud] {
+        timezone=tu_btn("任务时区","time",self,#selector(zonePage));timezone.accessibilityIdentifier="settings.timezone"
+        for button in [status!,planned!,preview!,recovery!,assistant,routineImport,archive,cloud,timezone!] {
             var config=button.configuration;config?.imagePadding=8;config?.background.cornerRadius=12;config?.contentInsets=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12)
             config?.titleLineBreakMode = .byWordWrapping;config?.subtitleLineBreakMode = .byWordWrapping
             config?.titleTextAttributesTransformer=UIConfigurationTextAttributesTransformer { attributes in var result=attributes;result.font=lb_fnt(.body,nil);return result }
@@ -152,13 +154,19 @@
         let icon=UIImageView(image:lb_icon("settings"));icon.tintColor=TaskTheme.ink;icon.contentMode = .scaleAspectFit;NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant:24),icon.heightAnchor.constraint(equalToConstant:24)])
         let service=tu_stk([icon,tu_lbl("后台服务"),monitor]);service.axis = .horizontal;service.alignment = .center;service.spacing=8;service.isLayoutMarginsRelativeArrangement=true;service.directionalLayoutMargins=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12);service.accessibilityIdentifier="settings.service";service.heightAnchor.constraint(greaterThanOrEqualToConstant:56).isActive=true
         let divider=UIView();divider.backgroundColor = .separator;divider.heightAnchor.constraint(equalToConstant:1/UIScreen.main.scale).isActive=true
-        let fields=tu_stk([archive,cloud,assistant,routineImport,divider,service,status,planned,preview,recovery]);fields.spacing=16
+        let fields=tu_stk([timezone,archive,cloud,assistant,routineImport,divider,service,status,planned,preview,recovery]);fields.spacing=16
         _ = tu_form(self,fields,"settings.content",top:header);fields.setCustomSpacing(TaskTheme.section,after:recovery);fields.setCustomSpacing(TaskTheme.section,after:divider)
         let result = notify_register_dispatch(LB_READY_NOTE, &token, .main) { [weak self] _ in
             guard let self = self, self.pending else { return }; self.pending = false; self.stat("测试全屏提醒"); self.sync(); notify_post(LB_TEST_NOTE)
         }
         if result != NOTIFY_STATUS_OK { token = -1 }; sync()
         activation = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.rfrsh() }
+    }
+    // 打开新任务的默认时区选择。
+    @objc private func zonePage() { navigationController?.pushViewController(TaskTimeZoneScreen(), animated: true) }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        timezone.configuration?.subtitle = TaskTimeZone.fixed.map(TaskTimeZone.city) ?? "跟随系统"
     }
     // 导入入口复用首页模板与事务，不启用HUD服务。
     @objc private func rtnImp() {

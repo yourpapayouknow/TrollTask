@@ -36,7 +36,8 @@ final class TaskDate {
 @objc(TaskEdit) final class TaskEdit: TaskScreen, UITextViewDelegate, UITextFieldDelegate {
     private let store: TaskStore, task: TaskFields?, draft: TaskFields
     private let saved: (() -> Void)?
-    private var extras: TaskFields, zone: TimeZone, dirty: Set<String> = []
+    private var extras: TaskFields, dirty: Set<String> = []
+    private let zone: TimeZone
     private let quick: Bool
     private var saving = false, splitAfterSave = false, forceReview = false
     private var extraActions: [UIAction] = []
@@ -48,9 +49,13 @@ final class TaskDate {
     private var childRow: UIStackView?, childField: UITextField?, childBusy = false, childBack = false
     private var textHeights: [NSLayoutConstraint] = []
     private var actionRow: UIStackView?
+    private var dateFields: TaskWindowFields?
+    private weak var editingBeforeDate: UITextView?
+    private var keyboardShown = false
     private var dateLine: UIStackView!, deadlineLine: UIStackView!, dateChip: UIButton!, clearDate: UIButton!, clearDeadline: UIButton!
-    private let duration = UITextField(), timezone = UITextView()
+    private let duration = UITextField()
     private var routine: Bool { extras["list_id"] as? String == TS_RTN_LST }
+    private var newTodo: Bool { quick && task == nil && !routine }
     private let routineEnd = UIDatePicker(), routineEnabled = UISwitch()
     private var endRow: UIStackView!
     private var routineKind: UIButton!, endConfirm: UIButton!
@@ -59,8 +64,9 @@ final class TaskDate {
     // 保留原始字段与明确的修改集合。
     @objc(initWithStore:task:draft:quick:saved:) init(store: TaskStore, task: TaskFields?, draft: TaskFields?, quick: Bool, saved: (() -> Void)?) {
         self.store = store; self.task = task; self.draft = draft ?? [:]; self.quick = quick; self.saved = saved
-        extras = task ?? ["list_id": TS_DFLT_LST, "parent_id": NSNull(), "starred": 0, "urgency": 0, "difficulty": 0, "recurrence_type": "none", "recurrence_interval": 1, "recurrence": [String](), "timezone_id": TimeZone.current.identifier]
-        extras.merge(draft ?? [:]) { _, new in new }; zone = TimeZone(identifier: extras["timezone_id"] as! String) ?? .current
+        extras = task ?? ["list_id": TS_DFLT_LST, "parent_id": NSNull(), "starred": 0, "urgency": 0, "difficulty": 0, "recurrence_type": "none", "recurrence_interval": 1, "recurrence": [String]()]
+        extras.merge(draft ?? [:]) { _, new in new }
+        zone = (extras["timezone_id"] as? String).flatMap { TimeZone(identifier: $0) } ?? TaskTimeZone.current
         super.init(nibName: nil, bundle: nil); if quick { preferredContentSize = CGSize(width: 540, height: 128) }
     }
     // 禁用归档初始化。
@@ -68,6 +74,22 @@ final class TaskDate {
     // 构建完整详情和可展开的额外字段。
     override func viewDidLoad() {
         super.viewDidLoad(); title = task == nil ? (routine ? "新建常律" : "添加待办") : "任务详情"
+        if newTodo {
+            let dates = TaskWindowFields(zone: zone)
+            dates.isHidden = true
+            dates.changed = { [weak self] in self?.rfrshDtl(); self?.view.setNeedsLayout() }
+            dates.picking = { [weak self] active in
+                guard let self else { return }
+                if active {
+                    self.editingBeforeDate = [self.titleField, self.notes].first { $0.isFirstResponder }
+                    self.view.endEditing(true)
+                } else {
+                    self.editingBeforeDate?.becomeFirstResponder()
+                    self.editingBeforeDate = nil
+                }
+            }
+            dateFields = dates
+        }
         hint.text = routine ? "新建常律" : "新建任务"
         save = tu_btn(task==nil && !routine ? "下一步":"保存", nil, self, #selector(sv)); save.accessibilityIdentifier = "edit.save"; var saveStyle = save.configuration; saveStyle?.baseForegroundColor = lb_acnt(); save.configuration = saveStyle
         if quick { navigationController?.setNavigationBarHidden(true, animated: false) }
@@ -91,12 +113,18 @@ final class TaskDate {
             field.textContainerInset = .init(top: 8, left: 8, bottom: 8, right: 8); field.textContainer.lineFragmentPadding = 0; let height = field.heightAnchor.constraint(equalToConstant: field === titleField ? (quick ? 44 : 72) : 120); height.isActive = true; textHeights.append(height)
         }
         titleField.text = task?["title"] as? String ?? draft["title"] as? String ?? ""; notes.text = task?["notes"] as? String ?? draft["notes"] as? String ?? ""; notes.isHidden = notes.text.isEmpty
+        if newTodo {
+            titleField.accessibilityLabel = "任务总标题"
+            titleField.accessibilityHint = "填写整个任务的最终目标"
+            notes.accessibilityLabel = "备注"
+        }
         if quick { titleField.returnKeyType = .done }
         hint.font = titleField.font; hint.textColor = TaskTheme.muted; hint.isHidden = !titleField.text.isEmpty; hint.translatesAutoresizingMaskIntoConstraints = false; titleField.addSubview(hint)
         NSLayoutConstraint.activate([hint.leadingAnchor.constraint(equalTo: titleField.leadingAnchor, constant: 8), hint.topAnchor.constraint(equalTo: titleField.topAnchor, constant: 8)])
         plan = TaskDate(task ?? draft, deadline: false, zone: zone, target: self); deadline = TaskDate(task ?? draft, deadline: true, zone: zone, target: self)
-        notesBtn = tu_btn(quick ? nil : "添加详细信息", "notes", self, #selector(nts)); notesBtn.accessibilityLabel = "添加详细信息"; notesBtn.accessibilityIdentifier = "edit.details"
-        dateBtn = tu_btn(nil, "time", self, #selector(clndr(_:))); dateBtn.accessibilityIdentifier = "edit.date"
+        notesBtn = tu_btn(quick ? nil : "添加详细信息", "notes", self, #selector(nts)); notesBtn.accessibilityLabel = newTodo ? "备注" : "添加详细信息"; notesBtn.accessibilityIdentifier = "edit.details"
+        dateBtn = tu_btn(nil, "time", self, newTodo ? #selector(openWindow) : #selector(clndr(_:))); dateBtn.accessibilityIdentifier = "edit.date"
+        if newTodo { dateBtn.accessibilityLabel = "时间" }
         ddlBtn = tu_btn(nil, "target", self, #selector(clndr(_:))); ddlBtn.accessibilityIdentifier = "edit.deadline"
         starBtn = tu_ibtn("star", "添加星标", "edit.star", self, #selector(star))
         listBtn = tu_btn(nil, "down", self, #selector(lsts)); listBtn.accessibilityIdentifier = "edit.list"
@@ -118,11 +146,9 @@ final class TaskDate {
         var listStyle = listBtn.configuration; listStyle?.baseForegroundColor = lb_acnt(); listStyle?.imagePlacement = .trailing; listStyle?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in var value = attributes; value.font = lb_fnt(.subheadline, nil); return value }; listBtn.configuration = listStyle
         duration.keyboardType = .decimalPad; duration.accessibilityIdentifier = "edit.duration"; duration.accessibilityLabel = "预计分钟"
         if let number = extras["planned_duration"] as? NSNumber { duration.text = String(format: "%.10g", number.doubleValue / 60) }
-        timezone.text = extras["timezone_id"] as? String ?? zone.identifier; timezone.accessibilityIdentifier = "edit.timezone"; timezone.accessibilityLabel = "时区"; timezone.autocorrectionType = .no; timezone.autocapitalizationType = .none
-        for field in [duration,timezone] {tu_fld(field)}
-        duration.font=lb_fnt(.body,nil);duration.adjustsFontForContentSizeCategory=true;duration.textColor=TaskTheme.ink;duration.addTarget(self,action:#selector(extraChg(_:)),for:.editingChanged)
-        timezone.font=lb_fnt(.body,nil);timezone.adjustsFontForContentSizeCategory=true;timezone.textColor=TaskTheme.ink;timezone.isScrollEnabled=false;timezone.textContainer.lineBreakMode = .byCharWrapping;timezone.delegate=self
-        advanced = tu_stk([plan.view, deadline.view, repeatBtn, grade("urgency"), grade("difficulty"), tu_stk([tu_lbl("预计分钟"),duration]), tu_stk([tu_lbl("时区"),timezone])]); advanced.isHidden = true
+        tu_fld(duration)
+        duration.font=lb_fnt(.body,nil);duration.adjustsFontForContentSizeCategory=true;duration.textColor=TaskTheme.ink;duration.addTarget(self,action:#selector(durChg),for:.editingChanged)
+        advanced = tu_stk([plan.view, deadline.view, repeatBtn, grade("urgency"), grade("difficulty"), tu_stk([tu_lbl("预计分钟"),duration])]); advanced.isHidden = true
         if routine {
             routineKind = tu_btn(nil, "calendar"); routineKind.accessibilityIdentifier = "routine.kind"; routineKind.showsMenuAsPrimaryAction = true
             routineKind.menu = UIMenu(children: [("fixed","固定安排"),("work","一般任务时段"),("rest","休息"),("background","可并行安排")].map { key, title in
@@ -143,7 +169,7 @@ final class TaskDate {
         }
         let extra = tu_btn(quick ? nil : "更多选项", quick ? "more" : "down", self, #selector(more)); extra.accessibilityIdentifier = "edit.more"; extra.accessibilityLabel = "更多选项"
         var titleLine: UIView = titleField
-        if quick {
+        if quick && !newTodo {
             let row = tu_stk([titleField, extra]); row.axis = .horizontal; row.alignment = .top; titleLine = row
             extra.widthAnchor.constraint(equalToConstant: 44).isActive = true
             extra.menu = UIMenu(children: [tu_act("取消", "close", "edit.cancel") { [weak self] in self?.cncl() }])
@@ -154,18 +180,29 @@ final class TaskDate {
                 button.addAction(action, for: .touchUpInside); advanced.addArrangedSubview(button)
             }
         }
-        let fields: [UIView] = quick ? [titleLine, notes, dateLine, detail, advanced] : [listBtn, titleField, notes, notesBtn, detail, extra, advanced]
+        let fields: [UIView] = dateFields.map { [titleLine, notes, $0] } ?? (quick ? [titleLine, notes, dateLine, detail, advanced] : [listBtn, titleField, notes, notesBtn, detail, extra, advanced])
         formStack = tu_stk(fields)
         let scroll = tu_form(self, formStack, "edit.form")
         let footer: UIStackView
         if quick {
             var config = save.configuration; config?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
                 var value = attributes; let scaled = lb_fnt(.headline, nil)!; value.font = scaled.withSize(min(32, scaled.pointSize)); return value
-            }; save.configuration = config
+            }
+            if newTodo { config?.titleLineBreakMode = .byTruncatingTail }
+            save.configuration = config
+            if newTodo {
+                save.titleLabel?.numberOfLines = 1
+                save.setContentCompressionResistancePriority(.required, for: .horizontal)
+            }
             scroll.contentInset.top = 8
             let tools = [notesBtn!, dateBtn!, routine ? repeatBtn! : starBtn!]
             footer = tu_stk(tools + [UIView(), save]); footer.axis = .horizontal; footer.distribution = .fill
-            for button in tools {var style=button.configuration;style?.contentInsets = .init(top:8,leading:8,bottom:8,trailing:8);button.configuration=style; button.widthAnchor.constraint(equalToConstant: 44).isActive = true }
+            for button in tools {
+                var style = button.configuration
+                style?.contentInsets = .init(top:8, leading:8, bottom:8, trailing:8)
+                button.configuration = style
+                button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            }
             save.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         } else {
             save.isHidden = task != nil;footer=tu_stk([save,UIView()]);footer.axis = .horizontal
@@ -189,35 +226,83 @@ final class TaskDate {
             let natural = field.layoutManager.usedRect(for: field.textContainer).height + field.textContainerInset.top + field.textContainerInset.bottom
             textHeights[index].constant = max(44, min(320, ceil(natural)))
         }
-        rtnSize()
+        if newTodo { fitDraft() } else { rtnSize() }
         if !quick, let row = actionRow {
             let large = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
             row.axis = large ? .vertical : .horizontal; row.arrangedSubviews.last?.isHidden = large
         }
     }
     // 使用系统键盘输入快捷标题。
-    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); if quick && titleField.text.isEmpty { titleField.becomeFirstResponder() } }
+    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); if quick && !newTodo && titleField.text.isEmpty { titleField.becomeFirstResponder() } }
+    // 在快捷面板完成转场后唤起总标题的键盘。
+    func focusDraft() {
+        guard newTodo, let window = view.window else { return }
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(focusReady), name: UIApplication.didBecomeActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(focusReady), name: UIWindow.didBecomeKeyNotification, object: window)
+        DispatchQueue.main.async { [weak self] in self?.focusReady() }
+    }
+    // 避免后台切回时只有输入焦点、系统却尚未弹出软键盘。
+    @objc private func focusReady() {
+        guard UIApplication.shared.applicationState == .active, view.window?.isKeyWindow == true else { return }
+        stopFocusWait()
+        guard navigationController?.topViewController === self, !isBeingDismissed else { return }
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardReady), name: UIResponder.keyboardDidShowNotification, object: nil)
+        titleField.becomeFirstResponder()
+        // 冷启动时系统偶尔接受焦点却没有显示键盘，只重试一次。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self else { return }
+            NotificationCenter.default.removeObserver(self, name: UIResponder.keyboardDidShowNotification, object: nil)
+            guard !self.keyboardShown, self.titleField.isFirstResponder, self.titleField.text.isEmpty,
+                  self.navigationController?.topViewController === self, !self.isBeingDismissed,
+                  self.view.window?.isKeyWindow == true, UIApplication.shared.applicationState == .active else { return }
+            self.titleField.resignFirstResponder()
+            self.titleField.becomeFirstResponder()
+        }
+    }
+    @objc private func keyboardReady() { keyboardShown = true }
+    private func stopFocusWait() {
+        let center = NotificationCenter.default
+        center.removeObserver(self, name: UIApplication.didBecomeActiveNotification, object: nil)
+        center.removeObserver(self, name: UIWindow.didBecomeKeyNotification, object: nil)
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if newTodo { stopFocusWait() }
+    }
     // 保留草稿并刷新子任务。
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); navigationController?.setNavigationBarHidden(quick, animated: false); if task != nil && subBtn != nil { children() } }
     // 构建紧急程度与难度菜单。
     private func grade(_ key: String) -> UIButton {
-        let label = key == "urgency" ? "紧急程度" : "难易程度", titles = key == "urgency" ? ["未设置", "低", "中", "高"] : ["未评估", "简单", "一般", "困难"]
-        let value = (extras[key] as? NSNumber)?.intValue ?? 0; let button = tu_btn(label + "：" + titles[value], "down"); button.accessibilityIdentifier = "edit." + key
-        button.menu = UIMenu(children: titles.enumerated().map { index, title in
-            let action = tu_act(title, nil, "edit.\(key).\(index)") { [weak self, weak button] in
-                self?.extras[key] = index; self?.dirty.insert(key); button?.setTitle(label + "：" + titles[index], for: .normal)
-                (button?.menu?.children as? [UIAction])?.forEach { $0.state = $0.title == titles[index] ? .on : .off }
-            }; action.state = value == index ? .on : .off; return action
-        }); button.showsMenuAsPrimaryAction = true; return button
+        tu_grade(key, "edit", (extras[key] as? NSNumber)?.intValue ?? 0) { [weak self] index in
+            self?.extras[key] = index; self?.dirty.insert(key)
+        }
     }
     // 显示独立日期与星标状态。
     private func rfrshDtl() {
         starBtn.isHidden=routine
         let starred = (extras["starred"] as? NSNumber)?.boolValue == true; starBtn.setImage(lb_icon(starred ? "star_fill" : "star"), for: .normal); starBtn.accessibilityLabel = starred ? "取消星标" : "添加星标"
+        if newTodo {
+            let toggles = [(notesBtn!, !notes.isHidden, TaskTheme.ink),
+                           (dateBtn!, dateFields?.isHidden == false, TaskTheme.ink),
+                           (starBtn!, starred, TaskTheme.muted)]
+            for (button, selected, idleColor) in toggles {
+                button.configuration?.baseForegroundColor = selected ? TaskTheme.orange : idleColor
+                if selected { button.accessibilityTraits.insert(.selected) }
+                else { button.accessibilityTraits.remove(.selected) }
+            }
+            starBtn.accessibilityValue = starred ? "紧急程度高" : nil
+            if let dates = dateFields {
+                let calendar = TaskWindow.calendar(zone)
+                let format = DateFormatter(); format.timeZone = zone; format.dateFormat = "MM-dd"
+                dateBtn.accessibilityValue = format.string(from: dates.start) + (dates.end.map { "至" + format.string(from: TaskWindow.deadline($0, in: calendar)) } ?? "，待选截止日")
+            }
+            return
+        }
         for (value, button) in [(plan!, dateBtn!), (deadline!, ddlBtn!)] {
             var text = value.deadline ? "添加截止期限" : "添加日期/时间"
             if value.enabled.isOn {
-                let format = DateFormatter(); format.timeZone = .current; format.dateFormat = value.timed.isOn ? "MM-dd HH:mm" : "yyyy-MM-dd"
+                let format = DateFormatter(); format.timeZone = zone; format.dateFormat = value.timed.isOn ? "MM-dd HH:mm" : "yyyy-MM-dd"
                 var date = Date(timeIntervalSince1970: value.flds(zone)[value.deadline ? "deadline_at" : "due_at"] as! Double)
                 if value.deadline && !value.timed.isOn { var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone; date = calendar.date(byAdding: .day, value: -1, to: date)!; format.timeZone = zone }; text = format.string(from: date)
             }
@@ -260,6 +345,19 @@ final class TaskDate {
         let height = ceil(content) + max(44, actionRow?.bounds.height ?? 44) + 44
         if abs(preferredContentSize.height - height) > 1 { preferredContentSize.height = height }
     }
+    // 随标题、备注及动态字号调整快捷面板高度。
+    private func fitDraft() {
+        let size = CGSize(width: max(44, view.bounds.width - 32), height: 0)
+        dateFields?.fit(size.width)
+        let form = formStack.systemLayoutSizeFitting(size, withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel).height
+        let footer = actionRow?.systemLayoutSizeFitting(size, withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel).height ?? 44
+        let height = max(128, ceil(form + footer + 44))
+        if abs(preferredContentSize.height - height) > 1 {
+            preferredContentSize.height = height
+            // 让外层弹层在没有键盘事件时也收到尺寸变更。
+            navigationController?.preferredContentSize = preferredContentSize
+        }
+    }
     // 日期气泡复用同一月历。
     @objc private func chip() { clndr(dateBtn) }
     // 常律结束时刻和启用状态只写入当前编辑草稿。
@@ -287,15 +385,27 @@ final class TaskDate {
         advanced.isHidden.toggle(); detail.isHidden = false; rfrshDtl()
         if quick { preferredContentSize.height = UIScreen.main.bounds.height }
     }
-    // 显示备注输入。
-    @objc private func nts() { notes.isHidden = false; if quick && !routine { preferredContentSize.height = UIScreen.main.bounds.height }; if !quick { notesBtn.isHidden = true }; notes.becomeFirstResponder() }
+    // 普通待办再次点备注时收起输入并保留草稿。
+    @objc private func nts() {
+        if newTodo && !notes.isHidden {
+            if notes.isFirstResponder { titleField.becomeFirstResponder() }
+            if editingBeforeDate === notes { editingBeforeDate = titleField }
+            notes.isHidden = true
+        } else {
+            notes.isHidden = false
+            if !quick { notesBtn.isHidden = true }
+            notes.becomeFirstResponder()
+        }
+        if newTodo { rfrshDtl() }
+        view.setNeedsLayout()
+    }
     // 标题完成键只收起键盘，中文组词和备注仍按原生输入。
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
         if quick && textView === titleField && text == "\n" && textView.markedTextRange == nil { textView.resignFirstResponder(); return false }
         return true
     }
     // 记录文本修改并禁用空标题保存。
-    func textViewDidChange(_ textView: UITextView) { if textView === timezone {extraChg(timezone);return}; dirty.insert(textView === titleField ? "title" : "notes"); hint.isHidden = !titleField.text.isEmpty; view.setNeedsLayout(); rfrshSv() }
+    func textViewDidChange(_ textView: UITextView) { dirty.insert(textView === titleField ? "title" : "notes"); hint.isHidden = !titleField.text.isEmpty; view.setNeedsLayout(); rfrshSv() }
     // 为新建与编辑统一禁用空白标题保存。
     private func rfrshSv() { save.isEnabled = !saving && !titleField.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     // 记录独立日期修改。
@@ -308,32 +418,21 @@ final class TaskDate {
         }
         dirty.insert([plan.enabled, plan.timed, plan.date, plan.time].contains { $0 === control } ? "plan" : "deadline"); plan.rfrsh(); deadline.rfrsh(); rfrshDtl()
     }
-    // 保留绝对时刻与仅日期的当地日期。
-    @objc private func extraChg(_ field: UIView) {
-        let key = field === timezone ? "timezone_id" : "planned_duration"; dirty.insert(key)
-        if field === timezone {
-            extras[key] = timezone.text ?? ""
-            guard let next = TimeZone(identifier: timezone.text ?? ""), next != zone else { return }
-            var previous = Calendar(identifier: .gregorian); previous.timeZone = zone; var current = previous; current.timeZone = next
-            for value in [plan!, deadline!] {
-                var date = value.date.date
-                if value.enabled.isOn && !value.timed.isOn { date = current.date(from: previous.dateComponents([.year, .month, .day], from: date))!; dirty.insert(value.deadline ? "deadline" : "plan") }
-                else if value.enabled.isOn { date = Date(timeIntervalSince1970: value.flds(zone)[value.deadline ? "deadline_at" : "due_at"] as! Double) }
-                value.date.timeZone = next; value.time.timeZone = next; value.date.date = date; value.time.date = date
-            }
-            if routine {
-                let minute = (extras["routine_end"] as? NSNumber)?.intValue ?? 510
-                routineEnd.timeZone = next
-                routineEnd.date = current.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: plan.date.date)!
-            }
-            zone = next; rfrshDtl()
-        } else {
-            let text = duration.text ?? ""; let scanner = Scanner(string: text); let minutes = scanner.scanDouble()
-            extras[key] = text.isEmpty ? NSNull() : NSNumber(value: minutes != nil && scanner.isAtEnd ? minutes! * 60 : .nan)
-        }
+    // 保存预计时长供提交时验证。
+    @objc private func durChg() {
+        dirty.insert("planned_duration")
+        let text = duration.text ?? ""; let scanner = Scanner(string: text); let minutes = scanner.scanDouble()
+        extras["planned_duration"] = text.isEmpty ? NSNull() : NSNumber(value: minutes != nil && scanner.isAtEnd ? minutes! * 60 : .nan)
     }
     // 修改草稿星标。
     @objc private func star() { guard !routine else{return}; extras["starred"] = !((extras["starred"] as? NSNumber)?.boolValue ?? false); dirty.insert("starred"); rfrshDtl() }
+    // 在标题和备注下方展开或收起日期设置。
+    @objc private func openWindow() {
+        guard let dates = dateFields else { return }
+        dates.isHidden.toggle()
+        if dates.isHidden { dates.closePicker() }
+        rfrshDtl(); view.setNeedsLayout()
+    }
     // 打开系统月历，保留当前时刻。
     @objc private func clndr(_ sender: UIButton) {
         let value = sender === ddlBtn ? deadline! : plan!
@@ -445,9 +544,23 @@ final class TaskDate {
         do { try TaskStore.vldTxt(titleField.text ?? "", notes: notes.text ?? "") } catch { tu_err(self, error); return }
         var fields = task == nil ? draft : [:]
         if task == nil || dirty.contains("title") { fields["title"] = titleField.text ?? "" }; if task == nil || dirty.contains("notes") { fields["notes"] = notes.text ?? "" }
-        if task == nil { fields["timezone_id"] = extras["timezone_id"] }
+        if task == nil { fields["timezone_id"] = zone.identifier }
         if task == nil || dirty.contains("plan") { fields.merge(plan.flds(zone)) { _, new in new } }; if task == nil || dirty.contains("deadline") { fields.merge(deadline.flds(zone)) { _, new in new } }
-        for key in ["list_id", "parent_id", "starred", "urgency", "difficulty", "planned_duration", "timezone_id", "recurrence_type", "recurrence_interval", "recurrence", "routine_kind", "routine_end", "routine_enabled"] where dirty.contains(key) { fields[key] = extras[key] }
+        for key in ["list_id", "parent_id", "starred", "urgency", "difficulty", "planned_duration", "recurrence_type", "recurrence_interval", "recurrence", "routine_kind", "routine_end", "routine_enabled"] where dirty.contains(key) { fields[key] = extras[key] }
+        if newTodo {
+            guard let dates = dateFields else { return }
+            guard let windowEnd = dates.end else {
+                if dates.isHidden { openWindow() }
+                dates.selectDeadline()
+                return
+            }
+            let windowStart = dates.start
+            if let issue = TaskWindow.issue(windowStart, windowEnd, in: TaskWindow.calendar(zone)) { tu_err(self, TaskAI.err(issue)); return }
+            fields["due_at"] = windowStart.timeIntervalSince1970
+            fields["deadline_at"] = windowEnd.timeIntervalSince1970
+            fields["schedule_kind"] = "date"; fields["deadline_kind"] = "date"; fields["planning_mode"] = "window"
+            fields["urgency"] = (extras["starred"] as? NSNumber)?.boolValue == true ? 3 : 0
+        }
         if !routine && (task==nil || forceReview || !dirty.isDisjoint(with:["title","notes","plan","deadline","planned_duration","difficulty"])) {
             var input:TaskFields=[:]
             if let id=task?["task_id"] as? String{do{input=(try store.rdTsk(id) as! TaskFields).filter{TaskIntake.keys.contains($0.key)};input["task_id"]=id}catch{tu_err(self,error);return}}

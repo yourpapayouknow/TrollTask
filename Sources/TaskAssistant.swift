@@ -122,9 +122,9 @@ private final class TaskStepEdit:TaskScreen {
     // 生成结果仅替换草稿，服务错误立即提供手动入口。
     @objc private func gen() {
         if request != nil {stop();return};guard !saving else{return};view.endEditing(true)
-        let title=name.text?.trimmingCharacters(in:.whitespacesAndNewlines) ?? "",notes=goal.text ?? ""
-        guard !title.isEmpty || !notes.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{tu_err(self,TaskAI.err("请先填写任务目标"));return}
-        var input:TaskFields=["title":title,"notes":notes]
+        let title=name.text?.trimmingCharacters(in:.whitespacesAndNewlines) ?? ""
+        guard !title.isEmpty else{tu_err(self,TaskAI.err("请先填写任务目标"));return}
+        var input:TaskFields=["title":title]
         if let amount=sourceTask?["planned_duration"] as? NSNumber {input["total_minutes"]=Int(ceil(amount.doubleValue/60))}
         if let maxMinutes,maxMinutes>0 {input["max_minutes"]=maxMinutes}
         let token=UUID();generation=token
@@ -132,7 +132,7 @@ private final class TaskStepEdit:TaskScreen {
             DispatchQueue.main.async {guard let self,self.generation==token,self.view.window != nil else{return};self.request=nil;self.state()
                 if let error {let alert=UIAlertController(title:error.localizedDescription,message:nil,preferredStyle:.alert);alert.addAction(UIAlertAction(title:"继续编辑",style:.cancel));alert.addAction(UIAlertAction(title:"手动添加",style:.default){[weak self] _ in self?.add()});self.present(alert,animated:true);return}
                 guard let result=result as? TaskFields,let steps=result["steps"] as? [TaskFields] else{return}
-                self.name.text=result["title"] as? String;self.goal.text=result["notes"] as? String;self.parts=steps.map{var row=$0;row["task_id"]=UUID().uuidString.lowercased();return row};self.table.reloadData();self.state()
+                self.name.text=result["title"] as? String;self.parts=steps.map{var row=$0;row["task_id"]=UUID().uuidString.lowercased();return row};self.table.reloadData();self.state()
             }
         };state()
     }

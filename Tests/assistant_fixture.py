@@ -9,7 +9,7 @@ class Handler(SimpleHTTPRequestHandler):
  def do_POST(self):
   body=jld(self.rfile.read(int(self.headers['Content-Length'])))
   user=jld(body['messages'][-1]['content']);model=body['model']
-  with self.server.log.open('a') as output:output.write(jdmp({'model':model,'mode':user.get('mode'),'ddl':user.get('ddl',False)})+'\n')
+  with self.server.log.open('a') as output:output.write(jdmp({'model':model,'mode':user.get('mode'),'ddl':user.get('ddl',False),'has_notes':'"notes"' in jdmp(user)})+'\n')
   if user.get('mode')=='order':result={'order':[r['task_id'] for r in reversed(user['tasks'])]}
   else:
    urgent=user.get('ddl',False);total=user.get('total_minutes',45) if urgent else 60 if 'DDL' in user.get('title','') else 30

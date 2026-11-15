@@ -123,6 +123,23 @@ func tu_cell() -> UIListContentConfiguration {
     content.secondaryTextProperties.font=lb_fnt(.subheadline,nil);content.secondaryTextProperties.color=TaskTheme.muted;content.secondaryTextProperties.numberOfLines=0
     content.directionalLayoutMargins = .init(top:12,leading:16,bottom:12,trailing:16);content.imageToTextPadding=12;return content
 }
+// 使用同一组分档标签编辑待办属性。
+func tu_grade(_ key: String, _ prefix: String, _ rating: Int, selected: @escaping (Int) -> Void) -> UIButton {
+    let label = key == "urgency" ? "紧急程度" : "难易程度"
+    let titles = key == "urgency" ? ["未设置", "低", "中", "高"] : ["未评估", "简单", "一般", "困难"]
+    let button = tu_btn(label + "：" + titles[rating], "down")
+    button.accessibilityIdentifier = prefix + "." + key
+    button.menu = UIMenu(children: titles.enumerated().map { index, title in
+        let action = tu_act(title, nil, prefix + ".\(key).\(index)") { [weak button] in
+            selected(index)
+            var config = button?.configuration; config?.title = label + "：" + title; button?.configuration = config
+            (button?.menu?.children as? [UIAction])?.forEach { $0.state = $0.title == title ? .on : .off }
+        }
+        action.state = rating == index ? .on : .off
+        return action
+    }); button.showsMenuAsPrimaryAction = true
+    return button
+}
 // 创建同组内容的纵向布局。
 func tu_stk(_ views: [UIView]) -> UIStackView {
     let stack = UIStackView(arrangedSubviews: views); stack.axis = .vertical; stack.spacing = TaskTheme.gap; return stack
@@ -278,11 +295,11 @@ private final class TaskDockDelegate: NSObject, UIViewControllerTransitioningDel
 }
 
 // 显示具有自适应高度的原生面板。
-func tu_sheet(_ parent: UIViewController, _ content: UIViewController, compact: Bool = false) {
+func tu_sheet(_ parent: UIViewController, _ content: UIViewController, compact: Bool = false, completion: (() -> Void)? = nil) {
     content.overrideUserInterfaceStyle = parent.traitCollection.userInterfaceStyle
     content.modalPresentationStyle = compact ? .custom : .pageSheet
     if compact {
-        content.transitioningDelegate = TaskDockDelegate.shared; parent.present(content, animated: true); return
+        content.transitioningDelegate = TaskDockDelegate.shared; parent.present(content, animated: true, completion: completion); return
     }
     content.view.tintColor = lb_acnt()
     let sheet = content.sheetPresentationController
@@ -291,7 +308,7 @@ func tu_sheet(_ parent: UIViewController, _ content: UIViewController, compact: 
         let detent = UISheetPresentationController.Detent.custom(identifier: .init("content")) { [weak content] in min(content?.preferredContentSize.height ?? 0, $0.maximumDetentValue) }
         sheet?.detents = content is TaskMenu ? [detent] : [detent, .large()]
     }
-    sheet?.prefersGrabberVisible = !(content is TaskMenu); parent.present(content, animated: true)
+    sheet?.prefersGrabberVisible = !(content is TaskMenu); parent.present(content, animated: true, completion: completion)
     sheet?.preferredCornerRadius = 20
 }
 // 请求原生删除确认。

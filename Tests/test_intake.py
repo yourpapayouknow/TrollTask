@@ -1,5 +1,5 @@
 # 用真实SQLite与生产门禁验证创建前评估、离线和今日清单。
-from head import TemporaryDirectory, Path, jdmp, datetime, timezone, ThreadingHTTPServer, Thread, connect
+from head import TemporaryDirectory, Path, jdmp, jld, datetime, timezone, ThreadingHTTPServer, Thread, connect
 from test_cli import tstcmd
 from assistant_fixture import Handler
 
@@ -85,14 +85,16 @@ def network(root):
  def call(query,ok=True):
   inputpath.write_text(jdmp(query));return tstcmd(db,'ai',str(configpath),str(inputpath),success=ok)
  try:
-  base={'mode':'assessment','title':'网络协议验收','difficulty':0}
+  base={'mode':'assessment','title':'网络协议验收','difficulty':0,'notes':'本机备注','existing_steps':[{'title':'一步','notes':'本机步骤备注'}]}
   for difficulty,ddl,model in [(0,False,'deepseek-v4.1-flash'),(2,False,'glm-5.3'),(3,True,'glm-5.3')]:
    query=dict(base,difficulty=difficulty,ddl=ddl)
    if ddl:query['total_minutes']=45
    result=call(query);req(result['model']==model,'默认、复杂、DDL分别使用真实指定模型');req(result['ddl_verified']==ddl,'只有最高档DDL响应持有确认凭据')
   for variant in ['range','sum','negative','tool','model']:
    server.variant=variant;before=tstcmd(db,'snapshot');failure=call(base,False);req(failure['code']!=2,'无效结果和静默模型替换不能伪装离线');req(tstcmd(db,'snapshot')==before,'无效AI响应不修改数据库')
-  server.variant='';query={'mode':'order','difficulty':3,'tasks':[{'task_id':'a'},{'task_id':'b'}]};req(call(query)['order']==['b','a'],'日内AI排序返回完整原ID集合')
+  server.variant='';query={'mode':'order','difficulty':3,'tasks':[{'task_id':'a','notes':'日内备注'},{'task_id':'b'}]};req(call(query)['order']==['b','a'],'日内AI排序返回完整原ID集合')
+  call({'title':'拆分请求','notes':'本机拆分备注'})
+  req(all(not jld(record)['has_notes'] for record in server.log.read_text().splitlines()),'评估、拆分和排序请求均不携带用户备注')
   for variant in ['duplicate','foreign']:
    server.variant=variant;call(query,False);req(True,'重复或外来任务不能进入日内排序')
  finally:server.shutdown();worker.join();server.server_close()
@@ -136,6 +138,26 @@ def boundaries(root):
   req(connection.execute('SELECT schema_version FROM store_meta').fetchone()[0]==11,'迁移失败保留版本十一');req(not any(r[1]=='planning_mode' for r in connection.execute('PRAGMA table_info(tasks)')),'迁移失败回滚新增列');connection.execute('DROP TRIGGER fail_v12')
  req(tstcmd(migration,'schema')['schema_version']==13 and tstcmd(migration,'get',old['task_id'])['title']=='原任务','迁移恢复保留原身份与内容')
 
+# 通过真实事务校验整日窗口、最长天数、加星和备注保留。
+def calendar_days(root):
+ db=root/'calendar-days.db';day=datetime(2030,1,7,tzinfo=timezone.utc).timestamp();at=day+7*3600
+ seed(db,day)
+ fields={'title':'总目标','notes':'私有备注','due_at':day,'deadline_at':day+86400,'timezone_id':'UTC','schedule_kind':'date','deadline_kind':'date','planning_mode':'window','starred':True,'difficulty':2,'urgency':0}
+ ctx=lambda **changes:tstcmd(db,'intake',jdmp(dict(fields,**changes)),jdmp([]),str(at))
+ req(ctx(deadline_at=day+30*86400)['fields']['deadline_at']==day+30*86400,'最多允许30个自然日')
+ for invalid in [dict(deadline_at=day+31*86400),dict(due_at=day+3600)]:
+  error=tstcmd(db,'intake',jdmp(dict(fields,**invalid)),jdmp([]),str(at),success=False)
+  req(error['code']!=2,'拒绝第31天或非整日起点')
+ estimate={'minimum_minutes':15,'recommended_minutes':30,'maximum_minutes':45,'difficulty':3}
+ row=tstcmd(db,'admit',jdmp(ctx()),jdmp(estimate),'1800','false',str(at))
+ req(row['schedule_kind']==row['deadline_kind']=='date' and row['deadline_at']==day+86400,'同一天覆盖含截止日在内的完整一天')
+ req(row['starred']==1 and row['urgency']==3 and row['difficulty']==2 and row['notes']=='私有备注','手动加星保存高紧急度，保留所选难易度和备注')
+ alerts=tstcmd(db,'plan',str(at))['alerts']
+ req(any(alert['task_id']==row['task_id'] and alert['kind']=='deadline' and alert['scheduled_at']==day+86400 for alert in alerts),'整日任务在截止日结束时触发到期')
+ first=datetime(2030,10,15,4,tzinfo=timezone.utc).timestamp();last=datetime(2030,11,14,5,tzinfo=timezone.utc).timestamp()
+ local=dict(fields,due_at=first,deadline_at=last,timezone_id='America/New_York')
+ req(tstcmd(db,'intake',jdmp(local),'[]',str(first))['fields']['deadline_at']==last,'跨夏令时按当地日历而非固定小时数计30天')
+
 with TemporaryDirectory(prefix='trolltask-intake-') as folder:
- root=Path(folder);run(root);network(root);boundaries(root)
+ root=Path(folder);run(root);network(root);boundaries(root);calendar_days(root)
 print(f'创建评估专项通过：{checks}项')

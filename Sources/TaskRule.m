@@ -202,7 +202,7 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
     if (task[@"deadline_at"] == NSNull.null) return nil;
     NSCalendar *calendar = tr_cal(task);
     NSDate *deadline = [NSDate dateWithTimeIntervalSince1970:[task[@"deadline_at"] doubleValue]];
-    if ([task[@"deadline_kind"] isEqual:@"date"]) {
+    if ([task[@"deadline_kind"] isEqual:@"date"] && ![task[@"planning_mode"] isEqual:@"window"]) {
         NSDateComponents *day = [NSDateComponents new]; day.day = -1;
         deadline = [calendar dateByAddingComponents:day toDate:deadline options:0];
         deadline = [calendar dateBySettingHour:9 minute:0 second:0 ofDate:deadline options:0];

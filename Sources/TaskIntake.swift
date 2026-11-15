@@ -18,6 +18,14 @@
         if let old,old["status"] as? String != "needsAction" || (old["deleted"] as? NSNumber)?.boolValue==true{throw TaskAI.err("任务已处理或删除")}
         guard let start=task["due_at"] as? NSNumber,ts_num(start),let end=task["deadline_at"] as? NSNumber,ts_num(end),end.doubleValue>start.doubleValue,end.doubleValue>at,
               let zone=task["timezone_id"] as? String,TimeZone(identifier:zone) != nil else{throw TaskAI.err("请设置开始和结束")}
+        if TaskWindow.dayOnly(task), let timezone = TimeZone(identifier: zone) {
+            let calendar = TaskWindow.calendar(timezone)
+            let first = Date(timeIntervalSince1970: start.doubleValue)
+            let last = Date(timeIntervalSince1970: end.doubleValue)
+            guard first == calendar.startOfDay(for: first), last == calendar.startOfDay(for: last) else { throw TaskAI.err("请选择整天") }
+            if let issue = TaskWindow.issue(first, last, in: calendar) { throw TaskAI.err(issue) }
+            if old == nil, (task["starred"] as? NSNumber)?.boolValue == true { task["urgency"] = 3 }
+        }
         let snapshot=try store.snapshot() as! TaskFields
         if let id,(snapshot["history"] as! [TaskFields]).contains(where:{$0["task_id"] as? String==id && ["presented","snoozed"].contains($0["status"] as? String ?? "")}){throw TaskAI.err("请先处理当前提醒")}
         let doneIDs=Set((snapshot["tasks"] as! [TaskFields]).filter{$0["status"] as? String=="completed"}.map{$0["task_id"] as! String})
@@ -96,8 +104,12 @@
             guard ["ready","offline"].contains(verdict["state"] as! String) else{throw TaskAI.err(verdict["reason"] as! String)}
             if ddl {guard (estimate["ddl_verified"] as? Bool)==true,!parts.isEmpty else{throw TaskAI.err("请先取得DDL拆分")}}
             fields["planned_duration"]=effort+((ctx["completed_effort"] as? NSNumber)?.doubleValue ?? 0)
-            if let difficulty=estimate["difficulty"] as? NSNumber{fields["difficulty"]=difficulty};if ddl{fields["urgency"]=3}
-            if (fields["recurrence"] as? [String] ?? []).isEmpty {fields["planning_mode"]="window";fields["schedule_kind"]="timed";fields["deadline_kind"]="timed"}
+            if (fields["difficulty"] as? NSNumber)?.intValue ?? 0 == 0, let difficulty = estimate["difficulty"] as? NSNumber { fields["difficulty"] = difficulty }
+            if ddl { fields["urgency"] = 3 }
+            if (fields["recurrence"] as? [String] ?? []).isEmpty {
+                if !TaskWindow.dayOnly(fields) { fields["schedule_kind"] = "timed"; fields["deadline_kind"] = "timed" }
+                fields["planning_mode"] = "window"
+            }
             if existing {try store.updTsk(id,fields:fields)} else {_ = try store.crtTsk(fields,uuid:id)}
             if !parts.isEmpty {let expected=try TaskDivision.drft(store,task:id);_ = try TaskDivision.aply(store,task:id,parts:parts as NSArray,expected:expected)}
             if var parent=fields["parent_id"] as? String {
@@ -113,5 +125,47 @@
         var review=try store.review(task) as! TaskFields
         if let signature=review["signature"] as? [TaskFields],NSDictionary(dictionary:["rows":signature]).isEqual(to:["rows":try sig(store,task)]) {return review as NSDictionary}
         review["state"]="stale";return review as NSDictionary
+    }
+}
+
+// 普通待办使用包含截止日在内的整日窗口。
+enum TaskWindow {
+    static func calendar(_ zone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        return calendar
+    }
+
+    static func start(_ now: Date, in calendar: Calendar) -> Date {
+        let day = calendar.startOfDay(for: now)
+        return calendar.component(.hour, from: now) < 8 ? day : end(day, in: calendar)
+    }
+
+    static func end(_ deadline: Date, in calendar: Calendar) -> Date {
+        calendar.startOfDay(for: calendar.date(byAdding: .day, value: 1, to: deadline)!)
+    }
+
+    static func deadline(_ end: Date, in calendar: Calendar) -> Date {
+        calendar.date(byAdding: .day, value: -1, to: end)!
+    }
+
+    static func dayOnly(_ task: TaskFields) -> Bool {
+        task["planning_mode"] as? String == "window"
+            && task["schedule_kind"] as? String == "date" && task["deadline_kind"] as? String == "date"
+    }
+
+    static func issue(_ start: Date, _ end: Date, in calendar: Calendar) -> String? {
+        if end <= start { return "截止日早于起始日" }
+        if calendar.date(byAdding: .day, value: 30, to: start).map({ end > calendar.startOfDay(for: $0) }) != false { return "任务最多30天" }
+        return nil
+    }
+
+    // 未完成且未手动加星的总任务使用时间过半指示。
+    static func halfway(_ task: TaskFields) -> Double? {
+        guard dayOnly(task), task["status"] as? String == "needsAction", task["parent_id"] is NSNull,
+              (task["starred"] as? NSNumber)?.boolValue != true,
+              let start = (task["due_at"] as? NSNumber)?.doubleValue,
+              let end = (task["deadline_at"] as? NSNumber)?.doubleValue, end > start else { return nil }
+        return start + (end - start) / 2
     }
 }
