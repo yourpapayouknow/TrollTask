@@ -92,7 +92,7 @@ static void ut_save(void) {
     ut_ui(^{back=ut_find(ut_surface(),@"edit.save").hidden;});
     ut_tap(back ? @"edit.back" : @"edit.save");
 }
-// 为新建普通待办点选并确认当前截止日。
+// 为新建普通待办点选并确认当前截止日期。
 static void ut_win_done(void) {
     ut_tap(@"window.choose");ut_tap(@"window.done");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController;},@"整日窗口返回创建草稿");
@@ -704,7 +704,7 @@ static void ut_edit(void) {
     NSDictionary *pending = [ut_store crtTsk:@{@"title":@"待修改计时",@"due_at":@(oldTime),@"deadline_at":@(oldTime+7200),@"urgency":@3,@"difficulty":@2,@"starred":@1,@"planned_duration":@90000,@"timezone_id":@"UTC"} error:nil];
     NSString *pendingID = pending[@"task_id"]; ut_edt(pending); ut_tap(@"edit.more");
     ut_ui(^{
-        ut_req([[(UITextField *)ut_find(ut_top().view,@"edit.duration") text] isEqual:@"1500"] && !ut_find(ut_top().view,@"edit.timezone"),@"预计投入回填，详情无时区输入");
+        ut_req([[(UITextField *)ut_find(ut_top().view,@"edit.duration") text] isEqual:@"1500"] && !ut_find(ut_top().view,@"edit.timezone"),@"预计分钟回填，详情无时区输入");
         ut_req([[(UIButton *)ut_find(ut_top().view,@"edit.urgency") configuration].title isEqual:@"紧急程度：高"] && [[(UIButton *)ut_find(ut_top().view,@"edit.difficulty") configuration].title isEqual:@"难易程度：一般"],@"紧急难度回填");
         ut_req([(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"plan.timed") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.timed") isOn],@"计划和独立截止开关回填");
         UIDatePicker *plan = (UIDatePicker *)ut_find(ut_top().view,@"plan.time"), *ddl = (UIDatePicker *)ut_find(ut_top().view,@"deadline.time");

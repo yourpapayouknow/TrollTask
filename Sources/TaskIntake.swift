@@ -91,7 +91,7 @@
         if let end=durations.isEmpty ? finish(future,target):fit(future,durations){result["suggested_end"]=end}
         return result as NSDictionary
     }
-    // 事务核对旧修订、重新计算时间，再一次性保存父子任务与评估。
+    // 事务核对既有修订、重新计算时间，再一次性保存父子任务与评估。
     @objc(commit:context:estimate:effort:ddl:at:error:) static func cmt(_ store:TaskStore,context:NSDictionary,estimate:NSDictionary,effort:Double,ddl:Bool,at:Double)throws->NSDictionary {
         let ctx=context as! TaskFields,id=ctx["task_id"] as! String;var output:TaskFields?
         try store.wrTxn {pointer in do {
@@ -120,7 +120,7 @@
         } catch{pointer?.pointee=error as NSError;return false}}
         return output! as NSDictionary
     }
-    // 把旧任务或修改后的评估明确标成待补评估。
+    // 把既有任务或修改后的评估明确标成待补评估。
     @objc(review:task:error:) static func review(_ store:TaskStore,task:String)throws->NSDictionary {
         var review=try store.review(task) as! TaskFields
         if let signature=review["signature"] as? [TaskFields],NSDictionary(dictionary:["rows":signature]).isEqual(to:["rows":try sig(store,task)]) {return review as NSDictionary}
@@ -128,7 +128,7 @@
     }
 }
 
-// 普通待办使用包含截止日在内的整日窗口。
+// 普通待办使用包含截止日期在内的整日窗口。
 enum TaskWindow {
     static func calendar(_ zone: TimeZone) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -155,7 +155,7 @@ enum TaskWindow {
     }
 
     static func issue(_ start: Date, _ end: Date, in calendar: Calendar) -> String? {
-        if end <= start { return "截止日早于起始日" }
+        if end <= start { return "截止日期早于起始日期" }
         if calendar.date(byAdding: .day, value: 30, to: start).map({ end > calendar.startOfDay(for: $0) }) != false { return "任务最多30天" }
         return nil
     }

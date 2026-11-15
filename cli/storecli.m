@@ -3,7 +3,7 @@
 // 返回命令参数错误。
 static id ts_bad(NSError **error) {
     if (error) *error = [NSError errorWithDomain:@"com.iwmei.taskforiwmei.cli" code:2
-        userInfo:@{NSLocalizedDescriptionKey: @"参数无效，命令见docs/archive/phases/PHASE03.md", @"kind": @"invalid_fields"}];
+        userInfo:@{NSLocalizedDescriptionKey: @"参数无效，命令见 cli/trolltask.zsh", @"kind": @"invalid_fields"}];
     return nil;
 }
 

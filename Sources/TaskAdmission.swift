@@ -43,7 +43,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         };let begin=dateRows[0],finish=dateRows[1]
         var controls: [UIView] = [tu_stk([tu_lbl("标题"), name])]
         if !newTodo { controls.append(tu_stk([tu_lbl("说明"), notes])) }
-        controls += [tu_stk([tu_lbl(dayOnly ? "起始日" : "开始时间"), begin]), tu_stk([tu_lbl(dayOnly ? "截止日" : "结束时间"), finish])]
+        controls += [tu_stk([tu_lbl(dayOnly ? "起始日期" : "开始时间"), begin]), tu_stk([tu_lbl(dayOnly ? "截止日期" : "结束时间"), finish])]
         if newTodo {
             let starred = (fields["starred"] as? NSNumber)?.boolValue == true
             if starred {
@@ -55,19 +55,19 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
             }
             controls.append(tu_grade("difficulty", "intake", (fields["difficulty"] as? NSNumber)?.intValue ?? 0) { [weak self] in self?.fields["difficulty"] = $0; self?.chg() })
         }
-        controls += [tu_stk([tu_lbl(newTodo ? "预计分钟" : "投入分钟"), minutes]), check, steps, detail, adopt, offline, single, rules, save]
+        controls += [tu_stk([tu_lbl("预计分钟"), minutes]), check, steps, detail, adopt, offline, single, rules, save]
         _ = tu_form(self, tu_stk(controls), "intake.content")
         let settings=tu_ibtn("settings","助手设置","intake.settings",self,#selector(settings));navigationItem.rightBarButtonItem=UIBarButtonItem(customView:settings);render()
     }
     // 按原生测量值更新日期宽度，覆盖日期和动态字号变化。
     override func viewDidLayoutSubviews(){super.viewDidLayoutSubviews();for (picker,width) in zip([start,startTime,end,endTime],dateWidths){let value=max(44,picker.sizeThatFits(.zero).width);if abs(width.constant-value)>0.1{width.constant=value}};if dayOnly{return};for (index,row) in dateRows.enumerated(){let vertical=dateWidths[index*2].constant+dateWidths[index*2+1].constant+TaskTheme.gap>row.bounds.width;row.axis=vertical ? .vertical:.horizontal;row.alignment=vertical ? .leading:.center;row.arrangedSubviews.last?.isHidden=vertical}}
-    // 返回编辑后主动丢弃旧容量与估时结果。
+    // 返回编辑后主动丢弃上一轮容量与估时结果。
     override func viewWillAppear(_ animated:Bool){super.viewWillAppear(animated);navigationController?.setNavigationBarHidden(false,animated:false);navigationController?.presentationController?.containerView?.setNeedsLayout()}
     // 离开时取消请求，保存事务期间禁止返回。
     override func viewWillDisappear(_ animated:Bool){super.viewWillDisappear(animated);if phase != .saving {cancel()}}
     // 撤销网络代次而不修改用户草稿。
     private func cancel(){ticket=UUID();request?.cancel();request=nil;if phase == .checking{phase = .editing};if isViewLoaded{render()}}
-    // 输入变化使评估失效，迟到响应不能覆写手动内容。
+    // 输入变化使评估失效，迟到响应被丢弃。
     @objc private func chg(){view.setNeedsLayout();cancel();context=nil;estimate=nil;ddl=false;phase = .editing;offline.isHidden = !lastOffline;render()}
     // 工时只重新进行本地匹配判断。
     @objc private func budget(){ddl=false;render()}
@@ -105,7 +105,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         save.isEnabled = !busy && ["ready","offline","ddl"].contains(state ?? "");var button=save.configuration;button?.title=state=="ddl" ? "确认赶DDL":fields["task_id"] == nil ? "确认创建":"保存评估";save.configuration=button
         save.accessibilityValue=result?["reason"] as? String ?? "等待评估"
     }
-    // 普通任务先快速评估，复杂结果只升级一次；DDL使用最高服务档。
+    // 普通待办先快速评估，复杂结果只升级一次；DDL使用最高服务档。
     @objc private func evaluate(){if phase == .checking{cancel();return};escalated=false;ddl=false;run(false)}
     // 先读一致上下文再发请求；整个过程不提前创建正式任务。
     private func run(_ urgent:Bool){
@@ -141,7 +141,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     }
     // 采用推荐工时和实际可到达的结束时刻后重新评估。
     @objc private func suggest(){guard let result=verdict() else{return};minutes.text=String(Int((result["recommended"] as! NSNumber).doubleValue/60));if let value=result["suggested_end"] as? NSNumber{end.date=suggestedDay(value);endTime.date=end.date};chg()}
-    // 结束恰好到日界时仍展示前一天为截止日。
+    // 结束恰好到日界时仍展示前一天为截止日期。
     private func suggestedDay(_ value: NSNumber) -> Date { Date(timeIntervalSince1970: value.doubleValue - (dayOnly ? 1 : 0)) }
     // 编辑草稿步骤，不用临时父任务污染正式数据库。
     @objc private func editParts(){if !(fields["recurrence"] as? [String] ?? []).isEmpty{tu_err(self,TaskAI.err("请先改为单次任务"));return};cancel();let suggestions=parts.isEmpty ? estimate?["steps"] as? [TaskFields] ?? []:parts;let rows=suggestions.map{row->TaskFields in var row=row;if row["task_id"]==nil{row["task_id"]=UUID().uuidString.lowercased()};return row}

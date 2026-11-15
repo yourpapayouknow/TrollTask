@@ -1,4 +1,4 @@
-// 将本地日程展开为区间，提醒仍由原Occurrence状态机处理。
+// 将本地日程展开为区间，提醒仍由原轮次状态机处理。
 static NSString *ta_key(NSDictionary *task, NSNumber *cycle) {
     return [NSString stringWithFormat:@"%@/%@/%@",task[@"task_id"],task[@"reminder_version"],cycle];
 }
@@ -132,7 +132,7 @@ static NSDictionary *ta_plan(NSDictionary *snapshot, double stamp, NSString *zon
                     end = finish.timeIntervalSince1970;
                 }
                 if (!routine && start >= lo && start < hi && !ts_num(task[@"planned_duration"])) {
-                    [conflicts addObject:@{@"task":task,@"reason":@"固定任务缺少预计用时"}]; continue;
+                    [conflicts addObject:@{@"task":task,@"reason":@"固定安排缺少预计分钟"}]; continue;
                 }
                 if (start >= hi) break;
                 if (end <= lo || (!templates && !routine && ta_expired(task,cycle,history))) continue;

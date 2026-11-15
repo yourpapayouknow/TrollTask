@@ -102,7 +102,7 @@ final class TaskRtnPicker:NSObject,UIDocumentPickerDelegate {
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { importing = false; clear() }
 }
 
-// 周期模板只在显式管理入口展示，不混入每日时间轴。
+// 周期模板只在显式管理入口展示，不混入今日律。
 final class TaskRoutineRules: TaskScreen, UITableViewDataSource, UITableViewDelegate {
     private let store: TaskStore, table = UITableView(frame: .zero, style: .plain)
     private var rows: [TaskFields] = []

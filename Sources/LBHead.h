@@ -182,10 +182,6 @@ CGRect lb_hudfrm(CGRect screen, UIEdgeInsets insets, UIInterfaceOrientation orie
 
 // 读取共享配置文件。
 NSDictionary *lb_ldcfg(void);
-// 识别仅用于有界真机诊断的安装包。
-BOOL lb_dbg(void);
-// 用进程级期限保证主线程挂住时仍能退出。
-void lb_dbgarm(unsigned int seconds);
 
 // 保存共享配置文件。
 BOOL lb_svcfg(NSDictionary *config);

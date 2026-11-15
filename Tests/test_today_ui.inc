@@ -51,12 +51,12 @@ static void ut_tdy(void) {
     ut_ui(^{UIDocumentPickerViewController *picker=(UIDocumentPickerViewController *)ut_top();[picker.delegate documentPickerWasCancelled:picker];[picker dismissViewControllerAnimated:NO completion:nil];});
     ut_wait(^BOOL{return ut_find(ut_surface(),@"home.more") && !ut_top().presentedViewController;},@"取消导入返回常律管理");ut_req([ut_store lsTsks:nil].count==importCount,@"取消导入不写任务");
     NSURL *file=[NSURL fileURLWithPath:[ut_docs stringByAppendingPathComponent:@"calendar-scope.md"]];
-    ut_req([@"## 周一\n1. 7:00~7:30 日历入口导入验收\n" writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil],@"创建独立时间表夹具");
+    ut_req([@"# TrollTask常律模板v1\n## 周一\n- 07:00~07:30 [工作] 日历入口导入验收\n" writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil],@"创建独立时间表夹具");
     ut_tap(@"home.more");ut_wait(^BOOL{return ut_find(ut_surface(),@"rules.import")!=nil;},@"常律菜单保留导入入口");ut_tap(@"rules.import");ut_wait(^BOOL{return [ut_top()isKindOfClass:UIDocumentPickerViewController.class] && !ut_top().isBeingPresented;},@"常律导入可再次打开");
     ut_ui(^{UIDocumentPickerViewController *picker=(UIDocumentPickerViewController *)ut_top();[picker.delegate documentPicker:picker didPickDocumentsAtURLs:@[file]];});
-    ut_wait(^BOOL{return [ut_top()isKindOfClass:UIAlertController.class] && [ut_top().title isEqual:@"已导入草稿"] && !ut_top().isBeingPresented;},@"常律导入仍沿用原事务成功返回");
+    ut_wait(^BOOL{return [ut_top()isKindOfClass:UIAlertController.class] && [ut_top().title isEqual:@"已导入常律"] && !ut_top().isBeingPresented;},@"常律导入仍沿用原事务成功返回");
     NSDictionary *imported=nil;for(NSDictionary *row in [ut_store lsTsks:nil])if([row[@"title"]isEqual:@"日历入口导入验收"])imported=row;
-    ut_req(imported && ![imported[@"routine_enabled"]boolValue],@"导入常律仍为禁用草稿");ut_ui(^{[ut_top()dismissViewControllerAnimated:NO completion:nil];});ut_req([ut_store delTsk:imported[@"task_id"] error:nil],@"清理独立导入夹具");
+    ut_req(imported && [imported[@"routine_enabled"]boolValue],@"导入常律直接启用");ut_ui(^{[ut_top()dismissViewControllerAnimated:NO completion:nil];});ut_req([ut_store delTsk:imported[@"task_id"] error:nil],@"清理独立导入夹具");
     ut_wait(^BOOL{return [ut_top()isKindOfClass:TaskHome.class] && !ut_top().presentedViewController;},@"导入结果退出后回到常律首页");
     ut_ui(^{ut_req(!ut_find(ut_surface(),@"agenda.timeline"),@"常律管理不混入执行时间轴");ut_req(!ut_find(ut_top().view,@"home.agenda"),@"常律清单隐藏首页日历");ut_req(ut_nav.viewControllers.count==1,@"导入退出仍停留常律首页");[ut_nav popToRootViewControllerAnimated:NO];});ut_home();
     ut_edt(work);ut_ui(^{ut_req(!ut_find(ut_surface(),@"edit.star") && !ut_find(ut_surface(),@"edit.complete") && !ut_find(ut_surface(),@"edit.series"),@"常律详情只有编辑而无星标或完成操作");[ut_nav popToRootViewControllerAnimated:NO];});ut_home();

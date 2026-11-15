@@ -2,12 +2,12 @@
 enum TaskAIConfig {
     // 读取现有Tailscale服务与可选认证。
     static func ld()->TaskFields {
-        // 只迁移旧默认档，用户后续仍可修改每档真实模型ID。
+        // 只迁移既有默认档，用户后续仍可修改每档真实模型ID。
         if UserDefaults.standard.integer(forKey:"assistant.tiers")==0 {if UserDefaults.standard.string(forKey:"assistant.model")=="fast-model"{UserDefaults.standard.set("deepseek-v4.1-flash",forKey:"assistant.model")};UserDefaults.standard.set(1,forKey:"assistant.tiers")}
         let key=(try? TaskKeychain.rd("assistant")).flatMap{String(data:$0,encoding:.utf8)} ?? ""
         return ["endpoint":UserDefaults.standard.string(forKey:"assistant.endpoint") ?? "http://100.121.131.101:8765/v1","model":UserDefaults.standard.string(forKey:"assistant.model") ?? "deepseek-v4.1-flash","hard_model":UserDefaults.standard.string(forKey:"assistant.hard_model") ?? "glm-5.3","ddl_model":UserDefaults.standard.string(forKey:"assistant.ddl_model") ?? "glm-5.3","key":key]
     }
-    // 先验证连接信息再保存，认证失败不覆盖旧密钥。
+    // 先验证连接信息再保存，认证失败保留原密钥。
     static func sv(_ config:TaskFields) throws {
         _ = try TaskAI.req(["goal":"验证设置"],config)
         let key=config["key"] as? String ?? ""
@@ -101,7 +101,7 @@ private final class TaskStepEdit:TaskScreen {
     override func viewDidAppear(_ animated:Bool) { super.viewDidAppear(animated);if automatic && !started && parts.isEmpty {started=true;gen()} }
     // 退出或转入手动编辑时取消迟到结果。
     override func viewWillDisappear(_ animated:Bool) { super.viewWillDisappear(animated);stop() }
-    // 用户修改输入即取消旧建议，迟到结果不能覆盖手动编辑。
+    // 用户修改输入即取消上一轮建议，迟到结果被丢弃。
     @objc private func chg() {stop()}
     // 备注输入与手动步骤使用同一取消规则。
     func textViewDidChange(_ textView:UITextView) {stop()}

@@ -43,7 +43,7 @@ static void rv_store(NSString *path) {
         rv_req(task!=nil,error.localizedDescription);
         if ([kind isEqual:@"fixed"]) rv_req([store cmplTsk:task[@"task_id"] error:nil],@"设置已处理模板夹具");
     }
-    rv_req([store crtTsk:@{@"title":@"已停用",@"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_enabled":@0,@"routine_end":@660,@"due_at":@(start+3600),@"recurrence_type":@"daily",@"timezone_id":@"UTC"} error:nil]!=nil,@"设置未启用夹具");
+    rv_req([store crtTsk:@{@"title":@"已停用",@"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_enabled":@0,@"routine_end":@660,@"due_at":@(start+3600),@"recurrence_type":@"daily",@"timezone_id":@"UTC"} error:nil]!=nil,@"设置已停用夹具");
     [store crtTsk:@{@"title":@"普通任务",@"due_at":@(start),@"planned_duration":@600} error:nil];
     long long revision=[store revision:nil];
     NSArray *page=[store rtnDays:day-86400 count:7 zone:@"UTC" error:nil];

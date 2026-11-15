@@ -324,7 +324,7 @@ private final class TaskArchiveDetail: TaskScreen {
         navigationController?.pushViewController(TaskProofScreen(store: store, occurrence: id), animated: true)
     }
 
-    // 恢复指定普通任务，旧完成记录仍可追溯。
+    // 恢复指定普通待办，完成记录仍可追溯。
     @objc private func restoreTask() {
         do { try store.rstrArc(row["entry_id"] as? String); bck() }
         catch { tu_err(self, error) }

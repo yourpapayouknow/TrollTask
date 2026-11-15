@@ -36,7 +36,7 @@ static void ut_todo_create(void) {
         UIButton *clock=(UIButton *)ut_find(page,@"edit.date");
         ut_req((clock.accessibilityTraits & UIAccessibilityTraitSelected) && ![clock.configuration.baseForegroundColor isEqual:idleDate],@"展开时钟后图标显示选中态");
         CGRect a=[start convertRect:start.bounds toView:page],b=[end convertRect:end.bounds toView:page];
-        ut_req(fabs(CGRectGetMaxX(a)-CGRectGetMaxX(b))<1 && CGRectGetMinY(b)>=CGRectGetMaxY(a),@"起始日与截止日对齐且不重叠");
+        ut_req(fabs(CGRectGetMaxX(a)-CGRectGetMaxX(b))<1 && CGRectGetMinY(b)>=CGRectGetMaxY(a),@"起始日期与截止日期对齐且不重叠");
         UIScrollView *form=(UIScrollView *)ut_find(page,@"edit.form");
         ut_req(form.bounds.size.height-form.contentSize.height<36,@"内联时间表单没有大段空白");
         ut_req([ut_find(page,@"edit.title") isFirstResponder] && ut_find(page,@"window.picker").hidden,@"只展开日期行不收起键盘");
@@ -65,7 +65,7 @@ static void ut_todo_create(void) {
     ut_tap(@"edit.star");
     ut_ui(^{ut_req([ut_find(draft.view,@"edit.star").accessibilityValue isEqual:@"紧急程度高"],@"手动星标表示高紧急度");});
     ut_tap(@"edit.save");
-    ut_wait(^BOOL{return ut_top()==draft && !ut_find(draft.view,@"window.picker").hidden;},@"按下一步前须在原地选择截止日");
+    ut_wait(^BOOL{return ut_top()==draft && !ut_find(draft.view,@"window.picker").hidden;},@"按下一步前须在原地选择截止日期");
     ut_ui(^{UIDatePicker *picker=(UIDatePicker *)ut_find(draft.view,@"window.picker");
         NSDate *start=picker.date;UIButton *done=(UIButton *)ut_find(draft.view,@"window.done");
         ut_req(picker.datePickerMode==UIDatePickerModeDate && done.isEnabled,@"同日截止有效，截止仅选日期");

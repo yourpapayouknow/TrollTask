@@ -81,8 +81,8 @@ static void ut_lprep(void) {
     if(!reopen){
         NSURL *url=[NSBundle.mainBundle URLForResource:@"WeeklyRoutine" withExtension:@"json"];
         NSDictionary *document=[NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfURL:url] options:0 error:nil];
-        NSDictionary *draft=[TaskRoutineImport parse:document[@"text"] source:@"legacy-weekly.md" anchor:NSDate.date zone:NSTimeZone.localTimeZone.name error:&issue];
-        NSDictionary *imported=draft ? [ut_store importRtns:draft error:&issue] : nil;ut_req(imported!=nil,issue.localizedDescription ?: @"原版本禁用草稿夹具");
+        NSDictionary *imported=[TaskRoutineImport formal:ut_store document:document anchor:NSDate.date zone:NSTimeZone.localTimeZone.name error:&issue];
+        ut_req(imported!=nil,issue.localizedDescription ?: @"正式常律夹具");
         NSDictionary *task=[ut_store crtTsk:@{@"title":@"保留原任务"} error:&issue];ut_req(task!=nil,issue.localizedDescription ?: @"原任务夹具");
         state[@"ordinary"]=task[@"task_id"];state[@"rules"]=@([document[@"entries"] count]);state[@"drafts"]=imported[@"added"];state[@"started_at"]=@(NSDate.date.timeIntervalSince1970);
         ut_req([[NSJSONSerialization dataWithJSONObject:state options:0 error:nil] writeToFile:statePath atomically:YES],@"持久化首次启动夹具");

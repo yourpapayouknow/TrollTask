@@ -150,10 +150,10 @@ def calendar_days(root):
   req(error['code']!=2,'拒绝第31天或非整日起点')
  estimate={'minimum_minutes':15,'recommended_minutes':30,'maximum_minutes':45,'difficulty':3}
  row=tstcmd(db,'admit',jdmp(ctx()),jdmp(estimate),'1800','false',str(at))
- req(row['schedule_kind']==row['deadline_kind']=='date' and row['deadline_at']==day+86400,'同一天覆盖含截止日在内的完整一天')
+ req(row['schedule_kind']==row['deadline_kind']=='date' and row['deadline_at']==day+86400,'同一天覆盖含截止日期在内的完整一天')
  req(row['starred']==1 and row['urgency']==3 and row['difficulty']==2 and row['notes']=='私有备注','手动加星保存高紧急度，保留所选难易度和备注')
  alerts=tstcmd(db,'plan',str(at))['alerts']
- req(any(alert['task_id']==row['task_id'] and alert['kind']=='deadline' and alert['scheduled_at']==day+86400 for alert in alerts),'整日任务在截止日结束时触发到期')
+ req(any(alert['task_id']==row['task_id'] and alert['kind']=='deadline' and alert['scheduled_at']==day+86400 for alert in alerts),'整日任务在截止日期结束时触发到期')
  first=datetime(2030,10,15,4,tzinfo=timezone.utc).timestamp();last=datetime(2030,11,14,5,tzinfo=timezone.utc).timestamp()
  local=dict(fields,due_at=first,deadline_at=last,timezone_id='America/New_York')
  req(tstcmd(db,'intake',jdmp(local),'[]',str(first))['fields']['deadline_at']==last,'跨夏令时按当地日历而非固定小时数计30天')

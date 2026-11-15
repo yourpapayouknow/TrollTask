@@ -28,7 +28,7 @@
     // 创建安全区中的可滚动详情与固定操作入口。
     override func viewDidLoad() {
         super.viewDidLoad(); overrideUserInterfaceStyle = .dark; view.accessibilityIdentifier = "hud.fullscreen"
-        // 复用原工程的居中原生磨砂卡片。
+        // 复用现有HUD的居中原生磨砂卡片。
         view.isOpaque = false; view.tintColor = lb_acnt()
         card.accessibilityIdentifier = "hud.card"
         card.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(card)
@@ -184,14 +184,14 @@
         }
         let confirm = !proofs.isEmpty, back = choiceButtons.last!
         var config = back.configuration; config?.image = lb_icon(confirm ? "check_circle" : "back"); back.configuration = config
-        back.accessibilityLabel = confirm ? "正式完成任务" : "返回"
+        back.accessibilityLabel = confirm ? "提交并完成当前任务" : "返回"
         for button in choiceButtons { button.isEnabled = !busy && !loading }
         let upload = choiceButtons[1]; upload.isEnabled = !busy && !loading && proofs.count < Int(TS_ATT_MAX)
         upload.accessibilityHint = "最多6个附件，已选\(proofs.count)个"
         var source = upload.configuration; source?.showsActivityIndicator = loading; upload.configuration = source
         view.setNeedsLayout()
     }
-    // 结束旧轮次的触摸与原生来源菜单。
+    // 结束上一轮次的触摸与原生来源菜单。
     private func cncl() {
         for button in [done, delay, sidebar] + choiceButtons + attachmentButtons {
             button?.cancelTracking(with: nil); button?.contextMenuInteraction?.dismissMenu()
@@ -208,7 +208,7 @@
                     && ($0["deleted"] as? NSNumber)?.boolValue == false && ($0["reminder_version"] as? NSNumber) == (row["generation"] as? NSNumber) }
         }.sorted { (($0["hold_until"] as? NSNumber)?.doubleValue ?? .infinity) < (($1["hold_until"] as? NSNumber)?.doubleValue ?? .infinity) }.first
     }
-    // 显示同一轮次的完整标题、说明和原计划时刻。
+    // 显示标题、说明及当前时刻（实际安排或原计划）。
     @objc(display:error:) func dsp(_ value: NSDictionary?, error: NSError?) {
         guard !stopped else { return }; loadViewIfNeeded(); let previous = id, wasPreview = previewing
         if value == nil, error != nil, mode != 0 { busy = false; done.isEnabled = true; sidebar.isEnabled = true; stt("重试打卡"); lay(); return }
@@ -315,7 +315,7 @@
         let picker = PHPickerViewController(configuration: config); picker.overrideUserInterfaceStyle = .dark; picker.delegate = self; picker.isModalInPresentation = true; picker.modalPresentationStyle = .fullScreen
         present(picker, animated: true)
     }
-    // 接收系统照片选择结果，过时意图不能完成下一条提醒。
+    // 接收系统照片选择结果，过期意图被拒绝。
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         guard let id = pickingID, !results.isEmpty else { picker.dismiss(animated: true) { [weak self] in self?.capEnd(nil) }; return }
         guard results.count <= captureLimit - proofs.count else { stt("最多6个附件"); capEnd("最多6个附件"); return }
@@ -466,7 +466,7 @@
         if let token { do { try reminder?.captureStore?.delCap(token); notify_post(TS_CAPTURE_NOTE) } catch { NSLog("采集清理失败：%@", error as NSError) } }
         stt(issue ?? "提交"); selecting = choosing; lay(); windowMode?(mode)
     }
-    // 创建隔离的内存Occurrence，不覆盖真实提醒或边栏。
+    // 创建隔离的内存轮次，不覆盖真实提醒或边栏。
     @objc(preview) func prvw() {
         guard !stopped, !previewing, alert == nil, held == nil else { return }; loadViewIfNeeded(); previewing = true
         testOccurrence = ["occurrence_id": UUID().uuidString, "task_id": "test", "occurrence_at": Date().timeIntervalSince1970, "status": "presented"] as NSDictionary

@@ -25,7 +25,7 @@
 - (NSInteger)schver:(NSError **)error;
 // 将多个存储操作作为同一事务提交。
 - (BOOL)wrTxn:(BOOL (NS_NOESCAPE ^)(NSError **))work error:(NSError **)error;
-// 创建稳定UUID的任务清单。
+// 创建稳定UUID的清单。
 - (NSDictionary *)crtLst:(NSString *)title error:(NSError **)error;
 // 修改清单名称。
 - (BOOL)updLst:(NSString *)listID title:(NSString *)title error:(NSError **)error;
@@ -45,11 +45,11 @@
 + (NSTimeInterval)nextExpiry:(NSTimeInterval)stamp zone:(NSString *)zone;
 // 只在内存中预览禁用常律，不启动提醒。
 - (NSDictionary *)draftDay:(NSTimeInterval)stamp zone:(NSString *)zone now:(NSTimeInterval)now error:(NSError **)error;
-// 事务导入原文和禁用草稿，重复导入不覆盖用户修改。
+// 事务创建正式常律；重复导入不覆盖用户修改。
 - (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error;
-// 事务固化已核验的正式周表，并归档原文对应的旧草稿。
+// 事务创建已核验的正式常律（与 importRtns 同实现）。
 - (NSDictionary *)applyRtns:(NSDictionary *)document error:(NSError **)error;
-// 按最新快照原子安排当天普通任务，保留已呈现和已到期轮次。
+// 按最新快照原子安排当天普通待办，保留已呈现和已到期轮次。
 - (BOOL)arrangeAt:(NSTimeInterval)stamp zone:(NSString *)zone error:(NSError **)error;
 // 计算窗口内扣除现有安排后的真实工作空档。
 - (NSDictionary *)roomAt:(NSTimeInterval)start until:(NSTimeInterval)end zone:(NSString *)zone excluding:(NSArray *)ids now:(NSTimeInterval)now error:(NSError **)error NS_SWIFT_NAME(room(start:end:zone:excluding:now:));
@@ -78,7 +78,7 @@
 - (BOOL)rstrTsk:(NSString *)taskID error:(NSError **)error;
 // 按实际下一次提醒时间读取所有未完成且未删除任务。
 - (NSArray *)lsPnd:(NSError **)error;
-// 复用已读取的调度快照以构建未完成任务列表。
+// 复用已读取的调度快照以构建未完成任务。
 + (NSArray *)pndRows:(NSDictionary *)snapshot;
 // 独立读取未删除的已完成任务。
 - (NSArray *)lsCmpl:(NSError **)error;

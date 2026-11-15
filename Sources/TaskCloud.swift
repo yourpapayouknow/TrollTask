@@ -14,7 +14,7 @@ enum TaskCloudKind: String, CaseIterable, Codable {
     var isDAV: Bool { self == .baidu || self == .dav }
 }
 
-// 用稳定的服务身份保留旧归档的下载能力。
+// 用稳定的服务身份保留既有归档的下载能力。
 struct TaskCloudAccount: Codable {
     var id = UUID().uuidString.lowercased()
     let kind: TaskCloudKind
@@ -46,7 +46,7 @@ struct TaskCloudConfig: Codable {
     private(set) var selected: String?
     private var priority: [String]?
 
-    // 兼容旧版默认账户，并预留百度和OneDrive的顺序。
+    // 保留已选默认账户，并预留百度和OneDrive的顺序。
     var archiveOrder: [String] {
         if let priority { return priority }
         let legacy = accounts.first { $0.id == selected }

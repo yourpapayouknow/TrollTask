@@ -27,7 +27,7 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
     return parallel ? "background" : "fixed"
 }
 
-// 解析时间表，解析结果只能作为禁用草稿导入。
+// 迁移测试专用解析器；严格模板入口使用 load。
 @objc(TaskRoutineImport) final class TaskRoutineImport: NSObject {
     // 展开周模板、显式异步及有时刻的套装，原文完整随结果返回。
     @objc(parse:source:anchor:zone:error:) static func parse(_ text: String, source: String, anchor: Date, zone: String) throws -> NSDictionary {
@@ -136,9 +136,9 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
     // 导出可直接编辑的标准Markdown模板。
     @objc static func template() -> String {
         let days = ["一", "二", "三", "四", "五", "六", "日"]
-        return "# TrollTask常律模板v1\n# 每行：- 开始~结束 [固定/工作/休息/并行] 标题\n# 使用24小时制；结束早于开始表示次日；起止不得相同。\n# 每周重复；不同行不可重叠；工作占位会自动避让；并行内容写在同一行。\n# 删除示例后填写，不用的日期可留空。\n\n" + days.map { "## 周" + $0 + "\n- 08:00~08:30 [固定] 早餐\n" }.joined(separator: "\n")
+        return "# TrollTask常律模板v1\n# 每行：- 开始~结束 [固定=固定安排/工作=一般任务时段/休息=休息/并行=可并行安排] 标题\n# 使用24小时制；结束早于开始表示次日；起止不得相同。\n# 每周重复；不同行不可重叠；工作占位会自动避让；并行内容写在同一行。\n# 删除示例后填写，不用的日期可留空。\n\n" + days.map { "## 周" + $0 + "\n- 08:00~08:30 [固定] 早餐\n" }.joined(separator: "\n")
     }
-    // 严格逐行校验模板，禁止跳过错误行或导入半成品。
+    // 严格逐行校验模板，任一错误行整批拒绝。
     @objc(load:source:anchor:zone:error:) static func load(_ text: String, source: String, anchor: Date, zone: String) throws -> NSDictionary {
         let rows = text.components(separatedBy: .newlines), days = ["一", "二", "三", "四", "五", "六", "日"]
         let roles = ["固定":"fixed", "工作":"work", "休息":"rest", "并行":"background"]

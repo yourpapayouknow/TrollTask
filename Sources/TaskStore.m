@@ -727,7 +727,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 // 恢复指定任务的待办状态。
 - (BOOL)rstrTsk:(NSString *)taskID error:(NSError **)error { return [self updTsk:taskID fields:@{@"status": @"needsAction"} error:error]; }
 
-// 读取独立的完成任务列表。
+// 读取独立的完成任务。
 - (NSArray *)lsCmpl:(NSError **)error {
     NSArray *all = [self lsTsks:error]; if (!all) return nil;
     NSMutableArray *result = [NSMutableArray array];
@@ -735,7 +735,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
     return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"completed_at"] compare:a[@"completed_at"]]; }];
 }
 
-// 归档显示完成当时的字段，恢复只对应当前普通任务状态。
+// 归档显示完成当时的字段，恢复只对应当前普通待办状态。
 - (NSArray *)arcRows:(NSError **)error {
     @synchronized(self) {
         return [self qry:"SELECT a.*, (a.routine_kind='none' AND t.deleted=0 AND t.status='completed' "
@@ -1032,7 +1032,8 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
             || ([action isEqual:@"snooze"] && (!ts_num(until) || until.doubleValue <= NSDate.date.timeIntervalSince1970)))
             return [self dbErr:SQLITE_MISMATCH message:@"提醒动作或延后时间无效" error:failure];
         NSDictionary *occ = [self qry:"SELECT * FROM reminder_occurrences WHERE occurrence_id=?" values:@[occID.lowercaseString] error:failure].firstObject;
-        if (!occ || ![occ[@"status"] isEqual:@"presented"]) return [self dbErr:SQLITE_NOTFOUND message:@"提醒不存在或已处理" error:failure];
+        if (!occ) return [self dbErr:SQLITE_NOTFOUND message:@"提醒不存在" error:failure];
+        if (![occ[@"status"] isEqual:@"presented"]) return [self dbErr:SQLITE_NOTFOUND message:@"提醒已处理" error:failure];
         NSDictionary *task = [self rdTsk:occ[@"task_id"] error:failure];
         if (!task) return NO;
         if ([task[@"deleted"] boolValue] || ![task[@"status"] isEqual:@"needsAction"] || ![task[@"reminder_version"] isEqual:occ[@"generation"]])
@@ -1140,7 +1141,7 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
         if (![item isKindOfClass:NSDictionary.class]) return ts_err(error,SQLITE_MISMATCH,@"附件无效");
         NSString *method=item[@"method"]; NSData *image=item[@"image"];
         if (![method isKindOfClass:NSString.class] || ![@[@"camera",@"screenshot",@"image",@"file"] containsObject:method] || ![image isKindOfClass:NSData.class]
-            || image.length>20*1024*1024) return ts_err(error,SQLITE_MISMATCH,@"打卡附件或方式无效");
+            || image.length>20*1024*1024) return ts_err(error,SQLITE_MISMATCH,@"附件或方式无效");
         // 普通文件保留原始内容，不能按图片解码或转换。
         if ([method isEqual:@"file"]) {
             if (!ts_txt(item[@"name"],1024) || !ts_txt(item[@"content_type"],255)) return ts_err(error,SQLITE_MISMATCH,@"文件信息无效");
@@ -1352,7 +1353,7 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
     snapshot[@"tasks"] = tasks; return ta_plan(snapshot,stamp,zone,now,error);
 }
 
-// 共用原文导入事务，正式周表仅首次写入，后续保留用户编辑。
+// 共用原文导入事务，正式常律仅首次写入，后续保留用户编辑。
 - (NSDictionary *)rtnDoc:(NSDictionary *)document active:(BOOL)active error:(NSError **)error {
     __block NSUInteger added = 0, skipped = 0, archived = 0;
     BOOL success = [self wrTxn:^BOOL(NSError **failure) {
@@ -1396,7 +1397,7 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
 
 // 通用Markdown整批验证并创建正式常律。
 - (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:YES error:error]; }
-// 已核验的周表使用同一导入实现与唯一数据库。
+// 已核验的常律使用同一导入实现与唯一数据库。
 - (NSDictionary *)applyRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:YES error:error]; }
 
 // 只在存在启用的一般任务时段时自动安排，重复读取不写入相同结果。
@@ -1425,7 +1426,7 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
     } error:error];
 }
 
-// 创建普通任务清单。
+// 创建普通清单。
 - (NSDictionary *)crtLst:(NSString *)title error:(NSError **)error {
     __block NSDictionary *row = nil;
     BOOL success = [self wrTxn:^BOOL(NSError **failure) {

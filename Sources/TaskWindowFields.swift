@@ -1,4 +1,4 @@
-// 在普通待办草稿内编辑起始日和截止日。
+// 在普通待办草稿内编辑起始日期和截止日期。
 final class TaskWindowFields: UIStackView {
     private let calendar: Calendar
     private let formatter = DateFormatter()
@@ -38,7 +38,7 @@ final class TaskWindowFields: UIStackView {
         confirm.addTarget(self, action: #selector(selectDate), for: .touchUpInside)
         status.accessibilityIdentifier = "window.error"
         status.textColor = TaskTheme.danger
-        rows = [tu_row("起始日", startButton), tu_row("截止日", deadlineButton)]
+        rows = [tu_row("起始日期", startButton), tu_row("截止日期", deadlineButton)]
         (rows + [picker, confirm, status]).forEach(addArrangedSubview)
         refresh()
     }

@@ -23,12 +23,6 @@ extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *attr, uid
 extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *attr, uid_t gid);
 #endif
 
-// 仅诊断安装包启用限时HUD，正常包没有此标记。
-BOOL lb_dbg(void) { return [NSBundle.mainBundle.infoDictionary[@"TTHUDDebug"] boolValue]; }
-
-// 默认SIGALRM由系统结束进程，不依赖触摸或主RunLoop。
-void lb_dbgarm(unsigned int seconds) { signal(SIGALRM, SIG_DFL); alarm(seconds); }
-
 // 生成经过边界校验的配置，保留外观选择0至2。
 static NSDictionary *lb_normcfg(NSDictionary *input) {
     id enabled = [input isKindOfClass:NSDictionary.class] ? input[@"enabled"] : nil;

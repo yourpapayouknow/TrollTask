@@ -71,9 +71,6 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
     if (!ctl || ctl.hudWindow.hidden) return;
     AXEventRepresentation *rep = [s_lbaxcls representationWithHIDEvent:event hidStreamIdentifier:@"UIApplicationEvents"];
     if (!rep) return;
-    // 诊断版仅记录前20个输入，核对实际硬件阶段和路径身份。
-    static unsigned int traces = 0;
-    if (lb_dbg() && traces++ < 20) NSLog(@"TTDBG HID down=%d move=%d lift=%d rangeLift=%d cancel=%d pointer=%ld point=%@", [rep isTouchDown], [rep isMove], [rep isLift], [rep isInRangeLift], [rep isCancel], (long)[[[[rep handInfo] paths] firstObject] pathIdentity], NSStringFromCGPoint([rep location]));
     UITouchPhase phase = [rep isCancel] ? UITouchPhaseCancelled : ([rep isTouchDown] ? UITouchPhaseBegan : ([rep isMove] ? UITouchPhaseMoved : UITouchPhaseEnded));
     if (phase == UITouchPhaseEnded && ![rep isLift] && ![rep isInRangeLift]) return;
     CGPoint global = [rep location];
@@ -84,9 +81,6 @@ static void lb_onhidevt(void *target, void *refcon, void *service, void *event) 
         if (window.hidden || !window) return;
         CGPoint local = [window convertPoint:global fromWindow:nil];
         UIView *hit = [window hitTest:local withEvent:nil];
-        // 少量命中记录区分坐标、硬件输入与UIKit按钮分发。
-        static unsigned int hits = 0;
-        if (lb_dbg() && hits++ < 20) NSLog(@"TTDBG hit phase=%ld id=%ld local=%@ view=%@", (long)phase, (long)pointer, NSStringFromCGPoint(local), hit.accessibilityIdentifier ?: NSStringFromClass(hit.class));
         NSNumber *identity = @(pointer);
         if (phase == UITouchPhaseBegan) {
             if (!hit) return;
@@ -284,8 +278,6 @@ static void lb_hudrun(UIApplication *app) {
 
 // 运行长期TaskReminder服务，主App只负责启动和提交数据。
 int lb_hudmain(int argc, char **argv) {
-    // 诊断版最多占用屏幕30秒，系统信号保证UI失灵时也有退路。
-    if (lb_dbg()) { lb_dbgarm(30); NSLog(@"TTDBG HUD armed30"); }
     NSError *error = nil;
     lb_reminder = [[TaskReminder alloc] initAt:TS_DB_PATH handler:^(NSDictionary *alert, NSError *failure) {
         [s_lbhudctl dspAlrt:alert error:failure];

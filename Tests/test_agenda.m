@@ -30,7 +30,7 @@ static void ag_day(NSString *path) {
     ag_req([plan[@"conflicts"] count]==0,@"工作占位避让具体安排");ag_req([plan[@"allocations"] count]==2,@"只安排能放下的两个任务");
     ag_req([ag_find(plan[@"allocations"],a[@"task_id"])[@"start_at"] doubleValue]==day+9*3600,@"按既有顺序安排任务A");
     ag_req([ag_find(plan[@"allocations"],b[@"task_id"])[@"start_at"] doubleValue]==day+10.5*3600,@"任务B整项跨过用餐占用");
-    ag_req(ag_find(plan[@"allocations"],c[@"task_id"])==nil && [plan[@"unplaced"] count]==2,@"超容量和无预计用时明确列出");
+    ag_req(ag_find(plan[@"allocations"],c[@"task_id"])==nil && [plan[@"unplaced"] count]==2,@"超容量和无预计分钟明确列出");
     ag_req([plan[@"draft_count"] integerValue]==1,@"停用事项不占时间也不提醒");
     ag_req([s arrangeAt:now zone:@"UTC" error:nil],@"同库原子安排成功");long long revision=[s revision:nil];
     ag_req([s arrangeAt:now zone:@"UTC" error:nil] && [s revision:nil]==revision,@"重复事件不反复写入或发送通知");

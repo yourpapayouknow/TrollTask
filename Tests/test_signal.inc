@@ -25,7 +25,7 @@ static void ut_signal(void) {
     ut_ui(^{
         UIStackView *traits=(UIStackView *)ut_find(hud.view,@"hud.traits");
         ut_req(!traits.hidden && traits.arrangedSubviews.count==3,@"HUD展示紧急难度和投入");
-        ut_req([[(UILabel *)traits.arrangedSubviews.lastObject text] isEqual:@"预计25分钟"],@"预计投入与原字段一致");
+        ut_req([[(UILabel *)traits.arrangedSubviews.lastObject text] isEqual:@"预计25分钟"],@"预计分钟与原字段一致");
         for(NSNumber *large in @[@NO,@YES]) for(NSValue *size in @[[NSValue valueWithCGSize:CGSizeMake(320,693)],[NSValue valueWithCGSize:CGSizeMake(375,812)],[NSValue valueWithCGSize:CGSizeMake(768,1024)]]) {
             [host setOverrideTraitCollection:[UITraitCollection traitCollectionWithPreferredContentSizeCategory:large.boolValue?UIContentSizeCategoryAccessibilityExtraExtraExtraLarge:UIContentSizeCategoryLarge] forChildViewController:hud];
             window.frame=(CGRect){CGPointZero,size.CGSizeValue};host.view.frame=window.bounds;hud.view.frame=host.view.bounds;

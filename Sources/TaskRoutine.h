@@ -1,10 +1,10 @@
 #pragma once
-// 解析旧版Markdown并保留原文，正式导入使用严格模板。
+// 解析Markdown并保留原文；正式导入使用严格模板。
 @interface TaskRoutineImport : NSObject
 + (NSString *)template;
 + (NSDictionary *)load:(NSString *)text source:(NSString *)source anchor:(NSDate *)anchor zone:(NSString *)zone error:(NSError **)error;
 + (NSDictionary *)parse:(NSString *)text source:(NSString *)source anchor:(NSDate *)anchor zone:(NSString *)zone error:(NSError **)error;
-// 固化结构化周表，验证七天区间并从下一未来时段开始。
+// 固化结构化常律模板，验证七天区间并从下一未来时段开始。
 + (NSDictionary *)formal:(TaskStore *)store document:(NSDictionary *)document anchor:(NSDate *)anchor zone:(NSString *)zone error:(NSError **)error;
 @end
 

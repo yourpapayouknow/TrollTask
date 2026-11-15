@@ -295,12 +295,12 @@ final class TaskDate {
             if let dates = dateFields {
                 let calendar = TaskWindow.calendar(zone)
                 let format = DateFormatter(); format.timeZone = zone; format.dateFormat = "MM-dd"
-                dateBtn.accessibilityValue = format.string(from: dates.start) + (dates.end.map { "至" + format.string(from: TaskWindow.deadline($0, in: calendar)) } ?? "，待选截止日")
+                dateBtn.accessibilityValue = format.string(from: dates.start) + (dates.end.map { "至" + format.string(from: TaskWindow.deadline($0, in: calendar)) } ?? "，待选截止日期")
             }
             return
         }
         for (value, button) in [(plan!, dateBtn!), (deadline!, ddlBtn!)] {
-            var text = value.deadline ? "添加截止期限" : "添加日期/时间"
+            var text = value.deadline ? "添加截止日期" : "添加日期/时间"
             if value.enabled.isOn {
                 let format = DateFormatter(); format.timeZone = zone; format.dateFormat = value.timed.isOn ? "MM-dd HH:mm" : "yyyy-MM-dd"
                 var date = Date(timeIntervalSince1970: value.flds(zone)[value.deadline ? "deadline_at" : "due_at"] as! Double)
@@ -411,7 +411,7 @@ final class TaskDate {
     // 记录独立日期修改。
     @objc func dtChg(_ control: UIControl) {
         if routine { plan.enabled.isOn = true; plan.timed.isOn = true }
-        // 两个清除日期入口共用规则，不能留下无日期的重复草稿。
+        // 两个清除日期入口共用规则，日期与重复一起清除。
         if control === plan.enabled && !plan.enabled.isOn {
             extras["recurrence_type"] = "none"; extras["recurrence_interval"] = 1; extras["recurrence"] = [String]()
             dirty.formUnion(["recurrence_type", "recurrence_interval", "recurrence"])
@@ -469,7 +469,7 @@ final class TaskDate {
                 let action = tu_act(list["title"] as? String ?? "", nil, id) { [weak self] in self?.extras["list_id"] = id; self?.dirty.insert("list_id"); self?.rfrshDtl() }
                 action.state = id == extras["list_id"] as? String ? .on : .off
                 if action.state != .on && (!(extras["recurrence"] as! [String]).isEmpty || !(extras["parent_id"] is NSNull)) { action.attributes = .disabled }; return action
-            }; tu_menu(self, "任务清单", actions, caption: "将任务移至")
+            }; tu_menu(self, "清单", actions, caption: "将任务移至")
         } catch { tu_err(self, error) }
     }
     // 刷新子任务入口并读取点击时的最新记录。
@@ -588,7 +588,7 @@ final class TaskDate {
             }
         }
     }
-    // 保存后替换旧编辑页，返回时不会显示拆分前的过时快照。
+    // 保存后替换编辑页，返回时显示最新快照。
     private func finish() {
         saved?()
         if splitAfterSave, let id = task?["task_id"] as? String, let nav = navigationController { var pages = nav.viewControllers; if pages.last === self { pages.removeLast(); pages.append(TaskAssistantScreen(store: store, taskID: id)); nav.setViewControllers(pages, animated: true) } } else { cncl() }

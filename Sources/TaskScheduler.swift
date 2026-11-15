@@ -33,7 +33,7 @@
     }
     // 在调度队列上读取或修改状态。
     private func qsyn<T>(_ work: () -> T) -> T { DispatchQueue.getSpecific(key: key) == nil ? queue.sync(execute: work) : work() }
-    // 解除旧计时并拒绝已经排队的旧回调。
+    // 解除上一轮计时并拒绝已排队回调。
     private func clr() { ticket += 1; timer?.cancel(); timer = nil; fire = nil }
     // 安排一次墙上时钟唤醒，回调后再核对NSDate。
     private func arm(_ date: Date) {
@@ -97,7 +97,7 @@
         }
         publication = work; DispatchQueue.main.async(execute: work)
     }
-    // 故障时清除旧提醒并采用独立有界退避恢复。
+    // 故障时清除既有提醒并采用独立有界退避恢复。
     private func err(_ error: NSError) {
         onPlan?(nil, false, error)
         reminders.clr(); faults += 1; pub(nil, error)
@@ -216,7 +216,7 @@
             catch { self.pub(self.active, error as NSError) }
         }
     }
-    // 停止后拒绝旧计时和已排队的展示结果。
+    // 停止后拒绝上一轮计时和已排队的展示结果。
     @objc(stop) func stp() {
         qsyn {
             running = false; epoch += 1; queued = false;reopening=false; clr(); reminders.clr()

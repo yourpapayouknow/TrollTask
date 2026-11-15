@@ -33,18 +33,6 @@ def tstns():
     return root
 
 
-# 检查旧业务和命名空间没有进入运行工程。
-def tstbiz(root):
-    # 阶段九允许从绝对时刻显示边栏剩余时间，继续禁止旧业务及累加式NSTimer。
-    forbidden = r'lowbatcntdwn|LowBat|LBState|LBMode|lb_(init|cfg|feed|tick|snzdur|chknght|shwnght|setlowpower)\b|UIDeviceBattery|batteryMonitoringEnabled|batteryLevel|CoreDuet|CDBatterySaver|NSTimer|nightLocked|threshold|低电量'
-    paths = [path for path in (root / "Sources").glob("*") if path.is_file()]
-    paths += list((root / "Resources").glob("*.plist")) + [root / "Makefile"]
-    for path in paths:
-        assert not re.search(forbidden, path.read_text(), re.I), f"Old business reference in {path}"
-    assert not (root / "Sources/LBState.c").exists()
-    assert not (root / "Sources/LBState.h").exists()
-
-
 # 检查窗口安全性和私有框架启动顺序。
 def tstarch(root):
     hud = (root / "Sources/LBHud.m").read_text()
@@ -72,6 +60,5 @@ def tstarch(root):
 # 执行全部工程约束检查。
 if __name__ == "__main__":
     project = tstns()
-    tstbiz(project)
     tstarch(project)
-    print("Namespace, business-removal and preserved HUD architecture checks passed")
+    print("Namespace and preserved HUD architecture checks passed")

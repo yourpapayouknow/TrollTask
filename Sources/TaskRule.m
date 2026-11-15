@@ -113,7 +113,7 @@ static void tr_add(NSMutableSet *values, icalcomponent *component, struct icalti
     @synchronized(self) {
         icalcomponent *component = tr_comp(task, error);
         if (!component) return NO;
-        // 活跃系列的结束边界不得早于起点，旧记录仍可完成或删除。
+        // 活跃系列的结束边界不得早于起点，既有记录仍可完成或删除。
         if (![task[@"deleted"] boolValue] && ![task[@"status"] isEqual:@"completed"]) {
             for (icalproperty *property = icalcomponent_get_first_property(component, ICAL_RRULE_PROPERTY); property;
                  property = icalcomponent_get_next_property(component, ICAL_RRULE_PROPERTY)) {

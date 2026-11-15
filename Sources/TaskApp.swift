@@ -25,7 +25,7 @@
         rstr()
         return true
     }
-    // 正式周表进入唯一数据库，幂等标记保留后续用户编辑。
+    // 正式常律进入唯一数据库，幂等标记保留后续用户编辑。
     @discardableResult private func seed() -> Bool {
         guard let store, seededPath != store.path else { return false }
         do {

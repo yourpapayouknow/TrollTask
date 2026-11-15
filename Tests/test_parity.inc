@@ -71,7 +71,7 @@ static void ut_prty(void) {
     ut_wait(^BOOL{return ut_find(ut_top().view,@"list.name")!=nil;},@"新建列表进入独立输入页");
     NSUInteger count=[ut_store lsLsts:nil].count;
     ut_ui(^{
-        ut_req(![ut_top() isKindOfClass:UIAlertController.class] && [ut_top().title isEqual:@"新建任务列表"],@"输入页有独立导航标题");ut_req(ut_nav.viewControllers.count==2,@"菜单连点只打开一个名称页");
+        ut_req(![ut_top() isKindOfClass:UIAlertController.class] && [ut_top().title isEqual:@"新建清单"],@"输入页有独立导航标题");ut_req(ut_nav.viewControllers.count==2,@"菜单连点只打开一个名称页");
         ut_req(![(UIButton *)ut_top().navigationItem.rightBarButtonItem.customView isEnabled],@"空名称禁用完成");
         UITextField *field=(UITextField *)ut_find(ut_top().view,@"list.name");field.text=@"   ";[field sendActionsForControlEvents:UIControlEventEditingChanged];
         ut_req(![(UIButton *)ut_top().navigationItem.rightBarButtonItem.customView isEnabled],@"纯空格不能创建列表");
@@ -79,7 +79,7 @@ static void ut_prty(void) {
     });
     ut_req([ut_store lsLsts:nil].count==count,@"返回输入页不会写入草稿");
     ut_tap(@"home.newlist");
-    ut_wait(^BOOL{return [ut_top().title isEqual:@"新建任务列表"] && ut_find(ut_top().view,@"list.name")!=nil && !ut_nav.transitionCoordinator;},@"页签新建输入页就绪");
+    ut_wait(^BOOL{return [ut_top().title isEqual:@"新建清单"] && ut_find(ut_top().view,@"list.name")!=nil && !ut_nav.transitionCoordinator;},@"页签新建输入页就绪");
     ut_ui(^{UITextField *field=(UITextField *)ut_find(ut_top().view,@"list.name");field.text=@"新列表验收";[field sendActionsForControlEvents:UIControlEventEditingChanged];});
     ut_ui(^{UIButton *done=(UIButton *)ut_top().navigationItem.rightBarButtonItem.customView;[done sendActionsForControlEvents:UIControlEventTouchUpInside];[done sendActionsForControlEvents:UIControlEventTouchUpInside];});
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskHome.class] && [ut_store lsLsts:nil].count==count+1;},@"连续两次完成只创建一次并返回首页");
@@ -89,7 +89,7 @@ static void ut_prty(void) {
     ut_wait(^BOOL{return [ut_find(ut_window,[@"list." stringByAppendingString:created]).accessibilityValue isEqual:@"已选中"];},@"创建后自动选择新列表");
     ut_tap(@"home.more");ut_tap(@"list.rename");
     ut_wait(^BOOL{return ut_find(ut_top().view,@"list.name")!=nil;},@"重命名输入页就绪");
-    ut_ui(^{UITextField *field=(UITextField *)ut_find(ut_top().view,@"list.name");ut_req([field.text isEqual:@"新列表验收"] && [ut_top().title isEqual:@"重命名任务列表"],@"重命名进入预填名称的同一输入页");field.text=@"重命名验收";[field sendActionsForControlEvents:UIControlEventEditingChanged];});
+    ut_ui(^{UITextField *field=(UITextField *)ut_find(ut_top().view,@"list.name");ut_req([field.text isEqual:@"新列表验收"] && [ut_top().title isEqual:@"重命名清单"],@"重命名进入预填名称的同一输入页");field.text=@"重命名验收";[field sendActionsForControlEvents:UIControlEventEditingChanged];});
     ut_req([ut_store delLst:created error:nil],@"外部删除本轮重命名夹具");ut_tap(@"list.done");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:UIAlertController.class];},@"保存失败显示真实数据库错误");
     ut_ui(^{[ut_top() dismissViewControllerAnimated:NO completion:nil];});

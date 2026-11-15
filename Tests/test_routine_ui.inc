@@ -35,15 +35,15 @@ static void ut_rtn(void) {
     ut_req([[routine[@"recurrence"] firstObject] containsString:@"BYDAY=MO,TU,WE,TH,FR"],@"常律工作日复用原重复规则");
     ut_tap(@"home.more");ut_tap(@"rules.import");ut_wait(^BOOL{return [ut_top() isKindOfClass:UIDocumentPickerViewController.class] && !ut_top().isBeingPresented;},@"时间表使用原生文件选择器");
     ut_ui(^{UIDocumentPickerViewController *picker=(UIDocumentPickerViewController *)ut_top();[picker.delegate documentPickerWasCancelled:picker];[ut_top() dismissViewControllerAnimated:NO completion:nil];});
-    NSString *text=@"## 周一\n1. 7:00~7:30 界面导入草稿\n";
+    NSString *text=@"# TrollTask常律模板v1\n## 周一\n- 07:00~07:30 [工作] 界面导入常律\n";
     NSURL *file=[NSURL fileURLWithPath:[ut_docs stringByAppendingPathComponent:@"ui-routines.md"]];
     ut_req([text writeToURL:file atomically:YES encoding:NSUTF8StringEncoding error:nil],@"创建独立导入文本夹具");
     ut_tap(@"home.more");ut_tap(@"rules.import");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:UIDocumentPickerViewController.class] && !ut_top().isBeingPresented;},@"导入文件选择器就绪");
     ut_ui(^{UIDocumentPickerViewController *picker=(UIDocumentPickerViewController *)ut_top();[picker.delegate documentPicker:picker didPickDocumentsAtURLs:@[file]];});
-    ut_wait(^BOOL{return [ut_top() isKindOfClass:UIAlertController.class] && [ut_top().title isEqual:@"已导入草稿"];},@"文件选择交回后异步导入并显示结果");
-    NSDictionary *imported=nil;for(NSDictionary *row in [ut_store lsTsks:nil])if([row[@"title"] isEqual:@"界面导入草稿"])imported=row;
-    ut_req(imported && ![imported[@"routine_enabled"] boolValue],@"UI导入不自动启用真实提醒");
+    ut_wait(^BOOL{return [ut_top() isKindOfClass:UIAlertController.class] && [ut_top().title isEqual:@"已导入常律"];},@"文件选择交回后异步导入并显示结果");
+    NSDictionary *imported=nil;for(NSDictionary *row in [ut_store lsTsks:nil])if([row[@"title"] isEqual:@"界面导入常律"])imported=row;
+    ut_req(imported && [imported[@"routine_enabled"] boolValue],@"UI导入直接启用正式常律");
     ut_ui(^{[ut_top() dismissViewControllerAnimated:NO completion:nil];});
     ut_req([ut_store delTsk:imported[@"task_id"] error:nil],@"清理界面导入夹具");
     NSDictionary *unknown=[ut_store crtTsk:@{@"title":@"结束待确认",@"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_enabled":@0,@"due_at":routine[@"due_at"],@"recurrence_type":@"daily"} error:nil];ut_req(unknown!=nil,@"建立未知结束草稿");
@@ -51,7 +51,7 @@ static void ut_rtn(void) {
     ut_wait(^BOOL{return ut_find(ut_surface(),@"agenda.problem.0") && !ut_nav.transitionCoordinator;},@"未确认时段从常律选项可达");
     ut_tap(@"agenda.problem.0");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_nav.transitionCoordinator;},@"待处理行可进入原编辑器");
-    ut_ui(^{ut_req(ut_find(ut_surface(),@"edit.complete").hidden,@"未启用草稿不显示无效完成按钮");});
+    ut_ui(^{ut_req(ut_find(ut_surface(),@"edit.complete").hidden,@"已停用草稿不显示无效完成按钮");});
     ut_ui(^{UISwitch *enabled=(UISwitch *)ut_find(ut_surface(),@"routine.enabled");enabled.on=YES;[enabled sendActionsForControlEvents:UIControlEventValueChanged];});ut_save();
     ut_wait(^BOOL{return [ut_top() isKindOfClass:UIAlertController.class];},@"缺失结束时间不能仅开开关启用");
     ut_req([ut_store rdTsk:unknown[@"task_id"] error:nil][@"routine_end"]==NSNull.null,@"无效启用保持草稿原值");

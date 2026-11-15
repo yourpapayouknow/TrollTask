@@ -138,7 +138,7 @@ final class TaskCell: UITableViewCell {
             let first=(task["routine_group_first"] as? Bool)==true,disabled=(task["routine_enabled"] as? NSNumber)?.boolValue != true
             let format=DateFormatter();format.dateFormat="HH:mm"
             let time=(task["routine_fire_at"] as? NSNumber).map{format.string(from:Date(timeIntervalSince1970:$0.doubleValue))}
-            day.text=first ? (disabled ? "未启用":nil):time.map{$0+(disabled ? "·未启用":"")};day.isHidden=day.text==nil;clock.isHidden=true;metadata.isHidden=day.isHidden
+            day.text=first ? (disabled ? "已停用":nil):time.map{$0+(disabled ? "·已停用":"")};day.isHidden=day.text==nil;clock.isHidden=true;metadata.isHidden=day.isHidden
             titleLabelView.accessibilityLabel=(task["title"] as? String ?? "")+(time.map{"，触发"+$0} ?? "")
         }
     }
@@ -548,7 +548,7 @@ final class TaskCell: UITableViewCell {
     private func lstName(_ create: Bool) {
         guard store != nil else { rfrsh(); return }; let id = listID
         let name = create ? "" : lists.first { $0["list_id"] as? String == id }?["title"] as? String ?? ""
-        let page = TaskName(title: create ? "新建任务列表" : "重命名任务列表", name: name) { [weak self] name, done in
+        let page = TaskName(title: create ? "新建清单" : "重命名清单", name: name) { [weak self] name, done in
             self?.wrt({ store in
                 if create {
                     let row = try store.crtLst(name) as! TaskFields
@@ -571,7 +571,7 @@ final class TaskCell: UITableViewCell {
             let action = tu_act(list["title"] as? String ?? "", nil, id) { [weak self] in let button = UIButton(); button.accessibilityIdentifier = "list." + id; self?.selLst(button) }
             action.state = id == listID ? .on : .off; return action
         }
-        let add=tu_act("新建任务列表", "add", "list.create") { [weak self] in self?.crtLst() };if todayOnly{add.attributes = .disabled};actions.append(add); tu_menu(self, "任务清单", actions, breaks: [actions.count - 1], lists: true)
+        let add=tu_act("新建清单", "add", "list.create") { [weak self] in self?.crtLst() };if todayOnly{add.attributes = .disabled};actions.append(add); tu_menu(self, "清单", actions, breaks: [actions.count - 1], lists: true)
     }
     // 用独立列表处理冲突和待补信息。
     private func agendaIssues() {
@@ -611,8 +611,8 @@ final class TaskCell: UITableViewCell {
         for (key, name) in zip(["manual", "date", "star"], ["我的顺序", "日期", "最近加注星标时间"]) { actions.append(srtAct(key, name)) }
         let extra = ["urgency":"紧急优先", "difficulty":"困难优先", "effort":"短任务优先"][sort]
         let header = tu_act(extra.map { "排序依据：" + $0 } ?? "排序依据", nil, "sort.more") { [weak self] in self?.srtMenu() }
-        let rename = tu_act("重命名任务列表", nil, "list.rename") { [weak self] in self?.lstName(false) }, id = listID
-        let remove = tu_act("删除任务列表", nil, "list.delete") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除清单及全部任务") { self.wrt { try $0.delLst(id) } } }; remove.attributes = .destructive
+        let rename = tu_act("重命名清单", nil, "list.rename") { [weak self] in self?.lstName(false) }, id = listID
+        let remove = tu_act("删除清单", nil, "list.delete") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除清单及全部任务") { self.wrt { try $0.delLst(id) } } }; remove.attributes = .destructive
         if ["today","starred"].contains(id) { rename.attributes = .disabled; remove.attributes = .disabled }
         if id == TS_DFLT_LST { remove.attributes = .disabled }
         if id == TS_RTN_LST { rename.attributes = .disabled; remove.attributes = .disabled }
