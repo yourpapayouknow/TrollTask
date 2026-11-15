@@ -1,5 +1,6 @@
 // 将任务快照绑定到原生按钮而不丢失轮次意图。
 private var taskKey: UInt8 = 0
+private let selBar = 91
 
 // 显示完整标题、日期时间及独立完成与星标入口。
 final class TaskCell: UITableViewCell {
@@ -28,12 +29,11 @@ final class TaskCell: UITableViewCell {
         routineCard.accessibilityIdentifier = "routine.card"
         routineCard.isUserInteractionEnabled = false
         routineCard.isHidden = true
-        routineCard.backgroundColor = TaskTheme.control
+        routineCard.backgroundColor = TaskTheme.base
         routineCard.layer.cornerRadius = 16
         routineCard.layer.cornerCurve = .continuous
-        routineCard.layer.shadowColor = UIColor.black.cgColor
-        routineCard.layer.shadowRadius = 5
-        routineCard.layer.shadowOffset = CGSize(width: 0, height: 2)
+        routineCard.layer.borderColor = TaskTheme.line.cgColor
+        routineCard.layer.borderWidth = 1 / UIScreen.main.scale
         contentView.addSubview(routineCard)
         [check, labels, trailing].forEach { contentView.addSubview($0) }
         checkWidth=check.widthAnchor.constraint(equalToConstant:56);trailingWidth=trailing.widthAnchor.constraint(equalToConstant:56)
@@ -50,14 +50,12 @@ final class TaskCell: UITableViewCell {
             trailingEdge!, starCenter!, trailingWidth!,
             labelTop!] + rowEdges + heights + iconHeights)
     }
-    // 在复用行中跟随实际尺寸绘制单层卡片和阴影。
+    // 单层卡片只保留发丝描边，半身高卡片不使用硬阴影。
     override func layoutSubviews() {
         super.layoutSubviews()
         guard !routineCard.isHidden, contentView.bounds.width > TaskTheme.edge * 2,
               contentView.bounds.height > TaskTheme.gap else { return }
         routineCard.frame = contentView.bounds.insetBy(dx: TaskTheme.edge, dy: TaskTheme.gap / 2)
-        routineCard.layer.shadowOpacity = traitCollection.userInterfaceStyle == .dark ? 0.34 : 0.14
-        routineCard.layer.shadowPath = UIBezierPath(roundedRect: routineCard.bounds, cornerRadius: routineCard.layer.cornerRadius).cgPath
     }
     // 禁用未使用的归档路径。
     required init?(coder: NSCoder) { fatalError("Use init(style:reuseIdentifier:)") }
@@ -97,7 +95,7 @@ final class TaskCell: UITableViewCell {
         trailing.setImage(lb_icon(card ? "close" : (lit ? "star_fill" : "star")), for: .normal)
         var action = trailing.configuration
         action?.contentInsets = .init(top:8,leading:card ? 8 : 12,bottom:8,trailing:card ? 8 : 12)
-        action?.baseForegroundColor = card ? TaskTheme.danger : (lit ? TaskTheme.orange : TaskTheme.muted)
+        action?.baseForegroundColor = card ? TaskTheme.muted : (lit ? TaskTheme.orangeInk : TaskTheme.muted)
         trailing.configuration = action
         check.removeTarget(nil, action: nil, for: .touchUpInside); trailing.removeTarget(nil, action: nil, for: .touchUpInside)
         check.addTarget(owner, action: #selector(TaskHome.tglTsk(_:)), for: .touchUpInside)
@@ -215,7 +213,7 @@ final class TaskCell: UITableViewCell {
         table.contentInset = .init(top: 8, left: 0, bottom: todayOnly ? 16:44, right: 0)
         listBottom=table.bottomAnchor.constraint(equalTo:view.safeAreaLayoutGuide.bottomAnchor,constant:todayOnly ? 0:-56)
         tabHeight = strip.heightAnchor.constraint(equalToConstant: 48)
-        let rule = UIView(); rule.backgroundColor = .separator; rule.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(rule)
+        let rule = TaskHair(); rule.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(rule)
         table.estimatedSectionHeaderHeight=44
         listTop = table.topAnchor.constraint(equalTo: strip.bottomAnchor, constant: TaskTheme.gap)
         NSLayoutConstraint.activate([strip.topAnchor.constraint(equalTo: header.bottomAnchor,constant:8), tabHeight,
@@ -507,17 +505,24 @@ final class TaskCell: UITableViewCell {
             let id = list["list_id"] as! String, selected = id == listID
             let button = tabBtn(id == "starred" ? (count>0 ? String(count):nil) : lb_shrt(list["title"] as? String), id == "starred" ? "star_fill" : nil, #selector(selLst(_:)))
             button.accessibilityIdentifier = "list." + id; button.accessibilityLabel = id == "starred" ? "星标待办" : list["title"] as? String; button.accessibilityValue = selected ? "已选中" : "未选中"
-            var config = button.configuration; config?.baseForegroundColor = selected ? lb_acnt() : TaskTheme.muted
+            var config = button.configuration; config?.baseForegroundColor = TaskTheme.muted
             button.configuration = config
             if selected {
                 button.accessibilityTraits.insert(.selected)
-                let line = UIView(); line.backgroundColor = lb_acnt(); line.layer.cornerRadius = 1; line.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(line)
+                let line = UIView(); line.tag = selBar; line.backgroundColor = TaskTheme.cyanInk; line.layer.cornerRadius = 1; line.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(line)
                 NSLayoutConstraint.activate([line.heightAnchor.constraint(equalToConstant: 2), line.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12), line.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -12), line.bottomAnchor.constraint(equalTo: button.bottomAnchor)])
             }; tabs.addArrangedSubview(button)
         }
         let button = tabBtn("新建清单", "add", #selector(crtLst)); button.accessibilityIdentifier = "home.newlist";button.isEnabled = !todayOnly; tabs.addArrangedSubview(button)
         for item in tabs.arrangedSubviews {item.widthAnchor.constraint(lessThanOrEqualTo:strip.frameLayoutGuide.widthAnchor,constant:-4-4).isActive=true}
+        rfrshTints()
         view.setNeedsLayout()
+    }
+    // 选中页签保持可见，未选中页签降为次级色。
+    private func rfrshTints() {
+        for item in tabs.arrangedSubviews as! [UIButton] {
+            var config = item.configuration; config?.baseForegroundColor = item.accessibilityTraits.contains(.selected) ? TaskTheme.cyanInk : TaskTheme.muted; item.configuration = config
+        }
     }
     // 切换当前清单。
     @objc private func selLst(_ button: UIButton) {
@@ -728,7 +733,7 @@ final class TaskCell: UITableViewCell {
             let cell=UITableViewCell(style:.default,reuseIdentifier:nil);cell.backgroundColor = .clear;cell.selectionStyle = .none;cell.accessibilityIdentifier="routine.mark.\(path.section).\(path.row)"
             let label=tu_lbl(nil);label.font=lb_fnt(.subheadline,traitCollection);label.textColor=TaskTheme.muted;label.accessibilityTraits.insert(.header)
             if let stamp=row["routine_fire_at"] as? NSNumber {let format=DateFormatter();format.dateFormat="HH:mm";label.text=format.string(from:Date(timeIntervalSince1970:stamp.doubleValue))}
-            let line=UIView();line.backgroundColor = .separator;line.heightAnchor.constraint(equalToConstant:1/UIScreen.main.scale).isActive=true
+            let line=TaskHair()
             let contents=tu_stk([label,line]);contents.axis = .horizontal;contents.alignment = .center;contents.spacing=8;contents.translatesAutoresizingMaskIntoConstraints=false;cell.contentView.addSubview(contents);label.setContentHuggingPriority(.required,for:.horizontal)
             NSLayoutConstraint.activate([contents.leadingAnchor.constraint(equalTo:cell.contentView.leadingAnchor,constant:16),contents.trailingAnchor.constraint(equalTo:cell.contentView.trailingAnchor,constant:-16),contents.topAnchor.constraint(equalTo:cell.contentView.topAnchor,constant:8),contents.bottomAnchor.constraint(equalTo:cell.contentView.bottomAnchor,constant:-8)]);return cell
         }
@@ -770,7 +775,7 @@ private final class TaskName: TaskScreen, UITextFieldDelegate {
     required init?(coder: NSCoder) { fatalError("Use init(title:name:save:)") }
     // 保持顶部标题、返回、完成与单行输入的原版层级。
     override func viewDidLoad() {
-        super.viewDidLoad(); tu_fld(field);field.text = initial; field.attributedPlaceholder=NSAttributedString(string:"清单名称",attributes:[.foregroundColor:TaskTheme.muted]); field.font = lb_fnt(.body, traitCollection); field.textColor = TaskTheme.ink; field.adjustsFontForContentSizeCategory = true
+        super.viewDidLoad(); tu_fld(field);field.text = initial; field.attributedPlaceholder=tu_phl("清单名称", lb_fnt(.body, traitCollection)); field.font = lb_fnt(.body, traitCollection); field.textColor = TaskTheme.ink; field.adjustsFontForContentSizeCategory = true
         field.accessibilityIdentifier = "list.name"; field.returnKeyType = .done; field.delegate = self; field.addTarget(self, action: #selector(chg), for: .editingChanged); field.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(field)
         NSLayoutConstraint.activate([field.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), field.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16), field.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor,constant:16), field.heightAnchor.constraint(greaterThanOrEqualToConstant: max(44, lb_fnt(.body, traitCollection).lineHeight + 8))])
         done = tu_btn("完成", nil, self, #selector(sv)); done.accessibilityIdentifier = "list.done"; var config = done.configuration; config?.baseForegroundColor = lb_acnt(); done.configuration = config; navigationItem.rightBarButtonItem = UIBarButtonItem(customView: done); chg()

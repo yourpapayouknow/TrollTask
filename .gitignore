@@ -6,3 +6,8 @@
 *.tipa
 history/
 .codegraph/
+# 本地启动脚本
+/launchlocal*.command
+# 仅本地维护
+/DESIGN.md
+/notes/

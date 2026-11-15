@@ -49,7 +49,7 @@ private final class TaskStepEdit:TaskScreen {
     override func viewDidLoad() {
         super.viewDidLoad();title="编辑步骤"
         for (field,id) in [(name,"title"),(notes,"notes")] { tu_fld(field);field.font=lb_fnt(.body,traitCollection);field.textColor=TaskTheme.ink;field.isScrollEnabled=false;if field === notes {field.heightAnchor.constraint(greaterThanOrEqualToConstant:72).isActive=true};field.accessibilityIdentifier="step."+id;field.text=fields[id] as? String ?? "" }
-        tu_fld(minutes);minutes.font=lb_fnt(.body,traitCollection);minutes.textColor=TaskTheme.ink;minutes.keyboardType = .numberPad;minutes.accessibilityIdentifier="step.minutes";minutes.attributedPlaceholder=NSAttributedString(string:"分钟",attributes:[.foregroundColor:TaskTheme.muted]);if let value=fields["planned_duration"] as? NSNumber { minutes.text=String(Int(ceil(value.doubleValue/60))) }
+        tu_fld(minutes);minutes.font=lb_fnt(.body,traitCollection);minutes.textColor=TaskTheme.ink;minutes.keyboardType = .numberPad;minutes.accessibilityIdentifier="step.minutes";minutes.attributedPlaceholder=tu_phl("分钟");if let value=fields["planned_duration"] as? NSNumber { minutes.text=String(Int(ceil(value.doubleValue/60))) }
         _ = tu_form(self,tu_stk([tu_stk([tu_lbl("标题"),name]),tu_stk([tu_lbl("用时"),minutes]),tu_stk([tu_lbl("备注"),notes])]),"step.content")
         let save=tu_btn("完成",nil,self,#selector(sv));save.accessibilityIdentifier="step.save";navigationItem.rightBarButtonItem=UIBarButtonItem(customView:save)
     }
@@ -78,7 +78,7 @@ private final class TaskStepEdit:TaskScreen {
     // 建立常驻手动入口，网络请求不锁住编辑。
     override func viewDidLoad() {
         super.viewDidLoad();title=draftReply != nil ? "编辑子任务":taskID==nil ? "智能创建":"拆分任务"
-        tu_fld(name);name.font=lb_fnt(.body,traitCollection);name.adjustsFontForContentSizeCategory=true;name.textColor=TaskTheme.ink;name.attributedPlaceholder=NSAttributedString(string:"任务标题",attributes:[.foregroundColor:TaskTheme.muted]);name.accessibilityIdentifier="assistant.title"
+        tu_fld(name);name.font=lb_fnt(.body,traitCollection);name.adjustsFontForContentSizeCategory=true;name.textColor=TaskTheme.ink;name.attributedPlaceholder=tu_phl("任务标题");name.accessibilityIdentifier="assistant.title"
         nameHeight=name.heightAnchor.constraint(equalToConstant:max(44,ceil(name.font!.lineHeight)+16));nameHeight?.isActive=true;name.addTarget(self,action:#selector(chg),for:.editingChanged);goal.delegate=self
         tu_fld(goal);goal.font=lb_fnt(.body,traitCollection);goal.adjustsFontForContentSizeCategory=true;goal.textColor=TaskTheme.ink;goal.accessibilityLabel="目标与说明";goal.accessibilityIdentifier="assistant.goal";goal.heightAnchor.constraint(equalToConstant:96).isActive=true
         generate=tu_btn("智能生成","subtask",self,#selector(gen));generate.accessibilityIdentifier="assistant.generate"

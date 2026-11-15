@@ -27,7 +27,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         if dayOnly { end.date = TaskWindow.deadline(end.date, in: TaskWindow.calendar(zone)) }
         startTime.date=start.date;endTime.date=end.date
         dateWidths=[start,startTime,end,endTime].map{$0.widthAnchor.constraint(equalToConstant:max(44,$0.sizeThatFits(.zero).width))};NSLayoutConstraint.activate(dateWidths)
-        tu_fld(minutes);minutes.font=lb_fnt(.body,traitCollection);minutes.adjustsFontForContentSizeCategory=true;minutes.textColor=TaskTheme.ink;minutes.keyboardType = .numberPad;minutes.attributedPlaceholder=NSAttributedString(string:"由AI估算",attributes:[.foregroundColor:TaskTheme.muted]);minutes.accessibilityIdentifier="intake.minutes";minutes.addTarget(self,action:#selector(budget),for:.editingChanged)
+        tu_fld(minutes);minutes.font=lb_fnt(.body,traitCollection);minutes.adjustsFontForContentSizeCategory=true;minutes.textColor=TaskTheme.ink;minutes.keyboardType = .numberPad;minutes.attributedPlaceholder=tu_phl("由AI估算");minutes.accessibilityIdentifier="intake.minutes";minutes.addTarget(self,action:#selector(budget),for:.editingChanged)
         if let all=try? store.lsTsks() as? [TaskFields]{completed=Set(all.filter{$0["status"] as? String=="completed"}.map{$0["task_id"] as! String})}
         if let amount=fields["planned_duration"] as? NSNumber{let finished=parts.filter{completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};minutes.text=String(Int(ceil(max(0,amount.doubleValue-finished)/60)))}
         check=tu_btn("智能评估","subtask",self,#selector(evaluate));check.accessibilityIdentifier="intake.evaluate"

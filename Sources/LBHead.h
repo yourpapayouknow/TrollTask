@@ -7,7 +7,7 @@
 
 #ifdef LB_UI_TEST
 #import <AVFAudio/AVFAudio.h>
-#import "../Vendor/TrollSpeed/head.h"
+#import "Touch/head.h"
 // 在原生模拟器验收同一UIKit触摸路由。
 @interface UIApplication (LBTouchSPI)
 - (UIEvent *)_touchesEvent;
@@ -83,7 +83,7 @@ BOOL lb_opnapp(void);
 #endif
 
 #ifndef LB_HOST_TEST
-#import "../Vendor/TrollSpeed/head.h"
+#import "Touch/head.h"
 @interface UIApplication (LBPrivate)
 // 进入UIKit原生事件运行循环。
 - (void)_run;

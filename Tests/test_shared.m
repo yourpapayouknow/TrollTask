@@ -24,25 +24,25 @@ static void tstnote(int token) {
 
 // 验证配置默认值、异常输入和读写通知。
 static void tstcfg(void) {
-    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
+    assert(([lb_ldcfg() isEqual:@{@"enabled": @NO, @"appearance": @0}]));
     int config = tstreg(LB_CFG_NOTE);
     int preview = tstreg(LB_TEST_NOTE);
     assert(lb_svcfg(@{@"enabled": @NO, @"unknown": @42}));
-    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
+    assert(([lb_ldcfg() isEqual:@{@"enabled": @NO, @"appearance": @0}]));
     tstnote(config);
     int changed = 0;
     assert(notify_check(preview, &changed) == NOTIFY_STATUS_OK && !changed);
 
     assert(lb_svcfg(nil));
-    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
+    assert(([lb_ldcfg() isEqual:@{@"enabled": @NO, @"appearance": @0}]));
     for (id value in @[@"false", NSNull.null, @[], @{}]) {
         assert(lb_svcfg(@{@"enabled": value}));
-        assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
+        assert(([lb_ldcfg() isEqual:@{@"enabled": @NO, @"appearance": @0}]));
     }
     assert(lb_svcfg((NSDictionary *)(id)@[]));
-    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
+    assert(([lb_ldcfg() isEqual:@{@"enabled": @NO, @"appearance": @0}]));
     assert([@"invalid plist" writeToFile:lb_tstpath atomically:YES encoding:NSUTF8StringEncoding error:nil]);
-    assert([lb_ldcfg() isEqual:@{@"enabled": @NO}]);
+    assert(([lb_ldcfg() isEqual:@{@"enabled": @NO, @"appearance": @0}]));
 
     assert(notify_check(config, &changed) == NOTIFY_STATUS_OK);
     NSString *savedPath = lb_tstpath;
@@ -60,7 +60,7 @@ static void tstmigcfg(void) {
     for (NSNumber *enabled in @[@NO, @YES]) {
         lb_tstpath = [savedPath stringByAppendingFormat:@".migrate-%d", enabled.boolValue];
         NSString *legacyPath = [lb_tstpath stringByAppendingString:@".legacy"];
-        NSDictionary *expected = @{@"enabled": enabled};
+        NSDictionary *expected = @{@"enabled": enabled, @"appearance": @0};
         assert(([@{@"enabled": enabled, @"routine.calendar": @YES} writeToFile:legacyPath atomically:YES]));
         assert([lb_ldcfg() isEqual:expected]);
         assert([[NSDictionary dictionaryWithContentsOfFile:lb_tstpath] isEqual:expected]);

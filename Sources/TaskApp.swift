@@ -17,8 +17,8 @@
             self?.store = active; if self?.seed()==true { home?.rfrsh() }; self?.seedIssue(); self?.rstr(); self?.capStart()
             if let active { TaskArchiveSync.schedule(active) }
         }
-        let navigation = UINavigationController(rootViewController: home); navigation.overrideUserInterfaceStyle = .unspecified
-        let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = navigation; self.window = window; window.makeKeyAndVisible()
+        let navigation = UINavigationController(rootViewController: home); navigation.overrideUserInterfaceStyle = TaskLook.styles[TaskLook.index]
+        let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = navigation; window.overrideUserInterfaceStyle = TaskLook.styles[TaskLook.index]; self.window = window; window.makeKeyAndVisible()
         DispatchQueue.main.async { [weak self] in self?.seedIssue() }
         let result = notify_register_dispatch(TS_CAPTURE_NOTE, &captureNote, .main) { [weak self] _ in self?.capStart() }
         if result != NOTIFY_STATUS_OK { captureNote = -1 }
@@ -116,6 +116,7 @@
     private let monitor = UISwitch()
     private var preview: UIButton!, recovery: UIButton!
     private var timezone: UIButton!
+    private var look = UIButton(type: .system)
     private var status: UIButton!, planned: UIButton!, timer: DispatchSourceTimer?, watcher: DispatchSourceProcess?
     private var routinePicker: TaskRtnPicker?
     private var watched: pid_t = 0
@@ -137,12 +138,17 @@
         recovery = tu_btn("恢复提醒","repeat",self,#selector(rstr));recovery.accessibilityIdentifier="settings.recovery"
         let assistant=tu_btn("智能助手","subtask",self,#selector(aiCfg));assistant.accessibilityIdentifier="settings.assistant"
         let routineImport=tu_btn("导入常律","file",self,#selector(rtnImp));routineImport.accessibilityIdentifier="settings.routineImport"
-        let archive=tu_btn("归档","file",self,#selector(archivePage));archive.accessibilityIdentifier="settings.archive"
+        let archive=tu_btn("归档","list",self,#selector(archivePage));archive.accessibilityIdentifier="settings.archive"
         let cloud=tu_btn("云端存储","upload",self,#selector(cloudPage));cloud.accessibilityIdentifier="settings.cloud"
         timezone=tu_btn("任务时区","time",self,#selector(zonePage));timezone.accessibilityIdentifier="settings.timezone"
-        for button in [status!,planned!,preview!,recovery!,assistant,routineImport,archive,cloud,timezone!] {
+        look=tu_btn("外观","settings",nil,nil);look.accessibilityIdentifier="settings.appearance"
+        look.showsMenuAsPrimaryAction = true
+        for button in [status!,planned!,preview!,recovery!,assistant,routineImport,archive,cloud,timezone!,look] {
             var config=button.configuration;config?.imagePadding=8;config?.background.cornerRadius=12;config?.contentInsets=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12)
             config?.titleLineBreakMode = .byWordWrapping;config?.subtitleLineBreakMode = .byWordWrapping
+            config?.imagePlacement = .leading
+            config?.titleAlignment = .leading
+            config?.baseForegroundColor=TaskTheme.ink
             config?.titleTextAttributesTransformer=UIConfigurationTextAttributesTransformer { attributes in var result=attributes;result.font=lb_fnt(.body,nil);return result }
             config?.subtitleTextAttributesTransformer=UIConfigurationTextAttributesTransformer { attributes in var result=attributes;result.font=lb_fnt(.subheadline,nil);result.foregroundColor=TaskTheme.muted;return result }
             button.configuration=config;button.titleLabel?.numberOfLines=0;button.heightAnchor.constraint(greaterThanOrEqualToConstant:56).isActive=true
@@ -153,8 +159,8 @@
         recovery.menu=UIMenu(children:[help])
         let icon=UIImageView(image:lb_icon("settings"));icon.tintColor=TaskTheme.ink;icon.contentMode = .scaleAspectFit;NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant:24),icon.heightAnchor.constraint(equalToConstant:24)])
         let service=tu_stk([icon,tu_lbl("后台服务"),monitor]);service.axis = .horizontal;service.alignment = .center;service.spacing=8;service.isLayoutMarginsRelativeArrangement=true;service.directionalLayoutMargins=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12);service.accessibilityIdentifier="settings.service";service.heightAnchor.constraint(greaterThanOrEqualToConstant:56).isActive=true
-        let divider=UIView();divider.backgroundColor = .separator;divider.heightAnchor.constraint(equalToConstant:1/UIScreen.main.scale).isActive=true
-        let fields=tu_stk([timezone,archive,cloud,assistant,routineImport,divider,service,status,planned,preview,recovery]);fields.spacing=16
+        let divider=TaskHair()
+        let fields=tu_stk([timezone,look,archive,cloud,assistant,routineImport,divider,service,status,planned,preview,recovery]);fields.spacing=16
         _ = tu_form(self,fields,"settings.content",top:header);fields.setCustomSpacing(TaskTheme.section,after:recovery);fields.setCustomSpacing(TaskTheme.section,after:divider)
         let result = notify_register_dispatch(LB_READY_NOTE, &token, .main) { [weak self] _ in
             guard let self = self, self.pending else { return }; self.pending = false; self.stat("测试全屏提醒"); self.sync(); notify_post(LB_TEST_NOTE)
@@ -164,9 +170,28 @@
     }
     // 打开新任务的默认时区选择。
     @objc private func zonePage() { navigationController?.pushViewController(TaskTimeZoneScreen(), animated: true) }
+    // 构建外观三项菜单并标记当前选择。
+    private func lookMenu() {
+        look.menu = UIMenu(children: TaskLook.names.enumerated().map { index, name in
+            let action = tu_act(name, nil, "settings.appearance.\(index)") { [weak self] in TaskLook.pick(index); self?.lookCfg() }
+            return action
+        })
+    }
+    // 锁定标题，副标题与勾选只显示一次当前选择。
+    private func lookCfg() {
+        let name = TaskLook.names[TaskLook.index]
+        if var config = look.configuration {
+            config.title = "外观"
+            config.subtitle = name
+            look.configuration = config
+        }
+        look.accessibilityValue = name
+        (look.menu?.children as? [UIAction])?.forEach { $0.state = $0.title == name ? .on : .off }
+    }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         timezone.configuration?.subtitle = TaskTimeZone.fixed.map(TaskTimeZone.city) ?? "跟随系统"
+        lookMenu(); lookCfg()
     }
     // 导入入口复用首页模板与事务，不启用HUD服务。
     @objc private func rtnImp() {

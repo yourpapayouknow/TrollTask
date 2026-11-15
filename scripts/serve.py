@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# 复用原工程的浏览器安装流程，分发当前TrollTask安装包。
+# 复用浏览器安装流程，分发当前TrollTask安装包。
 from head import (
     AF_INET, SOCK_DGRAM, ROOT, ArgumentParser, Path, SimpleHTTPRequestHandler, ThreadingHTTPServer,
     TemporaryDirectory, copy2, escape, loads, partial, quote, run, socket, urlencode,
 )
 
 
-# 沿用原工程方法读取局域网地址。
+# 读取局域网地址。
 def lclip():
     for iface in ("en0", "en1"):
         result = run(["/usr/sbin/ipconfig", "getifaddr", iface], capture_output=True, text=True)
@@ -17,7 +17,7 @@ def lclip():
         return sock.getsockname()[0]
 
 
-# 保留原工程的安装页缓存策略。
+# 关闭安装页与安装包的浏览器缓存。
 class Hnd(SimpleHTTPRequestHandler):
     timeout = 30
 

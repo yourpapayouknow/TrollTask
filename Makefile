@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.21.32.tipa
+TIPA := $(BUILD)/TrollTask-0.21.33.tipa
 CLOUD_CLIENTS ?=
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
@@ -14,31 +14,29 @@ ASSET_FILES := $(shell find Resources/Assets.xcassets -type f)
 MING_FILES := $(shell find Resources/MingCute -type f)
 
 SWIFT_SOURCES := $(wildcard Sources/*.swift)
-SWIFT_FLAGS := -swift-version 5 -module-name TrollTask -parse-as-library -whole-module-optimization -warnings-as-errors -ISources -IVendor/libical -import-objc-header Sources/SwiftHead.h
+SWIFT_FLAGS := -swift-version 5 -module-name TrollTask -parse-as-library -whole-module-optimization -warnings-as-errors -ISources -ISources/Recurrence -import-objc-header Sources/SwiftHead.h
 M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m
-TOUCH_SOURCES := $(wildcard Vendor/TrollSpeed/*.m)
-TOUCH_FILES := $(wildcard Vendor/TrollSpeed/*)
-OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(patsubst Vendor/TrollSpeed/%.m,$(BUILD)/touch/%.o,$(TOUCH_SOURCES)) $(BUILD)/storecli.o $(BUILD)/TaskSwift.o
+TOUCH_SOURCES := $(wildcard Sources/Touch/*.m)
+OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(patsubst Sources/Touch/%.m,$(BUILD)/touch/%.o,$(TOUCH_SOURCES)) $(BUILD)/storecli.o $(BUILD)/TaskSwift.o
 
-CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources -IVendor/libical
+CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources -ISources/Recurrence
 OBJCFLAGS := $(CFLAGS) -fobjc-arc -fmodules
-ICAL_SRCS := $(wildcard Vendor/libical/*.c)
+ICAL_SRCS := $(wildcard Sources/Recurrence/*.c)
 ICAL_DEFS := -DHAVE_CONFIG_H -DLIBICAL_ICAL_STATIC_DEFINE -DPACKAGE_DATA_DIR=\".\"
-ICAL_IOS := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-ios/%.o,$(ICAL_SRCS))
-ICAL_HOST := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-host/%.o,$(ICAL_SRCS))
-ICAL_SIM := $(patsubst Vendor/libical/%.c,$(BUILD)/ical-sim/%.o,$(ICAL_SRCS))
+ICAL_IOS := $(patsubst Sources/Recurrence/%.c,$(BUILD)/ical-ios/%.o,$(ICAL_SRCS))
+ICAL_HOST := $(patsubst Sources/Recurrence/%.c,$(BUILD)/ical-host/%.o,$(ICAL_SRCS))
+ICAL_SIM := $(patsubst Sources/Recurrence/%.c,$(BUILD)/ical-sim/%.o,$(ICAL_SRCS))
 SIM_CC := xcrun --sdk iphonesimulator clang
-SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -IVendor/libical
+SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -ISources/Recurrence
 HEADERS := $(wildcard Sources/*.h)
 HEADERS += Sources/TaskAgenda.inc
-HEADERS += Vendor/TrollSpeed/head.h
+HEADERS += Sources/Touch/head.h
 CORE_SWIFT := Sources/SwiftHead.swift Sources/ReminderQueue.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift Sources/TaskRoutineImport.swift Sources/TaskRoutineCheck.swift Sources/TaskRoutineView.swift Sources/TaskAI.swift Sources/TaskIntake.swift Sources/TaskToday.swift Sources/TaskDayOrder.swift Sources/TaskDivision.swift Sources/TaskTimeMap.swift
-HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical
+HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Recurrence
 HOST_OBJECTS := $(BUILD)/host/TaskStore.o $(BUILD)/host/TaskRule.o $(BUILD)/host/LBShared.o $(BUILD)/host/TaskScheduler.o
-ICAL_HEADERS := $(wildcard Vendor/libical/*.h)
-ICAL_FILES := $(wildcard Vendor/libical/* Vendor/libical/LICENSES/*)
+ICAL_HEADERS := $(wildcard Sources/Recurrence/*.h)
 
-.PHONY: all package package-debug test test-assist test-agenda test-routine-view test-rule test-queue test-recover test-load test-sched test-reminder test-checkin test-occ test-signal test-ui clean inspect icons serve store
+.PHONY: all package test test-assist test-agenda test-routine-view test-rule test-queue test-recover test-load test-sched test-reminder test-checkin test-occ test-signal test-ui clean inspect icons serve store
 
 icons: $(ICON_SOURCE)
 	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
@@ -54,7 +52,7 @@ $(BUILD):
 $(BUILD)/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) Makefile | $(BUILD)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
-$(BUILD)/touch/%.o: Vendor/TrollSpeed/%.m $(HEADERS) Makefile | $(BUILD)
+$(BUILD)/touch/%.o: Sources/Touch/%.m $(HEADERS) Makefile | $(BUILD)
 	mkdir -p $(dir $@)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
@@ -68,26 +66,16 @@ $(APP_DIR)/Assets.car: $(ASSET_FILES)
 	mkdir -p $(APP_DIR)
 	xcrun actool Resources/Assets.xcassets --compile $(APP_DIR) --platform iphoneos --minimum-deployment-target 15.0 --app-icon AppIcon --output-partial-info-plist $(BUILD)/asset-info.plist --target-device iphone --target-device ipad --output-format human-readable-text
 
-$(BUILD)/libical-source.zip: $(ICAL_FILES) Vendor/LIBICAL.md | $(BUILD)
-	cd Vendor && zip -qry ../$(BUILD)/libical-source.zip libical LIBICAL.md
-
-$(APP_DIR)/ThirdParty/libical-source.zip: $(BUILD)/libical-source.zip Vendor/LIBICAL.md
-	mkdir -p $(dir $@)
-	cp $< $@
-	cp Vendor/LIBICAL.md $(APP_DIR)/ThirdParty/NOTICE.md
-
 .PHONY: cloud-info
 $(BUILD)/AppInfo.plist: Resources/Info.plist scripts/cloud_plist.py scripts/head.py cloud-info | $(BUILD)
 	python3 -B scripts/cloud_plist.py "$<" "$@" "$(CLOUD_CLIENTS)"
 
-$(APP_DIR)/$(APP): $(OBJECTS) $(BUILD)/AppInfo.plist Resources/entitlements.plist Resources/Reminder.wav Resources/WeeklyRoutine.json $(MING_FILES) $(TOUCH_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a $(APP_DIR)/ThirdParty/libical-source.zip
+$(APP_DIR)/$(APP): $(OBJECTS) $(BUILD)/AppInfo.plist Resources/entitlements.plist Resources/Reminder.wav Resources/WeeklyRoutine.json $(MING_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a
 	mkdir -p $(APP_DIR)
 	xcrun --sdk iphoneos swiftc -target arm64-apple-ios15.0 -sdk $(SDK) $(OBJECTS) -Xlinker -dead_strip -framework Foundation -framework ImageIO -framework IOKit -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-ios.a -o $@
 	cp $(BUILD)/AppInfo.plist $(APP_DIR)/Info.plist
 	cp -R Resources/MingCute $(APP_DIR)/
 	cp Resources/Reminder.wav Resources/WeeklyRoutine.json $(APP_DIR)/
-	mkdir -p $(APP_DIR)/ThirdParty/TrollSpeed
-	cp Vendor/TrollSpeed/* $(APP_DIR)/ThirdParty/TrollSpeed/
 	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@2x.png $(APP_DIR)/AppIcon60x60@2x.png
 	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png $(APP_DIR)/AppIcon60x60@3x.png
 	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-76@2x.png $(APP_DIR)/AppIcon76x76@2x~ipad.png
@@ -96,23 +84,11 @@ $(APP_DIR)/$(APP): $(OBJECTS) $(BUILD)/AppInfo.plist Resources/entitlements.plis
 	ldid -SResources/entitlements.plist $@
 
 package: $(APP_DIR)/$(APP)
-	cd $(BUILD) && rm -f $(notdir $(TIPA)) && zip -qry $(notdir $(TIPA)) Payload
+	cd $(BUILD) && rm -f $(notdir $(TIPA)) && zip -qry -FS $(notdir $(TIPA)) Payload
 	@print -r -- "Built $(TIPA)"
 
-# 仅在独立复制目录中标记30秒诊断版，正式包不包含此标记。
-package-debug: $(APP_DIR)/$(APP)
-	rm -rf $(BUILD)/Debug/Payload
-	mkdir -p $(BUILD)/Debug/Payload
-	cp -R $(APP_DIR) $(BUILD)/Debug/Payload/
-	/usr/libexec/PlistBuddy -c "Add :TTHUDDebug bool true" $(BUILD)/Debug/Payload/$(APP).app/Info.plist
-	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.10.2" $(BUILD)/Debug/Payload/$(APP).app/Info.plist
-	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 15" $(BUILD)/Debug/Payload/$(APP).app/Info.plist
-	/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 待办调试" $(BUILD)/Debug/Payload/$(APP).app/Info.plist
-	ldid -SResources/entitlements.plist $(BUILD)/Debug/Payload/$(APP).app/$(APP)
-	cd $(BUILD)/Debug && rm -f ../TrollTask-0.10.2-debug.tipa && zip -qry ../TrollTask-0.10.2-debug.tipa Payload
-
-test: | $(BUILD)
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation Tests/test_shared.m Sources/LBShared.m -o $(BUILD)/test_shared
+test: store | $(BUILD)
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Recurrence -framework Foundation Tests/test_shared.m Sources/LBShared.m -o $(BUILD)/test_shared
 	$(BUILD)/test_shared
 	python3 Tests/test_project.py
 	$(MAKE) $(BUILD)/ical-host.a
@@ -142,7 +118,7 @@ test-rule: $(BUILD)/test_rule
 	$(BUILD)/test_rule
 
 $(BUILD)/test_rule: Tests/test_rule.m Sources/TaskRule.m $(HEADERS) $(BUILD)/ical-host.a | $(BUILD)
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -IVendor/libical -framework Foundation Tests/test_rule.m Sources/TaskRule.m $(BUILD)/ical-host.a -o $@
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Recurrence -framework Foundation Tests/test_rule.m Sources/TaskRule.m $(BUILD)/ical-host.a -o $@
 
 store: $(BUILD)/taskstore
 
@@ -212,13 +188,13 @@ $(BUILD)/host/storecli.o: cli/storecli.m $(HEADERS) Makefile
 $(BUILD)/taskstore: $(BUILD)/host/storecli.o $(HOST_OBJECTS) $(BUILD)/ical-host.a
 	xcrun --sdk macosx swiftc $^ -framework Foundation -framework ImageIO -lsqlite3 -o $@
 
-$(BUILD)/ical-ios/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
+$(BUILD)/ical-ios/%.o: Sources/Recurrence/%.c $(ICAL_HEADERS)
 	mkdir -p $(dir $@)
-	$(CC) -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -IVendor/libical $(ICAL_DEFS) -c $< -o $@
+	$(CC) -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -ISources/Recurrence $(ICAL_DEFS) -c $< -o $@
 
-$(BUILD)/ical-host/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
+$(BUILD)/ical-host/%.o: Sources/Recurrence/%.c $(ICAL_HEADERS)
 	mkdir -p $(dir $@)
-	$(HOST_CC) -O2 -IVendor/libical $(ICAL_DEFS) -c $< -o $@
+	$(HOST_CC) -O2 -ISources/Recurrence $(ICAL_DEFS) -c $< -o $@
 
 $(BUILD)/ical-ios.a: $(ICAL_IOS)
 	xcrun ar rcs $@ $^
@@ -226,7 +202,7 @@ $(BUILD)/ical-ios.a: $(ICAL_IOS)
 $(BUILD)/ical-host.a: $(ICAL_HOST)
 	xcrun ar rcs $@ $^
 
-$(BUILD)/ical-sim/%.o: Vendor/libical/%.c $(ICAL_HEADERS)
+$(BUILD)/ical-sim/%.o: Sources/Recurrence/%.c $(ICAL_HEADERS)
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) $(ICAL_DEFS) -c $< -o $@
 
@@ -234,14 +210,14 @@ $(BUILD)/ical-sim.a: $(ICAL_SIM)
 	xcrun ar rcs $@ $^
 
 UI_M_SOURCES := Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m
-UI_OBJECTS := $(patsubst Sources/%.m,$(BUILD)/ui/%.o,$(UI_M_SOURCES)) $(patsubst Vendor/TrollSpeed/%.m,$(BUILD)/ui/touch/%.o,$(TOUCH_SOURCES)) $(BUILD)/ui/test_ui.o $(BUILD)/ui/TaskSwift.o
+UI_OBJECTS := $(patsubst Sources/%.m,$(BUILD)/ui/%.o,$(UI_M_SOURCES)) $(patsubst Sources/Touch/%.m,$(BUILD)/ui/touch/%.o,$(TOUCH_SOURCES)) $(BUILD)/ui/test_ui.o $(BUILD)/ui/TaskSwift.o
 SIM_SDK := $(shell xcrun --sdk iphonesimulator --show-sdk-path)
 
 $(BUILD)/ui/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 
-$(BUILD)/ui/touch/%.o: Vendor/TrollSpeed/%.m $(HEADERS) Makefile
+$(BUILD)/ui/touch/%.o: Sources/Touch/%.m $(HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 

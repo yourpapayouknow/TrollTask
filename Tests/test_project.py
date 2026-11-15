@@ -37,7 +37,8 @@ def tstns():
 def tstbiz(root):
     # 阶段九允许从绝对时刻显示边栏剩余时间，继续禁止旧业务及累加式NSTimer。
     forbidden = r'lowbatcntdwn|LowBat|LBState|LBMode|lb_(init|cfg|feed|tick|snzdur|chknght|shwnght|setlowpower)\b|UIDeviceBattery|batteryMonitoringEnabled|batteryLevel|CoreDuet|CDBatterySaver|NSTimer|nightLocked|threshold|低电量'
-    paths = list((root / "Sources").glob("*")) + list((root / "Resources").glob("*.plist")) + [root / "Makefile"]
+    paths = [path for path in (root / "Sources").glob("*") if path.is_file()]
+    paths += list((root / "Resources").glob("*.plist")) + [root / "Makefile"]
     for path in paths:
         assert not re.search(forbidden, path.read_text(), re.I), f"Old business reference in {path}"
     assert not (root / "Sources/LBState.c").exists()

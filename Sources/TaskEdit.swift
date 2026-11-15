@@ -133,8 +133,8 @@ final class TaskDate {
         dateChip = tu_btn(nil, "calendar", self, #selector(chip)); dateChip.accessibilityIdentifier = "edit.dateChip"
         schedule.numberOfLines = 0; schedule.font = lb_fnt(.subheadline, nil); schedule.textColor = TaskTheme.muted; schedule.accessibilityIdentifier = "edit.schedule"
         clearDate = tu_ibtn("close", "移除日期", "edit.clearDate", self, #selector(clrDate(_:)))
-        dateLine = tu_stk(quick && routine ? [schedule] : [quick ? dateChip! : dateBtn!, clearDate!]); dateLine.axis = .horizontal
-        if quick && !routine { dateLine.layer.cornerRadius = 20; dateLine.layer.cornerCurve = .continuous; dateLine.layer.borderWidth = 1 / UIScreen.main.scale; dateLine.layer.borderColor = UIColor.separator.cgColor; var config = dateChip.configuration; config?.baseForegroundColor = lb_acnt(); dateChip.configuration = config }
+        dateLine = tu_stk(quick && routine ? [schedule] : [quick ? dateChip! : dateBtn!, clearDate!]); dateLine.axis = .horizontal; dateLine.accessibilityIdentifier = "edit.dateline"
+        if quick && !routine { dateLine.layer.cornerRadius = 20; dateLine.layer.cornerCurve = .continuous; dateLine.layer.borderWidth = 1 / UIScreen.main.scale; dateLine.layer.borderColor = TaskTheme.line.cgColor; var config = dateChip.configuration; config?.baseForegroundColor = lb_acnt(); dateChip.configuration = config }
         clearDeadline = tu_ibtn("close", "移除截止日期", "edit.clearDeadline", self, #selector(clrDate(_:)))
         for button in [clearDate!, clearDeadline!] { button.widthAnchor.constraint(equalToConstant: 44).isActive = true }
         deadlineLine = tu_stk([ddlBtn!, clearDeadline!]); deadlineLine.axis = .horizontal
@@ -287,7 +287,7 @@ final class TaskDate {
                            (dateBtn!, dateFields?.isHidden == false, TaskTheme.ink),
                            (starBtn!, starred, TaskTheme.muted)]
             for (button, selected, idleColor) in toggles {
-                button.configuration?.baseForegroundColor = selected ? TaskTheme.orange : idleColor
+                button.configuration?.baseForegroundColor = selected ? TaskTheme.orangeInk : idleColor
                 if selected { button.accessibilityTraits.insert(.selected) }
                 else { button.accessibilityTraits.remove(.selected) }
             }
@@ -491,7 +491,7 @@ final class TaskDate {
     // 在原详情页展开子任务标题输入。
     @objc private func sub() {
         guard task != nil, childRow == nil else { return }
-        let field = UITextField(); field.placeholder = "输入标题"; field.font = lb_fnt(.body, nil); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.returnKeyType = .done; field.delegate = self; field.accessibilityIdentifier = "edit.childTitle"
+        let field = UITextField(); field.attributedPlaceholder = tu_phl("输入标题", lb_fnt(.body, nil)); field.font = lb_fnt(.body, nil); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.returnKeyType = .done; field.delegate = self; field.accessibilityIdentifier = "edit.childTitle"
         let icon = UIImageView(image: lb_icon("subtask")); icon.tintColor = TaskTheme.muted; icon.widthAnchor.constraint(equalToConstant: 24).isActive = true
         let close = tu_ibtn("close", "取消子任务", "edit.childCancel", self, #selector(rmChild)); close.widthAnchor.constraint(equalToConstant: 44).isActive = true
         let mark = UIImageView(image: lb_icon("round")); mark.tintColor = TaskTheme.muted; mark.widthAnchor.constraint(equalToConstant: 24).isActive = true

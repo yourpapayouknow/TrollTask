@@ -1,18 +1,41 @@
-// 定义中性表面、清晰文字和橙色强调。
+// 按TrollTask色卡定义明暗两套固定角色色，不随对比度设置漂移。
+private func tu_col(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> UIColor { UIColor(red: r / 255, green: g / 255, blue: b / 255, alpha: 1) }
+func tu_hex(_ rgb: UInt32) -> UIColor { tu_col(CGFloat(rgb >> 16), CGFloat(rgb >> 8 & 255), CGFloat(rgb & 255)) }
+// 定义纸面与夜墨表面、墨色文字和青橙强调。
 enum TaskTheme {
     static let edge:CGFloat=16, gap:CGFloat=8, pad:CGFloat=12, group:CGFloat=16, section:CGFloat=24
-    static let base = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 29/255, green: 27/255, blue: 25/255, alpha: 1) : UIColor(red: 251/255, green: 249/255, blue: 247/255, alpha: 1) }
-    static let ink = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 239/255, green: 235/255, blue: 231/255, alpha: 1) : UIColor(red: 42/255, green: 35/255, blue: 29/255, alpha: 1) }
-    static let muted = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 190/255, green: 179/255, blue: 168/255, alpha: 1) : UIColor(red: 111/255, green: 101/255, blue: 93/255, alpha: 1) }
-    static let control = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 51/255, green: 44/255, blue: 38/255, alpha: 1) : UIColor(red: 241/255, green: 233/255, blue: 225/255, alpha: 1) }
-    static let onAccent = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 70/255, green: 32/255, blue: 7/255, alpha: 1) : .white }
-    static let orange = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 255/255, green: 183/255, blue: 124/255, alpha: 1) : UIColor(red: 166/255, green: 68/255, blue: 0, alpha: 1) }
-    static let danger = UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 255/255, green: 180/255, blue: 171/255, alpha: 1) : UIColor(red: 179/255, green: 38/255, blue: 30/255, alpha: 1) }
+    static let base = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x0A2534) : tu_hex(0xFBF8F5) }
+    static let ink = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0xFBF8F5) : tu_hex(0x102F40) }
+    static let muted = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x8FA6B2) : tu_hex(0x4A6B79) }
+    static let control = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x1B3A4B) : tu_hex(0xF1EBE5) }
+    static let line = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x2A4757) : tu_hex(0xD8CDC4) }
+    static let onAccent = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x102F40) : .white }
+    static let orange = tu_hex(0xFF925B)
+    static let orangeInk = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0xFF925B) : tu_hex(0xA94F27) }
+    static let cyanInk = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x00B5D4) : tu_hex(0x006F85) }
+    static let danger = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0xFF925B) : tu_hex(0xA94F27) }
 }
 
-// 仅提醒卡片与边栏保留原生磨砂材质。
+// 读取与保存App明暗模式，仅作用于主App窗口，HUD保持固定深色。
+enum TaskLook {
+    private static let key = "appearance"
+    static let names = ["跟随系统", "浅色", "深色"]
+    static let styles: [UIUserInterfaceStyle] = [.unspecified, .light, .dark]
+    // 返回已选模式索引。
+    static var index: Int { (lb_ldcfg()[key] as? NSNumber).map { min(max($0.intValue, 0), 2) } ?? 0 }
+    // 保存并立即应用到全部主窗口。
+    static func pick(_ value: Int) {
+        _ = lb_svcfg(["enabled": lb_ldcfg()["enabled"] ?? NSNumber(value: false), key: NSNumber(value: min(max(value, 0), 2))])
+        aply(value)
+    }
+    // 将模式应用到主App窗口。
+    static func aply(_ value: Int = index) { for scene in UIApplication.shared.connectedScenes { (scene as? UIWindowScene)?.windows.forEach { $0.overrideUserInterfaceStyle = styles[min(max(value, 0), 2)] } } }
+}
+
+// 仅提醒卡片与边栏保留原生磨砂材质，深色下偏移到色卡夜墨。
 func tu_gls() -> UIVisualEffectView {
     let glass = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+    glass.contentView.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x0A2534) : .clear }
     glass.layer.cornerRadius = 20; glass.layer.cornerCurve = .continuous; glass.clipsToBounds = true
     glass.layer.borderWidth = 1 / UIScreen.main.scale; glass.layer.borderColor = UIColor.white.withAlphaComponent(0.08).cgColor
     return glass
@@ -28,6 +51,21 @@ final class TaskBackdrop: UIView {
     // 拒绝未定义的归档初始化。
     required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
 }
+
+// 系统分隔线换成色卡发丝线。
+final class TaskHair: UIView {
+    // 在父视图中插入1像素发丝线。
+    override init(frame: CGRect) { super.init(frame: frame); isUserInteractionEnabled = false; backgroundColor = TaskTheme.line }
+    required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
+    // 在布局中固定物理1像素，不重复添加约束。
+    override func layoutSubviews() { super.layoutSubviews(); let scale = window?.screen.scale ?? UIScreen.main.scale; if abs(bounds.height - 1 / scale) > 0.01 { frame.size.height = 1 / scale } }
+    // 布局后保持物理1像素并在模式切换时取新颜色。
+    override func didMoveToWindow() { super.didMoveToWindow(); traitCollectionDidChange(nil) }
+    // 刷新动态发丝色。
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) { super.traitCollectionDidChange(previous); backgroundColor = TaskTheme.line }
+}
+// 用发丝线替换原生分隔色。
+extension UITableView { func tu_rule() { separatorColor = TaskTheme.line } }
 
 // 统一导航栏层次与中性表面。
 func tu_nav(_ page: UIViewController) {
@@ -81,20 +119,31 @@ func tu_btn(_ title: String?, _ icon: String? = nil, _ target: Any? = nil, _ act
     let button = lb_mkbtn(title, target, action)!
     var config = button.configuration!
     config.image = icon.flatMap { lb_icon($0) }; config.imagePadding = TaskTheme.gap; config.contentInsets = .init(top:8,leading:12,bottom:8,trailing:12)
-    config.baseForegroundColor = TaskTheme.ink
-    button.configuration = config; button.tintColor = TaskTheme.ink
+    config.baseForegroundColor = lb_acnt()
+    button.configuration = config; button.tintColor = lb_acnt()
     button.imageView?.contentMode = .scaleAspectFit
     button.widthAnchor.constraint(greaterThanOrEqualToConstant: minWidth).isActive = true
     button.contentHorizontalAlignment = .leading
     button.titleLabel?.adjustsFontForContentSizeCategory = true
     return button
 }
-// 只为主操作和HUD次操作提供统一实色背景。
+// 只为主操作和HUD次操作提供统一实色背景和按下浅色反馈。
 func tu_fill(_ button: UIButton, primary: Bool = false) {
     var config = button.configuration
     config?.background.backgroundColor = primary ? lb_acnt() : TaskTheme.control
     config?.baseForegroundColor = primary ? TaskTheme.onAccent : TaskTheme.ink
+    let tint = primary ? TaskTheme.muted : TaskTheme.line
+    config?.background.strokeColor = primary ? .clear : tint
+    config?.background.strokeWidth = primary ? 0 : 1
     button.configuration = config
+    button.configurationUpdateHandler = { [weak button] view in
+        guard let button else { return }
+        var style = button.configuration
+        let pressed = button.isHighlighted || (view.isUserInteractionEnabled && !button.isEnabled)
+        style?.background.backgroundColor = pressed ? tint : (primary ? lb_acnt() : TaskTheme.control)
+        style?.baseForegroundColor = !button.isEnabled ? TaskTheme.muted : (primary ? TaskTheme.onAccent : TaskTheme.ink)
+        button.configuration = style
+    }
 }
 // 设置图标按钮的无障碍身份。
 func tu_ibtn(_ icon: String, _ label: String, _ id: String, _ target: Any?, _ action: Selector?) -> UIButton {
@@ -102,6 +151,12 @@ func tu_ibtn(_ icon: String, _ label: String, _ id: String, _ target: Any?, _ ac
     button.accessibilityLabel = label; button.accessibilityIdentifier = id
     button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
     return button
+}
+// 统一正文和输入提示的次级文字色，避免系统动态灰在中性底上对比不足。
+func tu_phl(_ text: String, _ font: UIFont? = nil) -> NSAttributedString {
+    var style: [NSAttributedString.Key: Any] = [.foregroundColor: TaskTheme.muted]
+    if let font { style[.font] = font }
+    return NSAttributedString(string: text, attributes: style)
 }
 // 创建动态字体标签。
 func tu_lbl(_ text: String?) -> UILabel {
@@ -121,6 +176,7 @@ func tu_fld(_ field:UIView) {
 func tu_cell() -> UIListContentConfiguration {
     var content=UIListContentConfiguration.subtitleCell();content.textProperties.font=lb_fnt(.body,nil);content.textProperties.color=TaskTheme.ink;content.textProperties.numberOfLines=0
     content.secondaryTextProperties.font=lb_fnt(.subheadline,nil);content.secondaryTextProperties.color=TaskTheme.muted;content.secondaryTextProperties.numberOfLines=0
+    content.imageProperties.tintColor=lb_acnt()
     content.directionalLayoutMargins = .init(top:12,leading:16,bottom:12,trailing:16);content.imageToTextPadding=12;return content
 }
 // 使用同一组分档标签编辑待办属性。

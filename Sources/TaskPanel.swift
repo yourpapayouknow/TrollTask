@@ -285,7 +285,7 @@ private final class TaskRaw: TaskScreen {
     override func viewDidLoad() {
         super.viewDidLoad(); var local = Calendar(identifier: .gregorian); local.timeZone = zone
         if requiresTime { timed = true }
-        calendar.tintColor = UIColor(red: 184/255, green: 85/255, blue: 0, alpha: 1); calendar.accessibilityIdentifier = "calendar.month"; calendar.calendar = local; calendar.timeZone = zone; calendar.locale = Locale(identifier: "zh_CN")
+        calendar.tintColor = TaskTheme.cyanInk; calendar.accessibilityIdentifier = "calendar.month"; calendar.calendar = local; calendar.timeZone = zone; calendar.locale = Locale(identifier: "zh_CN")
         let selection = UICalendarSelectionSingleDate(delegate: self); calendar.selectionBehavior = selection
         let parts = local.dateComponents([.year, .month, .day], from: date); selection.setSelected(parts, animated: false); calendar.setVisibleDateComponents(parts, animated: false)
         time.datePickerMode = .time; time.preferredDatePickerStyle = .wheels; time.timeZone = zone; time.locale = calendar.locale; time.date = date; time.accessibilityIdentifier = "calendar.time"

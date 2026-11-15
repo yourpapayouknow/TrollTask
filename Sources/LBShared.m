@@ -29,7 +29,7 @@ BOOL lb_dbg(void) { return [NSBundle.mainBundle.infoDictionary[@"TTHUDDebug"] bo
 // 默认SIGALRM由系统结束进程，不依赖触摸或主RunLoop。
 void lb_dbgarm(unsigned int seconds) { signal(SIGALRM, SIG_DFL); alarm(seconds); }
 
-// 生成经过边界校验的配置。
+// 生成经过边界校验的配置，保留外观选择0至2。
 static NSDictionary *lb_normcfg(NSDictionary *input) {
     id enabled = [input isKindOfClass:NSDictionary.class] ? input[@"enabled"] : nil;
 #ifdef LB_HUD_PROBE
@@ -37,7 +37,9 @@ static NSDictionary *lb_normcfg(NSDictionary *input) {
 #else
     BOOL active = [enabled isKindOfClass:NSNumber.class] && [enabled boolValue];
 #endif
-    return @{@"enabled": @(active)};
+    id look = [input isKindOfClass:NSDictionary.class] ? input[@"appearance"] : nil;
+    int style = [look isKindOfClass:NSNumber.class] ? MIN(MAX([look intValue], 0), 2) : 0;
+    return @{@"enabled": @(active), @"appearance": @(style)};
 }
 
 // 读取共享配置文件。
@@ -198,12 +200,12 @@ BOOL lb_spawn(void) {
 #endif
 
 #if !defined(LB_HOST_TEST) || defined(LB_UI_TEST)
-// 在明暗背景上保持可读的橙色强调色。
+// 按色卡提供深浅两模式主操作色：浅色深墨，深色暖橙。
 UIColor *lb_acnt(void) {
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
         return traits.userInterfaceStyle == UIUserInterfaceStyleDark
-            ? [UIColor colorWithRed:255/255.0 green:183/255.0 blue:124/255.0 alpha:1]
-            : [UIColor colorWithRed:166/255.0 green:68/255.0 blue:0 alpha:1];
+            ? [UIColor colorWithRed:255/255.0 green:146/255.0 blue:91/255.0 alpha:1]
+            : [UIColor colorWithRed:16/255.0 green:47/255.0 blue:64/255.0 alpha:1];
     }];
 }
 // 使用UIKit加载同库的多倍率模板图标。
@@ -249,7 +251,7 @@ UIFont *lb_fnt(UIFontTextStyle style, UITraitCollection *traits) {
 UIButton *lb_mkbtn(NSString *title, id target, SEL action) {
     UIButtonConfiguration *config = [UIButtonConfiguration plainButtonConfiguration];
     config.title = title;
-    config.baseForegroundColor = UIColor.labelColor;
+    config.baseForegroundColor = lb_acnt();
     config.cornerStyle = UIButtonConfigurationCornerStyleFixed;
     config.background.cornerRadius = 12.0;
     config.contentInsets = NSDirectionalEdgeInsetsMake(8.0, 8.0, 8.0, 8.0);
