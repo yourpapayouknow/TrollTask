@@ -74,6 +74,10 @@ final class TaskDate {
     // 构建完整详情和可展开的额外字段。
     override func viewDidLoad() {
         super.viewDidLoad(); title = task == nil ? (routine ? "新建常律" : "添加待办") : "任务详情"
+        if quick {
+            let surface = UIView(frame: view.bounds); surface.backgroundColor = TaskTheme.surface; surface.isUserInteractionEnabled = false
+            surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]; view.insertSubview(surface, at: 1)
+        }
         if newTodo {
             let dates = TaskWindowFields(zone: zone)
             dates.isHidden = true
@@ -508,7 +512,7 @@ final class TaskDate {
         let title=textField.text!,parent=task
         var input:TaskFields=["title":title,"list_id":parent["list_id"]!,"parent_id":parent["task_id"]!,"timezone_id":parent["timezone_id"]!]
         for key in ["due_at","deadline_at"]{input[key]=parent[key]}
-        navigationController?.pushViewController(TaskAdmissionScreen(store:store,fields:input){[weak self] in guard let self else{return};self.navigationController?.popToViewController(self,animated:true);self.rmChild();self.children();self.saved?();let back=self.childBack;self.childBack=false;if back{self.bk()}},animated:true);return false
+        navigationController?.pushViewController(TaskAdmissionScreen(store:store,fields:input){[weak self] in guard let self else{return};self.navigationController?.popToViewController(self,animated:true);self.rmChild();self.children();TaskHaptics.success();self.saved?();let back=self.childBack;self.childBack=false;if back{self.bk()}},animated:true);return false
     }
     // 展示已完成轮次记录。
     private func hist() {
@@ -567,7 +571,7 @@ final class TaskDate {
             input.merge(fields){_,new in new}
             let rows: [TaskFields]
             if let id=task?["task_id"] as? String,let all=try? store.lsTsks() as? [TaskFields]{rows=all.filter{$0["parent_id"] as? String==id && ($0["deleted"] as? Bool)==false}.sorted{($0["position"] as! NSNumber).doubleValue<($1["position"] as! NSNumber).doubleValue}.map{row in row.filter{["task_id","title","notes","planned_duration"].contains($0.key)}}}else{rows=[]}
-            let page=TaskAdmissionScreen(store:store,fields:input,parts:rows){[weak self] in guard let self else{return};self.saved?();if self.quick{self.dismiss(animated:true)}else if let nav=self.navigationController,let index=nav.viewControllers.firstIndex(where:{$0===self}),index>0{nav.popToViewController(nav.viewControllers[index-1],animated:true)}}
+            let page=TaskAdmissionScreen(store:store,fields:input,parts:rows){[weak self] in guard let self else{return};TaskHaptics.success();self.saved?();if self.quick{self.dismiss(animated:true)}else if let nav=self.navigationController,let index=nav.viewControllers.firstIndex(where:{$0===self}),index>0{nav.popToViewController(nav.viewControllers[index-1],animated:true)}}
             view.endEditing(true);navigationController?.pushViewController(page,animated:true);return
         }
         if fields.isEmpty { finish(); return }
@@ -590,6 +594,7 @@ final class TaskDate {
     }
     // 保存后替换编辑页，返回时显示最新快照。
     private func finish() {
+        TaskHaptics.success()
         saved?()
         if splitAfterSave, let id = task?["task_id"] as? String, let nav = navigationController { var pages = nav.viewControllers; if pages.last === self { pages.removeLast(); pages.append(TaskAssistantScreen(store: store, taskID: id)); nav.setViewControllers(pages, animated: true) } } else { cncl() }
     }

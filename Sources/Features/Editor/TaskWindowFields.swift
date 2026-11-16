@@ -55,7 +55,7 @@ final class TaskWindowFields: UIStackView {
             let size = (title as NSString).size(withAttributes: [.font: buttonFont]).width
             return label.intrinsicContentSize.width + row.spacing + size + config.contentInsets.leading + config.contentInsets.trailing
         }.max() ?? 0
-        let vertical = widest > width
+        let vertical = widest > width || width < 340
         for row in rows {
             row.axis = vertical ? .vertical : .horizontal
             row.alignment = vertical ? .leading : .center

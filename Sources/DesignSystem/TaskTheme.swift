@@ -139,6 +139,7 @@ func tu_btn(_ title: String?, _ icon: String? = nil, _ target: Any? = nil, _ act
     button.widthAnchor.constraint(greaterThanOrEqualToConstant: minWidth).isActive = true
     button.contentHorizontalAlignment = .leading
     button.titleLabel?.adjustsFontForContentSizeCategory = true
+    TaskPress.attach(button)
     return button
 }
 // 只为主操作和HUD次操作提供统一实色背景和按下浅色反馈。
@@ -214,9 +215,25 @@ func tu_grade(_ key: String, _ prefix: String, _ rating: Int, selected: @escapin
 func tu_stk(_ views: [UIView]) -> UIStackView {
     let stack = UIStackView(arrangedSubviews: views); stack.axis = .vertical; stack.spacing = TaskTheme.gap; return stack
 }
+// 将功能行组合为单层卡片，行间使用发丝线。
+func tu_card(_ rows: [UIView]) -> UIView {
+    let card = UIView(); card.backgroundColor = TaskTheme.surface; card.layer.cornerRadius = 16; card.layer.cornerCurve = .continuous; card.clipsToBounds = true
+    let stack = UIStackView(); stack.axis = .vertical; stack.spacing = 0; stack.translatesAutoresizingMaskIntoConstraints = false
+    for (index, row) in rows.enumerated() {
+        if index > 0 {
+            let line = TaskHair(); line.translatesAutoresizingMaskIntoConstraints = false
+            line.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale).isActive = true
+            stack.addArrangedSubview(line)
+        }
+        stack.addArrangedSubview(row)
+    }
+    card.addSubview(stack)
+    NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: card.leadingAnchor), stack.trailingAnchor.constraint(equalTo: card.trailingAnchor), stack.topAnchor.constraint(equalTo: card.topAnchor), stack.bottomAnchor.constraint(equalTo: card.bottomAnchor)])
+    return card
+}
 // 创建标签与原生控件横向行。
 func tu_row(_ title: String, _ control: UIView) -> UIStackView {
-    let label = tu_lbl(title); label.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+    let label = tu_lbl(title); label.numberOfLines = 1; label.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
     if control is UITextField { NSLayoutConstraint.activate([control.widthAnchor.constraint(greaterThanOrEqualToConstant:44),control.heightAnchor.constraint(greaterThanOrEqualToConstant:44)]) }
     let row = tu_stk([label, control]); row.axis = .horizontal; row.alignment = .center
     control.setContentHuggingPriority(.required, for: .horizontal)
@@ -303,12 +320,13 @@ private final class TaskDock: UIPresentationController, UIGestureRecognizerDeleg
     // 注册键盘变化和外部取消入口。
     override func presentationTransitionWillBegin() {
         guard let container = containerView else { return }
-        shade.backgroundColor = UIColor.black.withAlphaComponent(0.4); shade.addTarget(self, action: #selector(cls), for: .touchUpInside); container.insertSubview(shade, at: 0)
+        shade.backgroundColor = UIColor.black.withAlphaComponent(0.4); shade.alpha = 0; shade.addTarget(self, action: #selector(cls), for: .touchUpInside); container.insertSubview(shade, at: 0)
+        TaskMotion.animate(.sheet) { self.shade.alpha = 1 }
         observer = NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self, weak container] note in
             guard let self, let container else { return }; self.keyboard = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .zero
             if self.keyboard.minY >= container.bounds.maxY { self.keyboard = .zero }
             let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
-            UIView.animate(withDuration: duration) { container.setNeedsLayout(); container.layoutIfNeeded() }
+            UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) { container.setNeedsLayout(); container.layoutIfNeeded() }
         }
         let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swp)); swipe.direction = .down; swipe.delegate = self; presentedView?.addGestureRecognizer(swipe)
     }
@@ -332,8 +350,14 @@ private final class TaskDock: UIPresentationController, UIGestureRecognizerDeleg
         super.containerViewWillLayoutSubviews(); shade.frame = containerView?.bounds ?? .zero
         presentedView?.frame = frameOfPresentedViewInContainerView; presentedView?.layer.cornerRadius = 20; presentedView?.layer.cornerCurve = .continuous; presentedView?.clipsToBounds = true
     }
-    // 响应备注及高级字段展开。
-    override func preferredContentSizeDidChange(forChildContentContainer container: UIContentContainer) { super.preferredContentSizeDidChange(forChildContentContainer: container); containerView?.setNeedsLayout() }
+    // 响应备注及高级字段展开，让高度变化连续而不是跳变。
+    override func preferredContentSizeDidChange(forChildContentContainer container: UIContentContainer) {
+        super.preferredContentSizeDidChange(forChildContentContainer: container)
+        guard let view = containerView else { return }
+        TaskMotion.animate(.gentle) { view.setNeedsLayout(); view.layoutIfNeeded() }
+    }
+    // 退出时同步淡出遮罩，和面板保持同一路径。
+    override func dismissalTransitionWillBegin() { super.dismissalTransitionWillBegin(); TaskMotion.animate(.sheet) { self.shade.alpha = 0 } }
     // 注销键盘监听。
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
 }
@@ -343,14 +367,15 @@ private final class TaskDockMotion: NSObject, UIViewControllerAnimatedTransition
     // 保存当前转场方向。
     init(_ entering: Bool) { self.entering = entering }
     // 使用短暂原生转场。
-    func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval { 0.2 }
+    func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval { 0.38 }
     // 保持面板最终尺寸并完成系统转场。
     func animateTransition(using context: UIViewControllerContextTransitioning) {
         let key: UITransitionContextViewControllerKey = entering ? .to : .from
         guard let page = context.viewController(forKey: key) else { context.completeTransition(false); return }
         let panel = page.view!
         if entering { context.containerView.addSubview(panel); panel.frame = context.finalFrame(for: page); panel.transform = CGAffineTransform(translationX: 0, y: panel.bounds.height) }
-        UIView.animate(withDuration: transitionDuration(using: context), animations: { panel.transform = self.entering ? .identity : CGAffineTransform(translationX: 0, y: panel.bounds.height) }) { _ in context.completeTransition(!context.transitionWasCancelled) }
+        let target = entering ? CGAffineTransform.identity : CGAffineTransform(translationX: 0, y: panel.bounds.height)
+        TaskMotion.animate(.sheet, { panel.transform = target }) { _ in context.completeTransition(!context.transitionWasCancelled) }
     }
 }
 // 为既有快捷编辑器提供同一个原生呈现入口。
@@ -451,7 +476,9 @@ final class TaskMenu: UITableViewController {
     }
     // 等待面板关闭后执行操作。
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true); run(actions[indexPath.row])
+        tableView.deselectRow(at: indexPath, animated: true)
+        if !actions[indexPath.row].attributes.contains(.disabled) { TaskHaptics.pick() }
+        run(actions[indexPath.row])
     }
     // 关闭抽屉后再执行跳转，避免在撤下期间叠加页面。
     private func run(_ item: UIAction) { guard !selecting, !isBeingDismissed, !item.attributes.contains(.disabled) else { return }; selecting = true; dismiss(animated: true) { UIButton(configuration: .plain(), primaryAction: item).sendActions(for: .touchUpInside) } }

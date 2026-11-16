@@ -42,11 +42,7 @@
     <true/>
     <key>com.apple.springboard.appbackgroundstyle</key>
     <true/>
-    <key>com.apple.springboard.disallowControlCenter</key>
-    <true/>
-    <key>com.apple.springboard.disallowNotificationCenter</key>
-    <true/>
-    <key>platform-application</key>
+        <key>platform-application</key>
     <true/>
     <key>user-preference-read</key>
     <true/>

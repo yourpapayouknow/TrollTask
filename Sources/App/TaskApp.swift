@@ -144,7 +144,7 @@
         look=tu_btn("外观","settings",nil,nil);look.accessibilityIdentifier="settings.appearance"
         look.showsMenuAsPrimaryAction = true
         for button in [status!,planned!,preview!,recovery!,assistant,routineImport,archive,cloud,timezone!,look] {
-            var config=button.configuration;config?.imagePadding=8;config?.background.cornerRadius=12;config?.contentInsets=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12)
+            var config=button.configuration;config?.imagePadding=8;config?.background.cornerRadius=12;config?.contentInsets=NSDirectionalEdgeInsets(top:12,leading:16,bottom:12,trailing:16)
             config?.titleLineBreakMode = .byWordWrapping;config?.subtitleLineBreakMode = .byWordWrapping
             config?.imagePlacement = .leading
             config?.titleAlignment = .leading
@@ -158,10 +158,11 @@
         let help=UIAction(title:hint,identifier:UIAction.Identifier("settings.recovery.help")){[weak self] _ in self?.hlp(hint)}
         recovery.menu=UIMenu(children:[help])
         let icon=UIImageView(image:lb_icon("settings"));icon.tintColor=TaskTheme.ink;icon.contentMode = .scaleAspectFit;NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant:24),icon.heightAnchor.constraint(equalToConstant:24)])
-        let service=tu_stk([icon,tu_lbl("后台服务"),monitor]);service.axis = .horizontal;service.alignment = .center;service.spacing=8;service.isLayoutMarginsRelativeArrangement=true;service.directionalLayoutMargins=NSDirectionalEdgeInsets(top:8,leading:12,bottom:8,trailing:12);service.accessibilityIdentifier="settings.service";service.heightAnchor.constraint(greaterThanOrEqualToConstant:56).isActive=true
-        let divider=TaskHair()
-        let fields=tu_stk([timezone,look,archive,cloud,assistant,routineImport,divider,service,status,planned,preview,recovery]);fields.spacing=16
-        _ = tu_form(self,fields,"settings.content",top:header);fields.setCustomSpacing(TaskTheme.section,after:recovery);fields.setCustomSpacing(TaskTheme.section,after:divider)
+        let service=tu_stk([icon,tu_lbl("后台服务"),monitor]);service.axis = .horizontal;service.alignment = .center;service.spacing=8;service.isLayoutMarginsRelativeArrangement=true;service.directionalLayoutMargins=NSDirectionalEdgeInsets(top:12,leading:16,bottom:12,trailing:16);service.accessibilityIdentifier="settings.service";service.heightAnchor.constraint(greaterThanOrEqualToConstant:56).isActive=true
+        let mainGroup = tu_card([timezone,look,archive,cloud,assistant,routineImport])
+        let serviceGroup = tu_card([service,status,planned,preview,recovery])
+        let fields=tu_stk([mainGroup,serviceGroup]);fields.spacing=TaskTheme.section
+        _ = tu_form(self,fields,"settings.content",top:header)
         let result = notify_register_dispatch(LB_READY_NOTE, &token, .main) { [weak self] _ in
             guard let self = self, self.pending else { return }; self.pending = false; self.stat("测试全屏提醒"); self.sync(); notify_post(LB_TEST_NOTE)
         }

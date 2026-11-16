@@ -235,8 +235,12 @@ UIFont *lb_fnt(UIFontTextStyle style, UITraitCollection *traits) {
         size = 28; weight = UIFontWeightSemibold;
     } else if ([style isEqual:UIFontTextStyleHeadline]) {
         weight = UIFontWeightSemibold;
-    } else if ([style isEqual:UIFontTextStyleSubheadline] || [style isEqual:UIFontTextStyleFootnote] || [style isEqual:UIFontTextStyleCaption1] || [style isEqual:UIFontTextStyleCaption2]) {
-        size = 18;
+    } else if ([style isEqual:UIFontTextStyleSubheadline]) {
+        size = 16;
+    } else if ([style isEqual:UIFontTextStyleFootnote]) {
+        size = 14;
+    } else if ([style isEqual:UIFontTextStyleCaption1] || [style isEqual:UIFontTextStyleCaption2]) {
+        size = 13;
     }
     return [[UIFontMetrics metricsForTextStyle:style] scaledFontForFont:[UIFont systemFontOfSize:size weight:weight] compatibleWithTraitCollection:traits];
 }

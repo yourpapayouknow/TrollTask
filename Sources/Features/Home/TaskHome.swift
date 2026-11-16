@@ -1,6 +1,5 @@
 // 将任务快照绑定到原生按钮而不丢失轮次意图。
 private var taskKey: UInt8 = 0
-private let selBar = 91
 
 // 显示完整标题、日期时间及独立完成与星标入口。
 final class TaskCell: UITableViewCell {
@@ -13,6 +12,7 @@ final class TaskCell: UITableViewCell {
     private var checkWidth:NSLayoutConstraint!,trailingWidth:NSLayoutConstraint!,trailingEdge:NSLayoutConstraint!,reserved:CGFloat=112
     private var starCenter:NSLayoutConstraint!,deleteCenter:NSLayoutConstraint!
     private var metadata: UIStackView!
+    private var shownID: String?, lastComplete = false, lastStarred = false, lastLit = false
     private let metadataSpace = UIView()
     // 创建单层透明待办行。
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
@@ -70,6 +70,9 @@ final class TaskCell: UITableViewCell {
         let halfway = TaskWindow.halfway(task).map { $0 <= Date().timeIntervalSince1970 } ?? false
         let lit = starred || halfway
         let id = task["task_id"] as! String
+        let same = shownID == id
+        let completeChanged = same && lastComplete != complete
+        let starChanged = same && (lastStarred != starred || lastLit != lit)
         let today = owner.todayOnly, routine = task["list_id"] as? String == TS_RTN_LST
         let card = owner.routineOnly
         check.isHidden = !today || complete
@@ -93,6 +96,10 @@ final class TaskCell: UITableViewCell {
         objc_setAssociatedObject(check, &taskKey, task, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         check.setImage(lb_icon(complete ? "check_circle" : "round"), for: .normal)
         var mark = check.configuration; mark?.baseForegroundColor = complete ? lb_acnt() : TaskTheme.muted; check.configuration = mark
+        if completeChanged, let image = check.imageView {
+            image.transform = CGAffineTransform(scaleX: 0.78, y: 0.78)
+            TaskMotion.animate(.gentle) { image.transform = .identity }
+        }
         trailing.accessibilityIdentifier = (card ? "routine.delete." : "star.") + id
         trailing.accessibilityLabel = card ? "删除常律" : (starred ? "取消星标" : "添加星标")
         trailing.accessibilityValue = card ? task["title"] as? String : (starred ? "1" : halfway ? "时间已过半" : "0")
@@ -102,6 +109,10 @@ final class TaskCell: UITableViewCell {
         action?.contentInsets = .init(top:8,leading:card ? 8 : 12,bottom:8,trailing:card ? 8 : 12)
         action?.baseForegroundColor = card ? TaskTheme.muted : (lit ? TaskTheme.orangeInk : TaskTheme.muted)
         trailing.configuration = action
+        if starChanged, let image = trailing.imageView {
+            image.transform = CGAffineTransform(scaleX: 0.78, y: 0.78)
+            TaskMotion.animate(.gentle) { image.transform = .identity }
+        }
         check.removeTarget(nil, action: nil, for: .touchUpInside); trailing.removeTarget(nil, action: nil, for: .touchUpInside)
         check.addTarget(owner, action: #selector(TaskHome.tglTsk(_:)), for: .touchUpInside)
         trailing.addTarget(owner, action: card ? #selector(TaskHome.delRtn(_:)) : #selector(TaskHome.tglStar(_:)), for: .touchUpInside)
@@ -146,6 +157,7 @@ final class TaskCell: UITableViewCell {
             day.text=first ? (disabled ? "已停用":nil):time.map{$0+(disabled ? "·已停用":"")};day.isHidden=day.text==nil;clock.isHidden=true;metadata.isHidden=day.isHidden
             titleLabelView.accessibilityLabel=(task["title"] as? String ?? "")+(time.map{"，触发"+$0} ?? "")
         }
+        shownID = id; lastComplete = complete; lastStarred = starred; lastLit = lit
     }
     // 避免动态字体和小数像素产生歧义。
     func sz(_ width: CGFloat) {
@@ -161,6 +173,8 @@ final class TaskCell: UITableViewCell {
     private let settings: ((UINavigationController) -> Void)?
     private let table = UITableView(frame: .zero, style: .plain), tabs = tu_stk([])
     private let strip = UIScrollView()
+    private let tabRule = UIView()
+    private var tabRuleID: String?
     private var tabFocus=true,tabWidth:CGFloat=0
     private var tabHeight: NSLayoutConstraint!,listBottom:NSLayoutConstraint!
     private let toolbar=UIView()
@@ -212,6 +226,7 @@ final class TaskCell: UITableViewCell {
         strip.showsHorizontalScrollIndicator = false;strip.showsVerticalScrollIndicator=false;strip.contentInsetAdjustmentBehavior = .never;strip.isDirectionalLockEnabled=true; strip.accessibilityIdentifier = "home.tabs"; view.addSubview(strip); tu_wdth(strip, view, inset: 0)
         tabs.axis = .horizontal;tabs.spacing=8; tabs.translatesAutoresizingMaskIntoConstraints = false; strip.addSubview(tabs)
         NSLayoutConstraint.activate([tabs.leadingAnchor.constraint(equalTo: strip.contentLayoutGuide.leadingAnchor), tabs.trailingAnchor.constraint(equalTo: strip.contentLayoutGuide.trailingAnchor), tabs.topAnchor.constraint(equalTo: strip.contentLayoutGuide.topAnchor), tabs.bottomAnchor.constraint(equalTo: strip.contentLayoutGuide.bottomAnchor), tabs.heightAnchor.constraint(equalTo: strip.frameLayoutGuide.heightAnchor)])
+        tabRule.backgroundColor = TaskTheme.cyanInk; tabRule.layer.cornerRadius = 1; tabRule.isUserInteractionEnabled = false; tabRule.isHidden = true; strip.addSubview(tabRule)
         table.accessibilityIdentifier = "home.list"; table.backgroundColor = .clear; table.dataSource = self; table.delegate = self
         table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 84; table.sectionHeaderTopPadding = 0; table.separatorStyle = .none; table.keyboardDismissMode = .interactive
         table.register(TaskCell.self, forCellReuseIdentifier: "task"); view.addSubview(table); tu_wdth(table, view, inset: 0)
@@ -512,16 +527,26 @@ final class TaskCell: UITableViewCell {
             button.accessibilityIdentifier = "list." + id; button.accessibilityLabel = id == "starred" ? "星标待办" : list["title"] as? String; button.accessibilityValue = selected ? "已选中" : "未选中"
             var config = button.configuration; config?.baseForegroundColor = TaskTheme.muted
             button.configuration = config
-            if selected {
-                button.accessibilityTraits.insert(.selected)
-                let line = UIView(); line.tag = selBar; line.backgroundColor = TaskTheme.cyanInk; line.layer.cornerRadius = 1; line.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(line)
-                NSLayoutConstraint.activate([line.heightAnchor.constraint(equalToConstant: 2), line.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12), line.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -12), line.bottomAnchor.constraint(equalTo: button.bottomAnchor)])
-            }; tabs.addArrangedSubview(button)
+            if selected { button.accessibilityTraits.insert(.selected) }; tabs.addArrangedSubview(button)
         }
         let button = tabBtn("新建清单", "add", #selector(crtLst)); button.accessibilityIdentifier = "home.newlist";button.isEnabled = !todayOnly; tabs.addArrangedSubview(button)
         for item in tabs.arrangedSubviews {item.widthAnchor.constraint(lessThanOrEqualTo:strip.frameLayoutGuide.widthAnchor,constant:-4-4).isActive=true}
         rfrshTints()
         view.setNeedsLayout()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.view.layoutIfNeeded()
+            self.plcTabRule(animated: self.tabRuleID != nil && self.tabRuleID != self.listID)
+            self.tabRuleID = self.listID
+        }
+    }
+    // 将单条青色时间线放到当前页签下方，切换时弹过去。
+    private func plcTabRule(animated: Bool) {
+        guard let selected = tabs.arrangedSubviews.first(where: { $0.accessibilityIdentifier == "list." + listID }) else { tabRule.isHidden = true; return }
+        tabRule.isHidden = false
+        let frame = selected.convert(selected.bounds, to: strip)
+        let target = CGRect(x: frame.minX + 12, y: frame.maxY - 2, width: max(0, frame.width - 24), height: 2)
+        if animated && !tabRule.frame.isEmpty { TaskMotion.animate(.snappy) { self.tabRule.frame = target } } else { tabRule.frame = target }
     }
     // 选中页签保持可见，未选中页签降为次级色。
     private func rfrshTints() {
@@ -533,12 +558,16 @@ final class TaskCell: UITableViewCell {
     @objc private func selLst(_ button: UIButton) {
         guard let store else { rfrsh(); return }
         let selected = String(button.accessibilityIdentifier!.dropFirst(5))
-        let reset = selected != listID && (routineOnly || selected == TS_RTN_LST)
+        let changed = selected != listID
+        let reset = changed && (routineOnly || selected == TS_RTN_LST)
         if reset { rtnSections = []; rtnRevision += 1 }
+        if changed { TaskHaptics.pick() }
         listID = selected
         if todayOnly { tdyReset() }
         sort = UserDefaults.standard.string(forKey: "\(store.changeNote!).\(listID).sort") ?? "date"
-        table.setEditing(false, animated: false); fltr(); bldTabs(); table.reloadData()
+        table.setEditing(false, animated: false); fltr(); bldTabs()
+        if changed { TaskMotion.crossfade(table) { self.table.reloadData() } } else { table.reloadData() }
+        if routineOnly { rtnRead(0) }
         if reset { table.setContentOffset(CGPoint(x:0,y:-table.adjustedContentInset.top),animated:false) }
         tdyFollow()
     }
@@ -656,6 +685,7 @@ final class TaskCell: UITableViewCell {
     // 提交明确星标意图。
     @objc func tglStar(_ button: UIButton) {
         guard !todayOnly else{return}
+        TaskHaptics.tap()
         let id = String(button.accessibilityIdentifier!.dropFirst(5)), starred = button.accessibilityValue != "1"
         wrt { store in try tu_live(try store.rdTsk(id) as! TaskFields); try store.updTsk(id, fields: ["starred": starred]) }
     }
@@ -694,6 +724,7 @@ final class TaskCell: UITableViewCell {
         let name = lb_shrt(task["title"] as? String)
         tu_cfrm(self, "删除常律？", message: "\(name ?? "")\n各天安排与提醒将移除") { [weak self, weak button] in
             guard let self, self.busy.insert(id).inserted else { return }
+            TaskHaptics.warning()
             button?.isEnabled = false
             self.wrt({ try $0.delTsk(id) }, done: { [weak self] error in
                 guard let self else { return }
@@ -706,6 +737,7 @@ final class TaskCell: UITableViewCell {
     // 只唤起原有提醒队列，任务完成仍须HUD提交附件。
     @objc func tglTsk(_ button: UIButton) {
         guard todayOnly,button.isEnabled,let store,let display=objc_getAssociatedObject(button,&taskKey) as? TaskFields,let id=display["task_id"] as? String,!busy.contains(id) else{return}
+        TaskHaptics.tap()
         busy.insert(id);button.isEnabled=false
         queue.async {var failure:Error?
             do {_ = try TaskToday.alrt(store,task:display as NSDictionary,at:Date().timeIntervalSince1970)
@@ -720,14 +752,25 @@ final class TaskCell: UITableViewCell {
     func numberOfSections(in tableView: UITableView) -> Int { routineOnly ? max(1,rtnSections.count):1 }
     // 提供待办行和空态。
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { if routineOnly{return rtnSections.isEmpty ? 1:max(1,(rtnSections[section]["rows"] as! [TaskFields]).count)};return max(pending.count, 1) }
+    // 空态占据视口中部，避免文字贴顶。
+    func tableView(_ tableView: UITableView, heightForRowAt path: IndexPath) -> CGFloat {
+        if path.section == 0 && (routineOnly ? rtnSections.isEmpty : pending.isEmpty) { return max(240, tableView.bounds.height * 0.55) }
+        return UITableView.automaticDimension
+    }
     // 显示原生待办行或功能空态。
     func tableView(_ tableView: UITableView, cellForRowAt path: IndexPath) -> UITableViewCell {
         if path.section == 0 && (routineOnly ? rtnSections.isEmpty:pending.isEmpty) {
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil); cell.backgroundColor = .clear; cell.selectionStyle = .none
-            let empty = tu_btn(failed ? "读取失败" : (loaded ? "暂无待办" : "正在读取"), nil, self, #selector(empt)); empty.isEnabled = loaded; empty.accessibilityIdentifier = "home.empty"
-            empty.isEnabled = !todayOnly || failed;empty.contentHorizontalAlignment = .center
+            let title = failed ? "读取失败" : (loaded ? "暂无待办" : "正在读取")
+            let empty = tu_btn(title, "list", self, #selector(empt)); empty.isEnabled = loaded && (!todayOnly || failed); empty.accessibilityIdentifier = "home.empty"
+            var config = empty.configuration
+            config?.imagePlacement = .top; config?.imagePadding = 12; config?.contentInsets = .init(top: 20, leading: 24, bottom: 20, trailing: 24)
+            config?.baseForegroundColor = TaskTheme.ink
+            config?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in var value = attributes; value.font = lb_fnt(.body, nil); return value }
+            empty.configuration = config; empty.contentHorizontalAlignment = .center
             empty.translatesAutoresizingMaskIntoConstraints = false; cell.contentView.addSubview(empty)
-            NSLayoutConstraint.activate([empty.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor, constant: 16), empty.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -16), empty.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: 12), empty.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -12)]); return cell
+            NSLayoutConstraint.activate([empty.centerXAnchor.constraint(equalTo: cell.contentView.centerXAnchor), empty.centerYAnchor.constraint(equalTo: cell.contentView.centerYAnchor), empty.leadingAnchor.constraint(greaterThanOrEqualTo: cell.contentView.leadingAnchor, constant: 24), empty.trailingAnchor.constraint(lessThanOrEqualTo: cell.contentView.trailingAnchor, constant: -24)])
+            return cell
         }
         if routineOnly && rtnRow(path) == nil {
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
@@ -738,7 +781,7 @@ final class TaskCell: UITableViewCell {
             let cell=UITableViewCell(style:.default,reuseIdentifier:nil);cell.backgroundColor = .clear;cell.selectionStyle = .none;cell.accessibilityIdentifier="routine.mark.\(path.section).\(path.row)"
             let label=tu_lbl(nil);label.font=lb_fnt(.subheadline,traitCollection);label.textColor=TaskTheme.muted;label.accessibilityTraits.insert(.header)
             if let stamp=row["routine_fire_at"] as? NSNumber {let format=DateFormatter();format.dateFormat="HH:mm";label.text=format.string(from:Date(timeIntervalSince1970:stamp.doubleValue))}
-            let line=TaskHair()
+            let line=TaskHair();line.translatesAutoresizingMaskIntoConstraints = false;line.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale).isActive = true
             let contents=tu_stk([label,line]);contents.axis = .horizontal;contents.alignment = .center;contents.spacing=8;contents.translatesAutoresizingMaskIntoConstraints=false;cell.contentView.addSubview(contents);label.setContentHuggingPriority(.required,for:.horizontal)
             NSLayoutConstraint.activate([contents.leadingAnchor.constraint(equalTo:cell.contentView.leadingAnchor,constant:16),contents.trailingAnchor.constraint(equalTo:cell.contentView.trailingAnchor,constant:-16),contents.topAnchor.constraint(equalTo:cell.contentView.topAnchor,constant:8),contents.bottomAnchor.constraint(equalTo:cell.contentView.bottomAnchor,constant:-8)]);return cell
         }
