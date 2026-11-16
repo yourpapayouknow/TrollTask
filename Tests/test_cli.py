@@ -86,7 +86,7 @@ def tstcli():
         assert tstcmd(path, 'hold', occurrence, 'snooze')['defer_count'] == 1
         assert tstcmd(path, 'hold', occurrence, 'snooze', success=False)['kind'] == 'invalid_fields'
         assert tstcmd(path, 'resume', occurrence)['resumed']
-        picture = ROOT / 'Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@2x.png'
+        picture = ROOT / 'Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png'
         proof = tstcmd(path, 'checkin', occurrence, 'image', str(picture))
         assert proof['occurrence_id'] == occurrence and proof['image_bytes'] == len(picture.read_bytes())
         file_task = tstcmd(path, 'create', jdmp({'title': '普通文件打卡', 'due_at': 100}))

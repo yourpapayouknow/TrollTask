@@ -30,7 +30,7 @@ static void sc_req(BOOL valid, NSString *name) {
 }
 // 运行主线程展示队列，保留有界等待。
 static void sc_wait(NSTimeInterval seconds, BOOL (^check)(void), NSString *name) {
-    NSDate *end = [NSDate dateWithTimeIntervalSinceNow:seconds];
+    NSDate *end = [NSDate dateWithTimeIntervalSinceNow:MAX(seconds, 3)];
     while (!check() && end.timeIntervalSinceNow > 0) CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.01,true);
     sc_req(check(),name);
 }
