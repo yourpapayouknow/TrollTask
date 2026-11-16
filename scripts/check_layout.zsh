@@ -47,4 +47,25 @@ if [[ ! -f "$HOME/.local/skills/apple-design/SKILL.md" ]]; then
     exit 1
 fi
 
+[[ -f Resources/AppIcon-source.svg ]] || {
+    print -u2 -- "缺少 Resources/AppIcon-source.svg"
+    exit 1
+}
+iconset=Resources/Assets.xcassets/AppIcon.appiconset
+[[ -f "$iconset/AppIcon-1024.png" ]] || {
+    print -u2 -- "缺少 $iconset/AppIcon-1024.png"
+    exit 1
+}
+grep -q '"platform" : "ios"' "$iconset/Contents.json" || {
+    print -u2 -- "AppIcon 必须使用单尺寸 iOS 图标"
+    exit 1
+}
+for icon in "$iconset"/*.png; do
+    alpha=$(sips -g hasAlpha "$icon" 2>/dev/null | awk '/hasAlpha/{print $2}')
+    [[ "$alpha" == "no" ]] || {
+        print -u2 -- "$icon 仍带 alpha 通道"
+        exit 1
+    }
+done
+
 print "布局检查通过"

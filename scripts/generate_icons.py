@@ -1,63 +1,55 @@
 #!/usr/bin/env python3
-"""
-Generate iOS AppIcon sizes from a source image using macOS native `sips` tool.
-"""
-
+"""Render the 1024 AppIcon master; actool generates the remaining sizes."""
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
-def generate_icons(source_path="Resources/AppIcon-source.png", iconset_dir="Resources/Assets.xcassets/AppIcon.appiconset"):
+BACKGROUND = "#F1EBE5"
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def run(command):
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        fail(f"Failed: {' '.join(command)}\n{result.stderr.strip()}")
+    return result
+
+
+def generate_icons(source_path, iconset_dir):
     if not os.path.exists(source_path):
-        print(f"Error: Source image not found at {source_path}", file=sys.stderr)
-        sys.exit(1)
+        fail(f"Source image not found: {source_path}")
 
-    contents_json_path = os.path.join(iconset_dir, "Contents.json")
-    if not os.path.exists(contents_json_path):
-        print(f"Error: Contents.json not found at {contents_json_path}", file=sys.stderr)
-        sys.exit(1)
+    contents_path = os.path.join(iconset_dir, "Contents.json")
+    if not os.path.exists(contents_path):
+        fail(f"Contents.json not found: {contents_path}")
+    with open(contents_path, "r", encoding="utf-8") as handle:
+        images = json.load(handle).get("images", [])
+    if not any(item.get("platform") == "ios" and item.get("size") == "1024x1024" for item in images):
+        fail("AppIcon.appiconset must use the single 1024x1024 iOS icon")
 
-    with open(contents_json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    target = os.path.join(iconset_dir, "AppIcon-1024.png")
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opaque_png.swift")
+    with tempfile.TemporaryDirectory(prefix="trolltask-icon-") as directory:
+        alpha_png = os.path.join(directory, "alpha.png")
+        master_png = os.path.join(directory, "master.png")
+        run(["sips", "-s", "format", "png", "-z", "1024", "1024", source_path, "--out", alpha_png])
+        run(["xcrun", "swift", helper, alpha_png, master_png, BACKGROUND])
+        shutil.copyfile(master_png, target)
 
-    images = data.get("images", [])
-    print(f"Processing {len(images)} icon specifications from {contents_json_path}...")
+    probe = run(["sips", "-g", "hasAlpha", target]).stdout
+    if "hasAlpha: yes" in probe:
+        fail(f"{target} still has an alpha channel")
+    print(f"Rendered {target}")
 
-    for item in images:
-        filename = item.get("filename")
-        if not filename:
-            continue
-
-        size_str = item.get("size", "0x0")
-        scale_str = item.get("scale", "1x")
-
-        try:
-            w_str, h_str = size_str.split("x")
-            scale = float(scale_str.rstrip("x"))
-            target_w = int(round(float(w_str) * scale))
-            target_h = int(round(float(h_str) * scale))
-        except Exception as e:
-            print(f"Failed to parse size/scale for {filename}: {e}", file=sys.stderr)
-            continue
-
-        target_path = os.path.join(iconset_dir, filename)
-        cmd = [
-            "sips",
-            "-s", "format", "png",
-            "-z", str(target_h), str(target_w),
-            source_path,
-            "--out", target_path
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        if res.returncode != 0:
-            print(f"Failed to generate {filename}: {res.stderr.decode()}", file=sys.stderr)
-            sys.exit(1)
-        print(f"  Generated {filename} ({target_w}x{target_h})")
-
-    print("AppIcon generation complete.")
 
 if __name__ == "__main__":
-    src = sys.argv[1] if len(sys.argv) > 1 else "Resources/AppIcon-source.png"
-    dst = sys.argv[2] if len(sys.argv) > 2 else "Resources/Assets.xcassets/AppIcon.appiconset"
-    generate_icons(src, dst)
+    source = sys.argv[1] if len(sys.argv) > 1 else "Resources/AppIcon-source.svg"
+    destination = sys.argv[2] if len(sys.argv) > 2 else "Resources/Assets.xcassets/AppIcon.appiconset"
+    generate_icons(source, destination)

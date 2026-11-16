@@ -9,7 +9,7 @@ CLOUD_CLIENTS ?=
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
 HOST_CC := xcrun --sdk macosx clang
-ICON_SOURCE := Resources/AppIcon-source.png
+ICON_SOURCE := Resources/AppIcon-source.svg
 ASSET_FILES := $(shell find Resources/Assets.xcassets -type f)
 MING_FILES := $(shell find Resources/MingCute -type f)
 
@@ -76,10 +76,6 @@ $(APP_DIR)/$(APP): $(OBJECTS) $(BUILD)/AppInfo.plist Resources/entitlements.plis
 	cp $(BUILD)/AppInfo.plist $(APP_DIR)/Info.plist
 	cp -R Resources/MingCute $(APP_DIR)/
 	cp Resources/Reminder.wav Resources/WeeklyRoutine.json $(APP_DIR)/
-	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@2x.png $(APP_DIR)/AppIcon60x60@2x.png
-	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png $(APP_DIR)/AppIcon60x60@3x.png
-	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-76@2x.png $(APP_DIR)/AppIcon76x76@2x~ipad.png
-	cp Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png $(APP_DIR)/icon.png
 	/usr/libexec/PlistBuddy -c "Merge $(BUILD)/asset-info.plist" $(APP_DIR)/Info.plist 2>/dev/null || true
 	ldid -SResources/entitlements.plist $@
 
