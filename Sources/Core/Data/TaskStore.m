@@ -1417,6 +1417,8 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
                 if (![self qry:"DELETE FROM agenda_slots WHERE task_id=? AND generation=? AND cycle_at=?" values:@[slot[@"task_id"],slot[@"generation"],slot[@"cycle_at"]] error:failure]) return NO;
         }
         for (NSDictionary *slot in plan[@"allocations"]) {
+            if (![self qry:"DELETE FROM agenda_slots WHERE task_id=? AND generation=? AND cycle_at!=? AND end_at<=?"
+                values:@[slot[@"task_id"],slot[@"generation"],slot[@"cycle_at"],@(stamp)] error:failure]) return NO;
             if (![self qry:"INSERT INTO agenda_slots(task_id,generation,cycle_at,scheduled_at,day_at,start_at,end_at) VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(task_id,generation,cycle_at) DO UPDATE SET start_at=excluded.start_at,end_at=excluded.end_at "
                 "WHERE agenda_slots.start_at!=excluded.start_at OR agenda_slots.end_at!=excluded.end_at"

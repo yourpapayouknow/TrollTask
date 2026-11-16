@@ -151,6 +151,14 @@ static NSDictionary *ta_plan(NSDictionary *snapshot, double stamp, NSString *zon
         NSNumber *cycle = @(lo), *scheduled = nil; NSDictionary *old = nil;
         for (NSDictionary *slot in slots) if ([slot[@"task_id"] isEqual:id] && [slot[@"generation"] isEqual:task[@"reminder_version"]]
             && !ta_done(task,slot[@"cycle_at"],history)) { old = slot; break; }
+        // 过期且无活动轮次的槽位不阻塞今天重排，避免时钟跳变后永久卡在昨天。
+        BOOL live = NO;
+        if (old) for (NSDictionary *row in history) {
+            NSString *status = row[@"status"] ?: @"";
+            if ([row[@"generation"] isEqual:task[@"reminder_version"]] && [row[@"cycle_at"] isEqual:old[@"cycle_at"]]
+                && [@[@"pending",@"presented",@"snoozed"] containsObject:status]) { live = YES; break; }
+        }
+        if (old && !live && [old[@"end_at"] doubleValue] <= lo) old = nil;
         if (old && ([old[@"end_at"] doubleValue]<=lo || [old[@"start_at"] doubleValue]>=hi)) { [unplaced addObject:@{@"task":task,@"reason":[old[@"end_at"] doubleValue]<=lo ? @"此前安排尚未完成" : @"已有后续日期安排"}]; continue; }
         if (old && [old[@"end_at"] doubleValue]>lo && [old[@"start_at"] doubleValue]<hi && ([old[@"start_at"] doubleValue] <= now || active || !windows.count)) {
             NSDictionary *entry = ta_entry(task,old[@"cycle_at"],[old[@"start_at"] doubleValue],[old[@"end_at"] doubleValue],@"task",NO);
