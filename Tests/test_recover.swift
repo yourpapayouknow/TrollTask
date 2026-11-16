@@ -189,7 +189,9 @@
         if scheduler.nextFireAt?.timeIntervalSince1970 != target {
             let plan = try store.plan(at: clock.rd()) as! TaskFields
             let report: TaskFields = ["target": target, "next": scheduler.nextFireAt?.timeIntervalSince1970 ?? -1, "clock": clock.rd(), "calendar": calendar.timeZone.identifier, "plan": plan]
-            try JSONSerialization.data(withJSONObject: report, options: .prettyPrinted).write(to: URL(fileURLWithPath: "build/routines/recovery-agenda-failure.json"))
+            let dir = URL(fileURLWithPath: "build/routines", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: report, options: .prettyPrinted).write(to: dir.appendingPathComponent("recovery-agenda-failure.json"))
         }
         req(scheduler.nextFireAt?.timeIntervalSince1970 == target, "跨日恢复把普通任务放进次日常律")
         scheduler.stp(); try store.delTsk(task); try store.delTsk(id)

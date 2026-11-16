@@ -35,7 +35,7 @@ HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources
 HOST_OBJECTS := $(BUILD)/host/TaskStore.o $(BUILD)/host/TaskRule.o $(BUILD)/host/LBShared.o $(BUILD)/host/TaskScheduler.o
 ICAL_HEADERS := $(wildcard Sources/Support/Recurrence/*.h)
 
-.PHONY: all package test test-assist test-agenda test-routine-view test-rule test-queue test-recover test-load test-sched test-reminder test-checkin test-occ test-signal test-ui clean inspect icons serve store
+.PHONY: all package test test-assist test-agenda test-routine-view test-rule test-queue test-recover test-load test-sched test-reminder test-checkin test-occ test-signal test-ui clean inspect icons serve store check check-design
 
 icons: $(ICON_SOURCE)
 	python3 scripts/generate_icons.py $(ICON_SOURCE) Resources/Assets.xcassets/AppIcon.appiconset
@@ -275,6 +275,15 @@ inspect: package
 
 serve: package
 	python3 -B scripts/serve.py
+
+check: test
+	git diff --check
+	git diff --cached --check
+	/bin/zsh scripts/check_layout.zsh
+	plutil -lint Resources/Info.plist Resources/entitlements.plist >/dev/null
+
+check-design:
+	npx --yes @google/design.md lint DESIGN.md
 
 clean:
 	rm -rf $(BUILD)
