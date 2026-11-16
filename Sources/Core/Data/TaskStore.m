@@ -77,7 +77,7 @@ static BOOL ts_pth(NSString *path, NSError **error) {
 @property(nonatomic, readwrite, strong) NSError *syncError;
 @end
 
-#include "TaskAgenda.inc"
+#include "TaskStoreAgenda.inc"
 
 @implementation TaskStore
 

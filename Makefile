@@ -13,28 +13,27 @@ ICON_SOURCE := Resources/AppIcon-source.png
 ASSET_FILES := $(shell find Resources/Assets.xcassets -type f)
 MING_FILES := $(shell find Resources/MingCute -type f)
 
-SWIFT_SOURCES := $(wildcard Sources/*.swift)
-SWIFT_FLAGS := -swift-version 5 -module-name TrollTask -parse-as-library -whole-module-optimization -warnings-as-errors -ISources -ISources/Recurrence -import-objc-header Sources/SwiftHead.h
-M_SOURCES := Sources/main.m Sources/LBShared.m Sources/LBApp.m Sources/LBHud.m Sources/TaskStore.m Sources/TaskRule.m
-TOUCH_SOURCES := $(wildcard Sources/Touch/*.m)
-OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(patsubst Sources/Touch/%.m,$(BUILD)/touch/%.o,$(TOUCH_SOURCES)) $(BUILD)/storecli.o $(BUILD)/TaskSwift.o
+SWIFT_SOURCES := $(shell find Sources -name '*.swift' | sort)
+SWIFT_FLAGS := -swift-version 5 -module-name TrollTask -parse-as-library -whole-module-optimization -warnings-as-errors -ISources -ISources/Support -ISources/Support/Recurrence -import-objc-header Sources/Support/SwiftHead.h
+M_SOURCES := Sources/App/main.m Sources/Core/Infrastructure/LBShared.m Sources/App/LBApp.m Sources/Features/HUD/LBHud.m Sources/Core/Data/TaskStore.m Sources/Core/Domain/TaskRule.m
+TOUCH_SOURCES := $(wildcard Sources/Support/Touch/*.m)
+OBJECTS := $(patsubst Sources/%.m,$(BUILD)/%.o,$(M_SOURCES)) $(patsubst Sources/Support/Touch/%.m,$(BUILD)/touch/%.o,$(TOUCH_SOURCES)) $(BUILD)/storecli.o $(BUILD)/TaskSwift.o
 
-CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources -ISources/Recurrence
+CFLAGS := -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -Wall -Wextra -Werror -ISources -ISources/Support -ISources/Support/Recurrence
 OBJCFLAGS := $(CFLAGS) -fobjc-arc -fmodules
-ICAL_SRCS := $(wildcard Sources/Recurrence/*.c)
+ICAL_SRCS := $(wildcard Sources/Support/Recurrence/*.c)
 ICAL_DEFS := -DHAVE_CONFIG_H -DLIBICAL_ICAL_STATIC_DEFINE -DPACKAGE_DATA_DIR=\".\"
-ICAL_IOS := $(patsubst Sources/Recurrence/%.c,$(BUILD)/ical-ios/%.o,$(ICAL_SRCS))
-ICAL_HOST := $(patsubst Sources/Recurrence/%.c,$(BUILD)/ical-host/%.o,$(ICAL_SRCS))
-ICAL_SIM := $(patsubst Sources/Recurrence/%.c,$(BUILD)/ical-sim/%.o,$(ICAL_SRCS))
+ICAL_IOS := $(patsubst Sources/Support/Recurrence/%.c,$(BUILD)/ical-ios/%.o,$(ICAL_SRCS))
+ICAL_HOST := $(patsubst Sources/Support/Recurrence/%.c,$(BUILD)/ical-host/%.o,$(ICAL_SRCS))
+ICAL_SIM := $(patsubst Sources/Support/Recurrence/%.c,$(BUILD)/ical-sim/%.o,$(ICAL_SRCS))
 SIM_CC := xcrun --sdk iphonesimulator clang
-SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -ISources/Recurrence
-HEADERS := $(wildcard Sources/*.h)
-HEADERS += Sources/TaskAgenda.inc
-HEADERS += Sources/Touch/head.h
-CORE_SWIFT := Sources/SwiftHead.swift Sources/ReminderQueue.swift Sources/TaskScheduler.swift Sources/TaskReminder.swift Sources/TaskRoutineImport.swift Sources/TaskRoutineCheck.swift Sources/TaskRoutineView.swift Sources/TaskAI.swift Sources/TaskIntake.swift Sources/TaskToday.swift Sources/TaskDayOrder.swift Sources/TaskDivision.swift Sources/TaskTimeMap.swift
-HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Recurrence
+SIM_FLAGS := -target arm64-apple-ios15.0-simulator -O1 -ISources -ISources/Support -ISources/Support/Recurrence
+HEADERS := $(shell find Sources/App Sources/Core Sources/Features Sources/DesignSystem Sources/Support -name '*.h' -not -path '*/Recurrence/*' | sort)
+HEADERS += Sources/Core/Data/TaskStoreAgenda.inc
+CORE_SWIFT := Sources/Support/SwiftHead.swift Sources/Core/Domain/ReminderQueue.swift Sources/Core/Domain/TaskScheduler.swift Sources/Core/Domain/TaskReminder.swift Sources/Core/Domain/TaskRoutineImport.swift Sources/Core/Domain/TaskRoutineCheck.swift Sources/Core/Domain/TaskRoutineView.swift Sources/Core/Domain/TaskAI.swift Sources/Core/Domain/TaskIntake.swift Sources/Core/Domain/TaskToday.swift Sources/Core/Domain/TaskDayOrder.swift Sources/Core/Domain/TaskDivision.swift Sources/Core/Domain/TaskTimeMap.swift
+HOST_FLAGS := -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Support -ISources/Support/Recurrence
 HOST_OBJECTS := $(BUILD)/host/TaskStore.o $(BUILD)/host/TaskRule.o $(BUILD)/host/LBShared.o $(BUILD)/host/TaskScheduler.o
-ICAL_HEADERS := $(wildcard Sources/Recurrence/*.h)
+ICAL_HEADERS := $(wildcard Sources/Support/Recurrence/*.h)
 
 .PHONY: all package test test-assist test-agenda test-routine-view test-rule test-queue test-recover test-load test-sched test-reminder test-checkin test-occ test-signal test-ui clean inspect icons serve store
 
@@ -50,9 +49,10 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) Makefile | $(BUILD)
+	mkdir -p $(dir $@)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
-$(BUILD)/touch/%.o: Sources/Touch/%.m $(HEADERS) Makefile | $(BUILD)
+$(BUILD)/touch/%.o: Sources/Support/Touch/%.m $(HEADERS) Makefile | $(BUILD)
 	mkdir -p $(dir $@)
 	$(CC) $(OBJCFLAGS) -c $< -o $@
 
@@ -88,7 +88,7 @@ package: $(APP_DIR)/$(APP)
 	@print -r -- "Built $(TIPA)"
 
 test: store | $(BUILD)
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Recurrence -framework Foundation Tests/test_shared.m Sources/LBShared.m -o $(BUILD)/test_shared
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Support -ISources/Support/Recurrence -framework Foundation Tests/test_shared.m Sources/Core/Infrastructure/LBShared.m -o $(BUILD)/test_shared
 	$(BUILD)/test_shared
 	python3 Tests/test_project.py
 	$(MAKE) $(BUILD)/ical-host.a
@@ -117,12 +117,24 @@ test: store | $(BUILD)
 test-rule: $(BUILD)/test_rule
 	$(BUILD)/test_rule
 
-$(BUILD)/test_rule: Tests/test_rule.m Sources/TaskRule.m $(HEADERS) $(BUILD)/ical-host.a | $(BUILD)
-	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Recurrence -framework Foundation Tests/test_rule.m Sources/TaskRule.m $(BUILD)/ical-host.a -o $@
+$(BUILD)/test_rule: Tests/test_rule.m Sources/Core/Domain/TaskRule.m $(HEADERS) $(BUILD)/ical-host.a | $(BUILD)
+	$(HOST_CC) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -ISources -ISources/Support -ISources/Support/Recurrence -framework Foundation Tests/test_rule.m Sources/Core/Domain/TaskRule.m $(BUILD)/ical-host.a -o $@
 
 store: $(BUILD)/taskstore
 
 $(BUILD)/host/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) Makefile
+	mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_FLAGS) -c $< -o $@
+
+$(BUILD)/host/TaskStore.o: Sources/Core/Data/TaskStore.m $(HEADERS) $(ICAL_HEADERS) Makefile
+	mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_FLAGS) -c $< -o $@
+
+$(BUILD)/host/TaskRule.o: Sources/Core/Domain/TaskRule.m $(HEADERS) $(ICAL_HEADERS) Makefile
+	mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_FLAGS) -c $< -o $@
+
+$(BUILD)/host/LBShared.o: Sources/Core/Infrastructure/LBShared.m $(HEADERS) $(ICAL_HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_FLAGS) -c $< -o $@
 
@@ -162,8 +174,8 @@ test-load: $(BUILD)/test_load
 $(BUILD)/test_recover $(BUILD)/test_load: $(BUILD)/test_%: Tests/test_%.swift Tests/TestClock.swift $(CORE_SWIFT) $(filter-out $(BUILD)/host/TaskScheduler.o,$(HOST_OBJECTS)) $(BUILD)/ical-host.a $(HEADERS) Makefile
 	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O Tests/test_$*.swift Tests/TestClock.swift $(CORE_SWIFT) $(filter-out $(BUILD)/host/TaskScheduler.o,$(HOST_OBJECTS)) $(BUILD)/ical-host.a -framework Foundation -framework ImageIO -lsqlite3 -o $@
 
-$(BUILD)/test_queue: Tests/test_queue.swift Sources/ReminderQueue.swift Sources/SwiftHead.swift $(HEADERS) Makefile | $(BUILD)
-	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O Sources/SwiftHead.swift Sources/ReminderQueue.swift Tests/test_queue.swift -o $@
+$(BUILD)/test_queue: Tests/test_queue.swift Sources/Core/Domain/ReminderQueue.swift Sources/Support/SwiftHead.swift $(HEADERS) Makefile | $(BUILD)
+	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O Sources/Support/SwiftHead.swift Sources/Core/Domain/ReminderQueue.swift Tests/test_queue.swift -o $@
 
 test-reminder: $(BUILD)/test_reminder
 	$(BUILD)/test_reminder
@@ -178,8 +190,8 @@ test-signal: $(BUILD)/test_signal $(BUILD)/test_signalstore
 	$(BUILD)/test_signal
 	$(BUILD)/test_signalstore
 
-$(BUILD)/test_signal: Tests/test_signal.swift Sources/TaskTraits.swift Sources/TaskSignal.swift Sources/SwiftHead.swift $(HEADERS) Makefile | $(BUILD)
-	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O Sources/SwiftHead.swift Sources/TaskTraits.swift Sources/TaskSignal.swift Tests/test_signal.swift -o $@
+$(BUILD)/test_signal: Tests/test_signal.swift Sources/Core/Domain/TaskTraits.swift Sources/Core/Domain/TaskSignal.swift Sources/Support/SwiftHead.swift $(HEADERS) Makefile | $(BUILD)
+	xcrun --sdk macosx swiftc $(SWIFT_FLAGS) -Xcc -DLB_HOST_TEST -O Sources/Support/SwiftHead.swift Sources/Core/Domain/TaskTraits.swift Sources/Core/Domain/TaskSignal.swift Tests/test_signal.swift -o $@
 
 $(BUILD)/host/storecli.o: cli/storecli.m $(HEADERS) Makefile
 	mkdir -p $(dir $@)
@@ -188,13 +200,13 @@ $(BUILD)/host/storecli.o: cli/storecli.m $(HEADERS) Makefile
 $(BUILD)/taskstore: $(BUILD)/host/storecli.o $(HOST_OBJECTS) $(BUILD)/ical-host.a
 	xcrun --sdk macosx swiftc $^ -framework Foundation -framework ImageIO -lsqlite3 -o $@
 
-$(BUILD)/ical-ios/%.o: Sources/Recurrence/%.c $(ICAL_HEADERS)
+$(BUILD)/ical-ios/%.o: Sources/Support/Recurrence/%.c $(ICAL_HEADERS)
 	mkdir -p $(dir $@)
-	$(CC) -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -ISources/Recurrence $(ICAL_DEFS) -c $< -o $@
+	$(CC) -arch arm64 -isysroot $(SDK) -miphoneos-version-min=15.0 -O2 -fvisibility=hidden -ISources/Support/Recurrence $(ICAL_DEFS) -c $< -o $@
 
-$(BUILD)/ical-host/%.o: Sources/Recurrence/%.c $(ICAL_HEADERS)
+$(BUILD)/ical-host/%.o: Sources/Support/Recurrence/%.c $(ICAL_HEADERS)
 	mkdir -p $(dir $@)
-	$(HOST_CC) -O2 -ISources/Recurrence $(ICAL_DEFS) -c $< -o $@
+	$(HOST_CC) -O2 -ISources/Support/Recurrence $(ICAL_DEFS) -c $< -o $@
 
 $(BUILD)/ical-ios.a: $(ICAL_IOS)
 	xcrun ar rcs $@ $^
@@ -202,22 +214,22 @@ $(BUILD)/ical-ios.a: $(ICAL_IOS)
 $(BUILD)/ical-host.a: $(ICAL_HOST)
 	xcrun ar rcs $@ $^
 
-$(BUILD)/ical-sim/%.o: Sources/Recurrence/%.c $(ICAL_HEADERS)
+$(BUILD)/ical-sim/%.o: Sources/Support/Recurrence/%.c $(ICAL_HEADERS)
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) $(ICAL_DEFS) -c $< -o $@
 
 $(BUILD)/ical-sim.a: $(ICAL_SIM)
 	xcrun ar rcs $@ $^
 
-UI_M_SOURCES := Sources/LBShared.m Sources/TaskStore.m Sources/TaskRule.m
-UI_OBJECTS := $(patsubst Sources/%.m,$(BUILD)/ui/%.o,$(UI_M_SOURCES)) $(patsubst Sources/Touch/%.m,$(BUILD)/ui/touch/%.o,$(TOUCH_SOURCES)) $(BUILD)/ui/test_ui.o $(BUILD)/ui/TaskSwift.o
+UI_M_SOURCES := Sources/Core/Infrastructure/LBShared.m Sources/Core/Data/TaskStore.m Sources/Core/Domain/TaskRule.m
+UI_OBJECTS := $(patsubst Sources/%.m,$(BUILD)/ui/%.o,$(UI_M_SOURCES)) $(patsubst Sources/Support/Touch/%.m,$(BUILD)/ui/touch/%.o,$(TOUCH_SOURCES)) $(BUILD)/ui/test_ui.o $(BUILD)/ui/TaskSwift.o
 SIM_SDK := $(shell xcrun --sdk iphonesimulator --show-sdk-path)
 
 $(BUILD)/ui/%.o: Sources/%.m $(HEADERS) $(ICAL_HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 
-$(BUILD)/ui/touch/%.o: Sources/Touch/%.m $(HEADERS) Makefile
+$(BUILD)/ui/touch/%.o: Sources/Support/Touch/%.m $(HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 

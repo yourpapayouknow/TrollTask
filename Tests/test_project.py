@@ -13,7 +13,7 @@ def tstns():
     entitlements = plistlib.loads((root / "Resources/entitlements.plist").read_bytes())
     assert info["CFBundleIdentifier"] == entitlements["application-identifier"] == identity
     assert info["CFBundleDisplayName"] == info["CFBundleExecutable"] == "TrollTask"
-    header = (root / "Sources/LBHead.h").read_text()
+    header = (root / "Sources/Support/LBHead.h").read_text()
     assert f'{identity}.plist' in header and f'{identity}.hud.lock' in header
     names = re.findall(r'#define LB_\w+_NOTE "([^"]+)"', header)
     assert len(names) == len(set(names)) == 4
@@ -35,8 +35,8 @@ def tstns():
 
 # 检查窗口安全性和私有框架启动顺序。
 def tstarch(root):
-    hud = (root / "Sources/LBHud.m").read_text()
-    shared = (root / "Sources/LBShared.m").read_text()
+    hud = (root / "Sources/Features/HUD/LBHud.m").read_text()
+    shared = (root / "Sources/Core/Infrastructure/LBShared.m").read_text()
     for text in ["SBSAccessibilityWindowHostingController", "registerWindowWithContextID:atLevel:",
                  "window.windowLevel = 10000010.0", "[[window _boundContext] setSecure:YES]",
                  "_isSecure { return YES; }", "_shouldCreateContextAsSecure { return YES; }"]:
@@ -52,8 +52,8 @@ def tstarch(root):
     order = ["[self _accessibilityInit];", "lb_ldax();", "pBKSHID(lb_onhidevt);", "[app __completeAndRunAsPlugin];"]
     positions = [hud.index(text) for text in order]
     assert positions == sorted(positions)
-    reminder = (root / "Sources/TaskReminder.swift").read_text()
-    assert '"SBSpringBoardDidLaunchNotification"' in (root / "Sources/LBHead.h").read_text()
+    reminder = (root / "Sources/Core/Domain/TaskReminder.swift").read_text()
+    assert '"SBSpringBoardDidLaunchNotification"' in (root / "Sources/Support/LBHead.h").read_text()
     assert "reg(TS_SB_LAUNCH)" in reminder and "halt(true)" in reminder and "DISPATCH_VNODE_DELETE" in hud
 
 

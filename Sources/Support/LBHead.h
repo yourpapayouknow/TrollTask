@@ -7,7 +7,7 @@
 
 #ifdef LB_UI_TEST
 #import <AVFAudio/AVFAudio.h>
-#import "Touch/head.h"
+#import "Support/Touch/head.h"
 // 在原生模拟器验收同一UIKit触摸路由。
 @interface UIApplication (LBTouchSPI)
 - (UIEvent *)_touchesEvent;
@@ -83,7 +83,7 @@ BOOL lb_opnapp(void);
 #endif
 
 #ifndef LB_HOST_TEST
-#import "Touch/head.h"
+#import "Support/Touch/head.h"
 @interface UIApplication (LBPrivate)
 // 进入UIKit原生事件运行循环。
 - (void)_run;
@@ -175,8 +175,8 @@ CGFloat lb_hudang(UIInterfaceOrientation orientation);
 // 将安全区右边栏投影到系统窗口物理坐标。
 CGRect lb_hudfrm(CGRect screen, UIEdgeInsets insets, UIInterfaceOrientation orientation);
 #ifndef TT_SWIFT_BRIDGE
-#import "TaskUI.h"
-#import "TaskHUD.h"
+#import "Support/TaskUI.h"
+#import "Features/HUD/TaskHUD.h"
 #endif
 #endif
 
@@ -204,14 +204,14 @@ BOOL lb_btntap(BOOL *active, BOOL inside, BOOL down);
 NSString *lb_shrt(NSString *text);
 
 // 集中声明待办存储模块。
-#import "TaskStore.h"
-#import "TaskRule.h"
+#import "Core/Data/TaskStore.h"
+#import "Core/Domain/TaskRule.h"
 #ifndef TT_SWIFT_BRIDGE
-#import "TaskRoutine.h"
-#import "TaskAssistant.h"
-#import "TaskTimeMap.h"
+#import "Core/Domain/TaskRoutine.h"
+#import "Core/Domain/TaskDomain.h"
+#import "Core/Domain/TaskTimeMap.h"
 #endif
 #ifndef TT_SWIFT_BRIDGE
-#import "TaskScheduler.h"
-#import "TaskReminder.h"
+#import "Core/Domain/TaskScheduler.h"
+#import "Core/Domain/TaskReminder.h"
 #endif
