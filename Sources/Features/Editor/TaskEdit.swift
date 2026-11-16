@@ -134,7 +134,7 @@ final class TaskDate {
         schedule.numberOfLines = 0; schedule.font = lb_fnt(.subheadline, nil); schedule.textColor = TaskTheme.muted; schedule.accessibilityIdentifier = "edit.schedule"
         clearDate = tu_ibtn("close", "移除日期", "edit.clearDate", self, #selector(clrDate(_:)))
         dateLine = tu_stk(quick && routine ? [schedule] : [quick ? dateChip! : dateBtn!, clearDate!]); dateLine.axis = .horizontal; dateLine.accessibilityIdentifier = "edit.dateline"
-        if quick && !routine { dateLine.layer.cornerRadius = 20; dateLine.layer.cornerCurve = .continuous; dateLine.layer.borderWidth = 1 / UIScreen.main.scale; dateLine.layer.borderColor = TaskTheme.line.cgColor; var config = dateChip.configuration; config?.baseForegroundColor = lb_acnt(); dateChip.configuration = config }
+        if quick && !routine { dateLine.layer.cornerRadius = 20; dateLine.layer.cornerCurve = .continuous; dateLine.clipsToBounds = true; dateLine.backgroundColor = TaskTheme.soft; for button in [dateChip!, clearDate!] { var config = button.configuration; config?.baseForegroundColor = TaskTheme.ink; button.configuration = config } }
         clearDeadline = tu_ibtn("close", "移除截止日期", "edit.clearDeadline", self, #selector(clrDate(_:)))
         for button in [clearDate!, clearDeadline!] { button.widthAnchor.constraint(equalToConstant: 44).isActive = true }
         deadlineLine = tu_stk([ddlBtn!, clearDeadline!]); deadlineLine.axis = .horizontal
@@ -457,7 +457,7 @@ final class TaskDate {
             if #available(iOS 16, *), let calendar = parent as? TaskCalendar { calendar.rptSet(patch, name: self.rptTitle(patch)); return }
             if patch["recurrence_type"] as? String != "none" && !self.plan.enabled.isOn { self.plan.enabled.isOn = true; self.dtChg(self.plan.enabled) }
             self.extras.merge(patch) { _, new in new }; self.dirty.formUnion(patch.keys); self.rfrshDtl()
-        }; panel.allowsNone = !routine; let navigation = UINavigationController(rootViewController: panel); navigation.overrideUserInterfaceStyle = parent.traitCollection.userInterfaceStyle; navigation.modalPresentationStyle = .fullScreen; parent.present(navigation, animated: true)
+        }; panel.allowsNone = !routine; let navigation = UINavigationController(rootViewController: panel); navigation.modalPresentationStyle = .fullScreen; parent.present(navigation, animated: true)
     }
     // 打开重复编辑。
     @objc private func rpt() { rptIn(self) }

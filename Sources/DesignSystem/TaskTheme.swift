@@ -1,18 +1,32 @@
 // 按TrollTask色卡定义明暗两套固定角色色，不随对比度设置漂移。
 private func tu_col(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> UIColor { UIColor(red: r / 255, green: g / 255, blue: b / 255, alpha: 1) }
 func tu_hex(_ rgb: UInt32) -> UIColor { tu_col(CGFloat(rgb >> 16), CGFloat(rgb >> 8 & 255), CGFloat(rgb & 255)) }
-// 定义纸面与夜墨表面、墨色文字和青橙强调。
+// 定义发丝米底、纸面卡片、墨色文字和青橙强调。
 enum TaskTheme {
     static let edge:CGFloat=16, gap:CGFloat=8, pad:CGFloat=12, group:CGFloat=16, section:CGFloat=24
-    static let base = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x0A2534) : tu_hex(0xFBF8F5) }
+    // 页面底色：浅色发丝米，深色夜墨压暗。
+    static let base = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x071A24) : tu_hex(0xD8CDC4) }
+    // 浮起卡片与抽屉表面：纸面 / 夜墨。
+    static let surface = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x0A2534) : tu_hex(0xFBF8F5) }
+    // 正文主色。
     static let ink = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0xFBF8F5) : tu_hex(0x102F40) }
-    static let muted = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x8FA6B2) : tu_hex(0x4A6B79) }
-    static let control = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x1B3A4B) : tu_hex(0xF1EBE5) }
-    static let line = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x2A4757) : tu_hex(0xD8CDC4) }
+    // 次级文字，浅色使用发丝米底上仍达标的派生墨青。
+    static let muted = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x8FA6B2) : tu_hex(0x2E4B5A) }
+    // 输入填充：暖象牙 / 深墨。
+    static let control = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x102F40) : tu_hex(0xF1EBE5) }
+    // 清单底栏：浅色发丝米压暗，深色深墨。
+    static let bar = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x102F40) : tu_hex(0xC4B5A8) }
+    // 发丝线与描边，浅色在米底上加深刻线。
+    static let line = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x1B3A4B) : tu_hex(0xB5A395) }
+    // 选中胶囊：青雾 / 青墨。
+    static let select = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x006F85) : tu_hex(0xD7F5F9) }
+    // 软强调底：橙雾 / 橙墨。
+    static let soft = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0xA94F27) : tu_hex(0xFFE2D2) }
     static let onAccent = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x102F40) : .white }
     static let orange = tu_hex(0xFF925B)
     static let orangeInk = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0xFF925B) : tu_hex(0xA94F27) }
-    static let cyanInk = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x00B5D4) : tu_hex(0x006F85) }
+    // 链接与选中：浅色在米底上加深的青，深色保持原生青。
+    static let cyanInk = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x00B5D4) : tu_hex(0x005A6B) }
     static let danger = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0xFF925B) : tu_hex(0xA94F27) }
 }
 
@@ -35,7 +49,7 @@ enum TaskLook {
 // 仅提醒卡片与边栏保留原生磨砂材质，深色下偏移到色卡夜墨。
 func tu_gls() -> UIVisualEffectView {
     let glass = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
-    glass.contentView.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x0A2534) : .clear }
+    glass.contentView.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? tu_hex(0x071A24) : .clear }
     glass.layer.cornerRadius = 20; glass.layer.cornerCurve = .continuous; glass.clipsToBounds = true
     glass.layer.borderWidth = 1 / UIScreen.main.scale; glass.layer.borderColor = UIColor.white.withAlphaComponent(0.08).cgColor
     return glass
@@ -352,7 +366,6 @@ private final class TaskDockDelegate: NSObject, UIViewControllerTransitioningDel
 
 // 显示具有自适应高度的原生面板。
 func tu_sheet(_ parent: UIViewController, _ content: UIViewController, compact: Bool = false, completion: (() -> Void)? = nil) {
-    content.overrideUserInterfaceStyle = parent.traitCollection.userInterfaceStyle
     content.modalPresentationStyle = compact ? .custom : .pageSheet
     if compact {
         content.transitioningDelegate = TaskDockDelegate.shared; parent.present(content, animated: true, completion: completion); return
@@ -388,7 +401,7 @@ final class TaskMenu: UITableViewController {
     private var selecting = false
     // 创建分组平面行，外部点击和下拉由原生面板处理。
     override func viewDidLoad() {
-        super.viewDidLoad(); view.accessibilityIdentifier = "menu.sheet"; tableView.backgroundColor = TaskTheme.base; tableView.separatorStyle = .none
+        super.viewDidLoad(); view.accessibilityIdentifier = "menu.sheet"; tableView.backgroundColor = TaskTheme.surface; tableView.separatorStyle = .none
         tableView.rowHeight = UITableView.automaticDimension; tableView.estimatedRowHeight = 56; tableView.contentInset.top = 8
         if let header {
             let button = tu_btn(header.title); button.accessibilityIdentifier = header.identifier.rawValue; button.accessibilityLabel = "更多排序"
@@ -424,12 +437,12 @@ final class TaskMenu: UITableViewController {
         content.secondaryTextProperties.color = TaskTheme.muted
         content.secondaryTextProperties.numberOfLines = 0
         let selected = item.state == .on
-        content.textProperties.color = item.attributes.contains(.disabled) ? TaskTheme.muted : ((lists || caption != nil) && selected ? lb_acnt()! : TaskTheme.ink)
+        content.textProperties.color = item.attributes.contains(.disabled) ? TaskTheme.muted : ((lists || caption != nil) && selected ? (lists ? TaskTheme.ink : lb_acnt()!) : TaskTheme.ink)
         content.imageProperties.tintColor = content.textProperties.color; content.imageToTextPadding = 16
         content.directionalLayoutMargins = .init(top: 12, leading: lists && item.image == nil ? 56 : 16, bottom: 12, trailing: 16)
         if item.identifier.rawValue == "list.delete" && item.attributes.contains(.disabled) { cell.accessibilityHint="默认清单不可删除";cell.addInteraction(UIToolTipInteraction(defaultToolTip:"默认清单不可删除")) }
         cell.contentConfiguration = content; cell.accessibilityIdentifier = item.identifier.rawValue
-        var background = UIBackgroundConfiguration.clear(); background.backgroundColor = lists && selected ? TaskTheme.control : .clear; background.cornerRadius = lists ? 28 : 0; background.backgroundInsets.trailing = lists ? 8 : 0; cell.backgroundConfiguration = background
+        var background = UIBackgroundConfiguration.clear(); background.backgroundColor = lists && selected ? TaskTheme.select : .clear; background.cornerRadius = lists ? 28 : 0; background.backgroundInsets.trailing = lists ? 8 : 0; cell.backgroundConfiguration = background
         if selected { cell.accessibilityTraits.insert(.selected) }
         if selected && !lists { let check = UIImageView(image: lb_icon("check")); check.frame.size = CGSize(width: 24, height: 24); check.tintColor = lb_acnt(); cell.accessoryView = check }
         if breaks.contains(indexPath.row) { let line = UIView(); line.backgroundColor = UIColor.separator; line.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(line); NSLayoutConstraint.activate([line.leadingAnchor.constraint(equalTo: cell.leadingAnchor), line.trailingAnchor.constraint(equalTo: cell.trailingAnchor), line.topAnchor.constraint(equalTo: cell.topAnchor), line.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale)]) }

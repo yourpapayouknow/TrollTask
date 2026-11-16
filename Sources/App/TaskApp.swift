@@ -17,7 +17,7 @@
             self?.store = active; if self?.seed()==true { home?.rfrsh() }; self?.seedIssue(); self?.rstr(); self?.capStart()
             if let active { TaskArchiveSync.schedule(active) }
         }
-        let navigation = UINavigationController(rootViewController: home); navigation.overrideUserInterfaceStyle = TaskLook.styles[TaskLook.index]
+        let navigation = UINavigationController(rootViewController: home)
         let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = navigation; window.overrideUserInterfaceStyle = TaskLook.styles[TaskLook.index]; self.window = window; window.makeKeyAndVisible()
         DispatchQueue.main.async { [weak self] in self?.seedIssue() }
         let result = notify_register_dispatch(TS_CAPTURE_NOTE, &captureNote, .main) { [weak self] _ in self?.capStart() }

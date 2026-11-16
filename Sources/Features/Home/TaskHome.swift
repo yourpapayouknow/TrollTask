@@ -29,7 +29,7 @@ final class TaskCell: UITableViewCell {
         routineCard.accessibilityIdentifier = "routine.card"
         routineCard.isUserInteractionEnabled = false
         routineCard.isHidden = true
-        routineCard.backgroundColor = TaskTheme.base
+        routineCard.backgroundColor = TaskTheme.surface
         routineCard.layer.cornerRadius = 16
         routineCard.layer.cornerCurve = .continuous
         routineCard.layer.borderColor = TaskTheme.line.cgColor
@@ -56,6 +56,11 @@ final class TaskCell: UITableViewCell {
         guard !routineCard.isHidden, contentView.bounds.width > TaskTheme.edge * 2,
               contentView.bounds.height > TaskTheme.gap else { return }
         routineCard.frame = contentView.bounds.insetBy(dx: TaskTheme.edge, dy: TaskTheme.gap / 2)
+    }
+    // 明暗切换后刷新常律卡片描边。
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        routineCard.layer.borderColor = TaskTheme.line.cgColor
     }
     // 禁用未使用的归档路径。
     required init?(coder: NSCoder) { fatalError("Use init(style:reuseIdentifier:)") }
@@ -196,7 +201,7 @@ final class TaskCell: UITableViewCell {
         var createStyle = create.configuration; createStyle?.background.cornerRadius = 28; create.configuration = createStyle
         let buttons = [tu_ibtn("menu", "选择清单", "home.lists", self, #selector(lstMenu)), create!, tu_ibtn("more", "清单选项", "home.more", self, #selector(more))]
         toolbar.accessibilityIdentifier="home.toolbar";toolbar.isHidden=todayOnly;create.isEnabled = !todayOnly;view.addSubview(toolbar); tu_wdth(toolbar, view, inset: 0)
-        let bar = UIView(); bar.backgroundColor = TaskTheme.control; bar.translatesAutoresizingMaskIntoConstraints = false; toolbar.addSubview(bar)
+        let bar = UIView(); bar.backgroundColor = TaskTheme.bar; bar.translatesAutoresizingMaskIntoConstraints = false; toolbar.addSubview(bar)
         NSLayoutConstraint.activate([bar.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor), bar.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor), bar.topAnchor.constraint(equalTo: toolbar.topAnchor, constant: 28), bar.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor)])
         for button in buttons { button.translatesAutoresizingMaskIntoConstraints = false; toolbar.addSubview(button)
             NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: 56), button.heightAnchor.constraint(equalToConstant: 56)]) }
@@ -521,7 +526,7 @@ final class TaskCell: UITableViewCell {
     // 选中页签保持可见，未选中页签降为次级色。
     private func rfrshTints() {
         for item in tabs.arrangedSubviews as! [UIButton] {
-            var config = item.configuration; config?.baseForegroundColor = item.accessibilityTraits.contains(.selected) ? TaskTheme.cyanInk : TaskTheme.muted; item.configuration = config
+            var config = item.configuration; config?.baseForegroundColor = item.accessibilityTraits.contains(.selected) ? TaskTheme.ink : TaskTheme.muted; item.configuration = config
         }
     }
     // 切换当前清单。
