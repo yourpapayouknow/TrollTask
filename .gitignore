@@ -12,3 +12,6 @@ history/
 /DESIGN.md
 /notes/
 /.device/
+
+# 本机真机调试镜像
+/devimages/

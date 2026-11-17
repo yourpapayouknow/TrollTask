@@ -3,7 +3,7 @@
 #define TS_DB_PATH @"/var/mobile/Library/Application Support/com.iwmei.taskforiwmei/tasks.sqlite3"
 #define TS_DFLT_LST @"00000000-0000-4000-8000-000000000001"
 #define TS_RTN_LST @"00000000-0000-4000-8000-000000000002"
-#define TS_SCH_VER 13
+#define TS_SCH_VER 14
 #define TS_ATT_MAX 6
 #define TS_DATA_NOTE "com.iwmei.taskforiwmei.data"
 #define TS_CAPTURE_NOTE "com.iwmei.taskforiwmei.capture"
@@ -56,6 +56,10 @@
 // 读取与写入同库评估记录，不改变提醒状态。
 - (NSDictionary *)rdReview:(NSString *)taskID error:(NSError **)error NS_SWIFT_NAME(review(_:));
 - (BOOL)svReview:(NSString *)taskID data:(NSDictionary *)data error:(NSError **)error NS_SWIFT_NAME(storeReview(_:data:));
+// 读写最近一份创建草稿，与正式任务分开保存。
+- (NSDictionary *)rdDrft:(NSError **)error NS_SWIFT_NAME(draft());
+- (BOOL)svDrft:(NSDictionary *)data error:(NSError **)error NS_SWIFT_NAME(storeDraft(_:));
+- (BOOL)clrDrft:(NSError **)error NS_SWIFT_NAME(clearDraft());
 // 创建稳定UUID的任务。
 - (NSDictionary *)crtTsk:(NSDictionary *)fields error:(NSError **)error;
 // 导入指定UUID，冲突时拒绝覆盖。

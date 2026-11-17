@@ -195,20 +195,44 @@ func tu_cell() -> UIListContentConfiguration {
     content.directionalLayoutMargins = .init(top:12,leading:16,bottom:12,trailing:16);content.imageToTextPadding=12;return content
 }
 // 使用同一组分档标签编辑待办属性。
-func tu_grade(_ key: String, _ prefix: String, _ rating: Int, selected: @escaping (Int) -> Void) -> UIButton {
-    let label = key == "urgency" ? "紧急程度" : "难易程度"
+func tu_grade(_ key: String, _ prefix: String, _ rating: Int, selected: ((Int) -> Void)? = nil) -> UIButton {
+    let field = key == "urgency" ? "紧急程度" : "难易程度"
     let titles = key == "urgency" ? ["未设置", "低", "中", "高"] : ["未评估", "简单", "一般", "困难"]
-    let button = tu_btn(label + "：" + titles[rating], "down")
+    let button = UIButton(type: .system)
     button.accessibilityIdentifier = prefix + "." + key
-    button.menu = UIMenu(children: titles.enumerated().map { index, title in
-        let action = tu_act(title, nil, prefix + ".\(key).\(index)") { [weak button] in
-            selected(index)
-            var config = button?.configuration; config?.title = label + "：" + title; button?.configuration = config
-            (button?.menu?.children as? [UIAction])?.forEach { $0.state = $0.title == title ? .on : .off }
-        }
-        action.state = rating == index ? .on : .off
-        return action
-    }); button.showsMenuAsPrimaryAction = true
+    button.accessibilityLabel = field
+    button.accessibilityValue = titles[rating]
+    // 左字段名、右当前值和菜单指示，未设置使用次级文字。
+    let name = tu_lbl(field); name.numberOfLines = 1
+    let value = tu_lbl(titles[rating]); value.numberOfLines = 1; value.textAlignment = .right
+    value.textColor = rating == 0 ? TaskTheme.muted : TaskTheme.ink
+    value.setContentHuggingPriority(.required, for: .horizontal)
+    value.setContentCompressionResistancePriority(.required, for: .horizontal)
+    for view in [name, value] as [UIView] { view.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(view) }
+    NSLayoutConstraint.activate([
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+        name.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+        name.topAnchor.constraint(equalTo: button.topAnchor, constant: TaskTheme.gap),
+        name.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -TaskTheme.gap),
+        value.leadingAnchor.constraint(greaterThanOrEqualTo: name.trailingAnchor, constant: TaskTheme.gap),
+        value.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+        value.centerYAnchor.constraint(equalTo: name.centerYAnchor)
+    ])
+    if let selected {
+        button.menu = UIMenu(children: titles.enumerated().map { index, title in
+            let action = tu_act(title, nil, prefix + ".\(key).\(index)") { [weak button] in
+                selected(index)
+                button?.accessibilityValue = title
+                value.text = title; value.textColor = index == 0 ? TaskTheme.muted : TaskTheme.ink
+                (button?.menu?.children as? [UIAction])?.forEach { $0.state = $0.title == title ? .on : .off }
+            }
+            action.state = rating == index ? .on : .off
+            return action
+        }); button.showsMenuAsPrimaryAction = true
+        TaskPress.attach(button)
+    } else {
+        button.isUserInteractionEnabled = false
+    }
     return button
 }
 // 创建同组内容的纵向布局。

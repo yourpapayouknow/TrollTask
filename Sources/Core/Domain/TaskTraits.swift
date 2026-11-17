@@ -20,6 +20,24 @@ enum TaskTraits {
             return (a["task_id"] as? String ?? "") < (b["task_id"] as? String ?? "")
         }
     }
+    // 父任务在前，子任务紧随其父级并保留原先后。
+    static func group(_ tasks: [TaskFields]) -> [TaskFields] {
+        let ids = Set(tasks.compactMap { $0["task_id"] as? String })
+        var children: [String: [TaskFields]] = [:], roots: [TaskFields] = []
+        for task in tasks {
+            if let parent = task["parent_id"] as? String, ids.contains(parent) { children[parent, default: []].append(task) }
+            else { roots.append(task) }
+        }
+        var result: [TaskFields] = [], seen = Set<String>()
+        func emit(_ task: TaskFields) {
+            guard let id = task["task_id"] as? String, seen.insert(id).inserted else { return }
+            result.append(task)
+            for child in children[id] ?? [] { emit(child) }
+        }
+        for task in roots { emit(task) }
+        for task in tasks { emit(task) }
+        return result
+    }
     // 仅展示实际设置的字段，长时间采用简短数量级。
     static func labels(_ task: TaskFields) -> [String] {
         var result: [String] = []

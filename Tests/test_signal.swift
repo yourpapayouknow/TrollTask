@@ -38,6 +38,10 @@
         req(ids("urgency") == ["a","b","c","d"], "紧急优先且未设置后")
         req(ids("difficulty") == ["c","a","b","d"], "困难优先且稳定同值")
         req(ids("effort") == ["c","a","b","d"], "短任务优先且未设置后")
+        let parent: TaskFields = ["task_id":"p","created_at":1], kid: TaskFields = ["task_id":"k","parent_id":"p","created_at":2], lone: TaskFields = ["task_id":"x","created_at":3]
+        func tree(_ rows: [TaskFields]) -> [String] { TaskTraits.group(rows).map { $0["task_id"] as! String } }
+        req(tree([kid, parent, lone]) == ["p","k","x"], "子任务紧随父任务")
+        req(tree([kid, lone]) == ["k","x"], "父级不在当前清单时不丢子任务")
         req(TaskTraits.labels(task("x",3,3,1500)) == ["紧急：高","难度：困难","预计25分钟"], "摘要展示实际字段")
         req(TaskTraits.labels(task("x",0,0,nil)).isEmpty, "未设置不堆砌占位")
         req(TaskTraits.labels(task("x",0,0,90000)) == ["预计25小时"], "长投入不截断成一天")

@@ -49,10 +49,10 @@ final class TaskDate {
     private var childRow: UIStackView?, childField: UITextField?, childBusy = false, childBack = false
     private var textHeights: [NSLayoutConstraint] = []
     private var actionRow: UIStackView?
+    private weak var formScroll: UIScrollView?
     private var dateFields: TaskWindowFields?
     private weak var editingBeforeDate: UITextView?
-    private var keyboardShown = false
-    private var dateLine: UIStackView!, deadlineLine: UIStackView!, dateChip: UIButton!, clearDate: UIButton!, clearDeadline: UIButton!
+        private var dateLine: UIStackView!, deadlineLine: UIStackView!, dateChip: UIButton!, clearDate: UIButton!, clearDeadline: UIButton!
     private let duration = UITextField()
     private var routine: Bool { extras["list_id"] as? String == TS_RTN_LST }
     private var newTodo: Bool { quick && task == nil && !routine }
@@ -81,7 +81,7 @@ final class TaskDate {
         if newTodo {
             let dates = TaskWindowFields(zone: zone)
             dates.isHidden = true
-            dates.changed = { [weak self] in self?.rfrshDtl(); self?.view.setNeedsLayout() }
+            dates.changed = { [weak self] in self?.rfrshDtl(); self?.view.setNeedsLayout(); self?.revealDates() }
             dates.picking = { [weak self] active in
                 guard let self else { return }
                 if active {
@@ -113,7 +113,8 @@ final class TaskDate {
             extraActions = actions.filter { $0.identifier.rawValue != "edit.delete" }; more.menu = UIMenu(children: actions.filter { $0.identifier.rawValue == "edit.delete" }); more.showsMenuAsPrimaryAction = true; navigationItem.rightBarButtonItems = [UIBarButtonItem(customView: more)]
         }
         for (field, id, label, style) in [(titleField, "edit.title", "任务标题", UIFont.TextStyle.title2), (notes, "edit.notes", "详细信息", .body)] {
-            field.delegate = self; field.accessibilityIdentifier = id; field.accessibilityLabel = label; field.font = lb_fnt(quick && field === titleField ? .body : style, nil); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.backgroundColor = .clear
+            let fontStyle: UIFont.TextStyle = quick && field === titleField ? .body : quick && field === notes ? .subheadline : style
+            field.delegate = self; field.accessibilityIdentifier = id; field.accessibilityLabel = label; field.font = lb_fnt(fontStyle, nil); field.adjustsFontForContentSizeCategory = true; field.textColor = TaskTheme.ink; field.backgroundColor = .clear
             field.textContainerInset = .init(top: 8, left: 8, bottom: 8, right: 8); field.textContainer.lineFragmentPadding = 0; let height = field.heightAnchor.constraint(equalToConstant: field === titleField ? (quick ? 44 : 72) : 120); height.isActive = true; textHeights.append(height)
         }
         titleField.text = task?["title"] as? String ?? draft["title"] as? String ?? ""; notes.text = task?["notes"] as? String ?? draft["notes"] as? String ?? ""; notes.isHidden = notes.text.isEmpty
@@ -186,7 +187,7 @@ final class TaskDate {
         }
         let fields: [UIView] = dateFields.map { [titleLine, notes, $0] } ?? (quick ? [titleLine, notes, dateLine, detail, advanced] : [listBtn, titleField, notes, notesBtn, detail, extra, advanced])
         formStack = tu_stk(fields)
-        let scroll = tu_form(self, formStack, "edit.form")
+        let scroll = tu_form(self, formStack, "edit.form"); formScroll = scroll
         let footer: UIStackView
         if quick {
             var config = save.configuration; config?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
@@ -246,25 +247,13 @@ final class TaskDate {
         center.addObserver(self, selector: #selector(focusReady), name: UIWindow.didBecomeKeyNotification, object: window)
         DispatchQueue.main.async { [weak self] in self?.focusReady() }
     }
-    // 避免后台切回时只有输入焦点、系统却尚未弹出软键盘。
+    // 首次聚焦只执行一次，避免 resign/become 造成键盘闪动。
     @objc private func focusReady() {
         guard UIApplication.shared.applicationState == .active, view.window?.isKeyWindow == true else { return }
         stopFocusWait()
         guard navigationController?.topViewController === self, !isBeingDismissed else { return }
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardReady), name: UIResponder.keyboardDidShowNotification, object: nil)
         titleField.becomeFirstResponder()
-        // 冷启动时系统偶尔接受焦点却没有显示键盘，只重试一次。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self else { return }
-            NotificationCenter.default.removeObserver(self, name: UIResponder.keyboardDidShowNotification, object: nil)
-            guard !self.keyboardShown, self.titleField.isFirstResponder, self.titleField.text.isEmpty,
-                  self.navigationController?.topViewController === self, !self.isBeingDismissed,
-                  self.view.window?.isKeyWindow == true, UIApplication.shared.applicationState == .active else { return }
-            self.titleField.resignFirstResponder()
-            self.titleField.becomeFirstResponder()
-        }
     }
-    @objc private func keyboardReady() { keyboardShown = true }
     private func stopFocusWait() {
         let center = NotificationCenter.default
         center.removeObserver(self, name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -430,6 +419,14 @@ final class TaskDate {
     }
     // 修改草稿星标。
     @objc private func star() { guard !routine else{return}; extras["starred"] = !((extras["starred"] as? NSNumber)?.boolValue ?? false); dirty.insert("starred"); rfrshDtl() }
+    // 日期选择展开后把确认按钮滚到工具栏上方。
+    private func revealDates() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let dates = self.dateFields, !dates.isHidden, dates.awaitingConfirm, let scroll = self.formScroll else { return }
+            self.view.layoutIfNeeded()
+            scroll.scrollRectToVisible(dates.convert(dates.confirmRect, to: scroll).insetBy(dx: 0, dy: -TaskTheme.gap), animated: true)
+        }
+    }
     // 在标题和备注下方展开或收起日期设置。
     @objc private func openWindow() {
         guard let dates = dateFields else { return }

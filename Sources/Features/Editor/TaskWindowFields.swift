@@ -10,6 +10,10 @@ final class TaskWindowFields: UIStackView {
     private(set) var end: Date?
     var changed: (() -> Void)?
     var picking: ((Bool) -> Void)?
+    // 已展开日期选择并等待确认。
+    var awaitingConfirm: Bool { editing != nil && !confirm.isHidden }
+    // 确认按钮在本表单内的位置。
+    var confirmRect: CGRect { confirm.convert(confirm.bounds, to: self) }
 
     init(zone: TimeZone) {
         calendar = TaskWindow.calendar(zone)

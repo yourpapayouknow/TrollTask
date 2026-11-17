@@ -705,7 +705,7 @@ static void ut_edit(void) {
     NSString *pendingID = pending[@"task_id"]; ut_edt(pending); ut_tap(@"edit.more");
     ut_ui(^{
         ut_req([[(UITextField *)ut_find(ut_top().view,@"edit.duration") text] isEqual:@"1500"] && !ut_find(ut_top().view,@"edit.timezone"),@"预计分钟回填，详情无时区输入");
-        ut_req([[(UIButton *)ut_find(ut_top().view,@"edit.urgency") configuration].title isEqual:@"紧急程度：高"] && [[(UIButton *)ut_find(ut_top().view,@"edit.difficulty") configuration].title isEqual:@"难易程度：一般"],@"紧急难度回填");
+        ut_req([[ut_find(ut_top().view,@"edit.urgency") accessibilityValue] isEqual:@"高"] && [[ut_find(ut_top().view,@"edit.difficulty") accessibilityValue] isEqual:@"一般"],@"紧急难度回填");
         ut_req([(UISwitch *)ut_find(ut_top().view,@"plan.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"plan.timed") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.enabled") isOn] && [(UISwitch *)ut_find(ut_top().view,@"deadline.timed") isOn],@"计划和独立截止开关回填");
         UIDatePicker *plan = (UIDatePicker *)ut_find(ut_top().view,@"plan.time"), *ddl = (UIDatePicker *)ut_find(ut_top().view,@"deadline.time");
         ut_req([plan.timeZone isEqual:[NSTimeZone timeZoneWithName:@"UTC"]] && [ddl.timeZone isEqual:plan.timeZone],@"任务详情沿用原有UTC时区");
@@ -1189,6 +1189,7 @@ static void ut_hdbg(BOOL seed) {
                 else if ([ut_args containsObject:@"--today"]) {ut_tdy();}
                 else if ([ut_args containsObject:@"--archive"]) {ut_archive();}
                 else if (parityOnly) { ut_prty(); if (@available(iOS 16.0,*)) { ut_refs(); ut_clsr(); ut_edit(); ut_rtn(); } }
+                else if ([ut_args containsObject:@"--assistant-split"]) { ut_ast(); }
                 else if ([ut_args containsObject:@"--assistant"]) { ut_rtn(); ut_ast(); }
                 else if ([ut_args containsObject:@"--routines"]) { ut_rtn(); }
                 else if (signalOnly) { ut_signal(); }

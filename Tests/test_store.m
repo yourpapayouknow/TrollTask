@@ -364,6 +364,19 @@ static void tstv3(NSString *root) {
     }
 }
 
+// 验证创建草稿覆盖保存与清除。
+static void tstdrft(NSString *path) {
+    TaskStore *store = tstopn(path);
+    NSDictionary *draft = @{@"fields":@{@"title":@"草稿任务"},@"parts":@[],@"split":@YES};
+    assert(([store svDrft:draft error:nil]));
+    NSDictionary *loaded = [store rdDrft:nil];
+    assert(([loaded[@"fields"][@"title"] isEqual:@"草稿任务"] && [loaded[@"split"] boolValue]));
+    NSDictionary *next = @{@"fields":@{@"title":@"第二份草稿"},@"split":@NO};
+    assert(([store svDrft:next error:nil]));
+    assert(([[store rdDrft:nil][@"fields"][@"title"] isEqual:@"第二份草稿"]));
+    assert(([store clrDrft:nil] && [[store rdDrft:nil] count] == 0));
+}
+
 // 执行真实原生SQLite存储验收。
 int main(void) {
     @autoreleasepool {
@@ -383,6 +396,7 @@ int main(void) {
         tstlst([root stringByAppendingPathComponent:@"lists.sqlite3"]);
         tstprocs([root stringByAppendingPathComponent:@"parallel.sqlite3"]);
         tstfirst([root stringByAppendingPathComponent:@"first.sqlite3"]);
+        tstdrft([root stringByAppendingPathComponent:@"draft.sqlite3"]);
         assert(([NSFileManager.defaultManager removeItemAtPath:root error:nil]));
         puts("TaskStore: models, UUIDs, absolute times, constraints, migration rollback, concurrent processes and interrupted transaction recovery passed");
     }

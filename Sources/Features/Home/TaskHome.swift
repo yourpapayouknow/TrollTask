@@ -9,7 +9,7 @@ final class TaskCell: UITableViewCell {
     private var labelTop: NSLayoutConstraint!
     private var rowEdges: [NSLayoutConstraint] = []
     private let routineCard = UIView()
-    private var checkWidth:NSLayoutConstraint!,trailingWidth:NSLayoutConstraint!,trailingEdge:NSLayoutConstraint!,reserved:CGFloat=112
+    private var checkWidth:NSLayoutConstraint!,trailingWidth:NSLayoutConstraint!,trailingEdge:NSLayoutConstraint!,indent:NSLayoutConstraint!,reserved:CGFloat=112
     private var starCenter:NSLayoutConstraint!,deleteCenter:NSLayoutConstraint!
     private var metadata: UIStackView!
     private var shownID: String?, lastComplete = false, lastStarred = false, lastLit = false
@@ -38,13 +38,13 @@ final class TaskCell: UITableViewCell {
         [check, labels, trailing].forEach { contentView.addSubview($0) }
         checkWidth=check.widthAnchor.constraint(equalToConstant:56);trailingWidth=trailing.widthAnchor.constraint(equalToConstant:56)
         trailingEdge=trailing.trailingAnchor.constraint(equalTo:contentView.trailingAnchor)
-        starCenter=trailing.centerYAnchor.constraint(equalTo:check.centerYAnchor)
+        starCenter=trailing.centerYAnchor.constraint(equalTo:check.centerYAnchor);indent=check.leadingAnchor.constraint(equalTo:contentView.leadingAnchor)
         deleteCenter=trailing.centerYAnchor.constraint(equalTo:contentView.centerYAnchor)
         labelTop=labels.topAnchor.constraint(equalTo:contentView.topAnchor,constant:12);iconHeights=[check.heightAnchor.constraint(equalToConstant:44),trailing.heightAnchor.constraint(equalToConstant:44)]
         rowEdges = [check.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
                     check.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -12),
                     labels.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -12)]
-        NSLayoutConstraint.activate([check.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+        NSLayoutConstraint.activate([indent!,
             checkWidth,
             labels.leadingAnchor.constraint(equalTo: check.trailingAnchor), labels.trailingAnchor.constraint(equalTo: trailing.leadingAnchor),
             trailingEdge!, starCenter!, trailingWidth!,
@@ -133,10 +133,17 @@ final class TaskCell: UITableViewCell {
         labelTop.constant = rowPadding + (height - line) / 2
         day.font = lb_fnt(.subheadline, owner.traitCollection); clock.font = day.font
         titleLabelView.textColor = complete ? TaskTheme.muted : TaskTheme.ink
-        indentationLevel = task["parent_id"] is NSNull ? 0 : 1; indentationWidth = 4
+        indent.constant = task["parent_id"] is NSNull ? 0 : TaskTheme.edge
         let stamp = task[complete ? "completed_at" : "remind_at"] as? NSNumber ?? task["due_at"] as? NSNumber ?? task["deadline_at"] as? NSNumber
         day.isHidden = stamp == nil; clock.isHidden = stamp == nil; day.text = nil; clock.text = nil
-        if let stamp = stamp {
+        if !complete, task["planning_mode"] as? String == "window",
+           let from = task["due_at"] as? NSNumber, let to = task["deadline_at"] as? NSNumber,
+           from.doubleValue > 0, to.doubleValue > 0 {
+            let format = DateFormatter(); format.locale = Locale(identifier: "zh_CN")
+            format.timeZone = TimeZone(identifier: task["timezone_id"] as? String ?? "") ?? .current; format.dateFormat = "MM-dd"
+            day.text = format.string(from: Date(timeIntervalSince1970: from.doubleValue)) + "–" + format.string(from: Date(timeIntervalSince1970: to.doubleValue))
+            day.isHidden = false; clock.isHidden = true
+        } else if let stamp = stamp {
             let format = DateFormatter(); format.locale = Locale(identifier: "zh_CN"); format.timeZone = .current; format.dateFormat = "yyyy-MM-dd"
             let date = Date(timeIntervalSince1970: stamp.doubleValue); day.text = format.string(from: date); format.dateFormat = "HH:mm"; clock.text = format.string(from: date)
         }
@@ -461,10 +468,27 @@ final class TaskCell: UITableViewCell {
         if y < height && delta < 0 { rtnRead(-1) }
         else if table.contentSize.height - y - height < height && delta > 0 { rtnRead(1) }
     }
-    // 创建快捷草稿。
+    // 创建快捷草稿；有未完成草稿时先让用户选择继续或丢弃。
     @objc private func crt() {
         guard !todayOnly else{return}
         guard let store = store else { rfrsh(); return }; guard presentedViewController == nil else { return }
+        if !routineOnly, let value = try? store.draft(), let saved = value as? TaskFields, !saved.isEmpty {
+            let alert=UIAlertController(title:"继续上次的编辑？",message:nil,preferredStyle:.alert)
+            alert.addAction(UIAlertAction(title:"继续",style:.default){[weak self] _ in self?.resumeDraft(saved,store)})
+            alert.addAction(UIAlertAction(title:"丢弃",style:.destructive){[weak self] _ in _ = try? store.clearDraft();self?.openCreate(store)})
+            present(alert,animated:true);return
+        }
+        openCreate(store)
+    }
+    // 从保存的草稿直接回到创建评估页。
+    private func resumeDraft(_ saved:TaskFields,_ store:TaskStore){
+        guard let fields=saved["fields"] as? TaskFields else{openCreate(store);return}
+        let parts=saved["parts"] as? [TaskFields] ?? [],estimate=saved["estimate"] as? TaskFields,split=(saved["split"] as? NSNumber)?.boolValue
+        let page=TaskAdmissionScreen(store:store,fields:fields,parts:parts,estimate:estimate,split:split){[weak self] in self?.rfrsh();self?.dismiss(animated:true)}
+        tu_sheet(self,UINavigationController(rootViewController:page),compact:true)
+    }
+    // 打开新的快捷创建面板。
+    private func openCreate(_ store:TaskStore){
         let draft: TaskFields = routineOnly ? tr_draft() : ["list_id": listID == "starred" ? TS_DFLT_LST : listID]
         let editor = TaskEdit(store: store, task: nil, draft: draft, quick: true) { [weak self] in self?.rfrsh() }
         let nav = UINavigationController(rootViewController: editor); nav.preferredContentSize = editor.preferredContentSize
@@ -501,9 +525,11 @@ final class TaskCell: UITableViewCell {
         if listID=="today" {pending=todayRows.filter{$0["status"] as? String != "completed"};return}
         let star = listID == "starred"
         if !star && !lists.contains(where: { $0["list_id"] as? String == listID }) { listID = TS_DFLT_LST }
-        let filter: (TaskFields) -> Bool = { star ? ($0["starred"] as? NSNumber)?.boolValue == true && $0["routine_kind"] as? String=="none" : $0["list_id"] as? String == self.listID }
+        let now = Date().timeIntervalSince1970
+        let lit: (TaskFields) -> Bool = { $0["routine_kind"] as? String == "none" && (($0["starred"] as? NSNumber)?.boolValue == true || (TaskWindow.halfway($0).map { $0 <= now } ?? false)) }
+        let filter: (TaskFields) -> Bool = { star ? lit($0) : $0["list_id"] as? String == self.listID }
         pending = allPnd.filter(filter)
-        pending = TaskTraits.order(pending, by: sort)
+        pending = TaskTraits.group(TaskTraits.order(pending, by: sort))
     }
     // 页签文字和图标采用同一居中布局。
     private func tabBtn(_ title:String?,_ icon:String?,_ action:Selector)->UIButton {
@@ -519,7 +545,8 @@ final class TaskCell: UITableViewCell {
     private func bldTabs() {
         tabFocus = tabFocus || !tabs.arrangedSubviews.contains{$0.accessibilityIdentifier=="list."+listID && $0.accessibilityTraits.contains(.selected)}
         tabs.arrangedSubviews.forEach { tabs.removeArrangedSubview($0); $0.removeFromSuperview() }
-        let count = allPnd.filter { ($0["starred"] as? NSNumber)?.boolValue == true && $0["routine_kind"] as? String=="none" }.count
+        let now = Date().timeIntervalSince1970
+        let count = allPnd.filter { $0["routine_kind"] as? String=="none" && (($0["starred"] as? NSNumber)?.boolValue == true || (TaskWindow.halfway($0).map { $0 <= now } ?? false)) }.count
         let ordered:[[String:Any]] = [["list_id":"today","title":"今日律"]] + lists.filter{$0["list_id"] as? String==TS_RTN_LST} + [["list_id":"starred","title":"星标"]] + lists.filter{$0["list_id"] as? String != TS_RTN_LST}
         for list in ordered {
             let id = list["list_id"] as! String, selected = id == listID

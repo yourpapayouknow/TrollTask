@@ -47,6 +47,10 @@ static void ut_todo_create(void) {
         NSDate *expected=[cal component:NSCalendarUnitHour fromDate:now]<8 ? today : [cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:today options:0];
         ut_req(picker.datePickerMode==UIDatePickerModeDate && picker.preferredDatePickerStyle==UIDatePickerStyleInline && [cal isDate:picker.date inSameDayAsDate:expected],@"08:00切换默认起始日，使用原地日历");
     });
+    ut_wait(^BOOL{
+        UIView *page=draft.view,*form=ut_find(page,@"edit.form"),*done=ut_find(page,@"window.done");
+        return done && CGRectContainsRect([form convertRect:form.bounds toView:page],[done convertRect:done.bounds toView:page]);
+    },@"展开日历后选定日期无需上滑即可点按");
     ut_tap(@"edit.date");
     ut_wait(^BOOL{return [ut_find(draft.view,@"edit.title") isFirstResponder];},@"收起日历后恢复标题焦点");
     ut_wait(^BOOL{return ut_draft_compact(draft);},@"收起日期与日历后恢复紧凑面板");
@@ -74,10 +78,23 @@ static void ut_todo_create(void) {
         picker.date=[picker.calendar dateByAddingUnit:NSCalendarUnitDay value:29 toDate:start options:0];[picker sendActionsForControlEvents:UIControlEventValueChanged];ut_req(done.isEnabled,@"第30天可确认");});
     ut_tap(@"window.done");ut_tap(@"edit.save");
     ut_wait(^BOOL{return ut_find(ut_surface(),@"intake.urgency")!=nil;},@"打开评估并显示移入的字段");
-    ut_ui(^{UIView *page=ut_top().view;UILabel *urgency=(UILabel *)ut_find(page,@"intake.urgency");
-        ut_req([urgency isKindOfClass:UILabel.class] && [urgency.text isEqual:@"紧急程度：高"],@"手动星标在第二页清楚显示高紧急度");
+    ut_wait(^BOOL{UIView *page=ut_top().view,*footer=ut_find(page,@"intake.save");
+        return footer && CGRectGetMaxY([footer convertRect:footer.bounds toView:page])>page.bounds.size.height-140;},@"第二页键盘收起后页脚落到底部");
+    ut_ui(^{UIView *page=ut_top().view;UIView *urgency=ut_find(page,@"intake.urgency");
+        ut_req([urgency.accessibilityValue isEqual:@"高"],@"手动星标在第二页清楚显示高紧急度");
         ut_req(ut_find(page,@"intake.difficulty") && ut_find(page,@"intake.minutes") && !ut_find(page,@"intake.notes"),@"难易程度和预计分钟进入下一页，备注留在第一步");
-        ut_req(!ut_find(page,@"intake.start.time") && !ut_find(page,@"intake.end.time"),@"第二页同样只显示日期");});
+        ut_req(!ut_find(page,@"intake.start.time") && !ut_find(page,@"intake.end.time"),@"第二页同样只显示日期");
+        UISwitch *split=(UISwitch *)ut_find(page,@"intake.split");UIButton *saveButton=(UIButton *)ut_find(page,@"intake.save");
+        ut_req(split && split.on && [saveButton.configuration.title isEqual:@"下一步"],@"未评估难度默认打开拆分并显示下一步");
+        [split setOn:NO animated:NO];[split sendActionsForControlEvents:UIControlEventValueChanged];
+        ut_req([saveButton.configuration.title isEqual:@"评估并创建"],@"关闭拆分后主按钮改为评估并创建");
+        [split setOn:YES animated:NO];[split sendActionsForControlEvents:UIControlEventValueChanged];
+        ut_req([saveButton.configuration.title isEqual:@"下一步"],@"重新打开拆分恢复下一步");
+        [page layoutIfNeeded];
+        UIView *last=ut_find(page,@"intake.difficulty"),*footerSave=ut_find(page,@"intake.save");
+        UIScrollView *form=(UIScrollView *)ut_find(page,@"intake.content");
+        CGRect row=[last convertRect:last.bounds toView:page],saveRect=[footerSave convertRect:footerSave.bounds toView:page],visible=[form convertRect:form.bounds toView:page];
+        ut_req(CGRectGetMaxY(row)<=CGRectGetMinY(saveRect) && CGRectGetMaxY(row)<=CGRectGetMaxY(visible),[NSString stringWithFormat:@"第二页最后一行完整位于页脚上方 row=%@ visible=%@",NSStringFromCGRect(row),NSStringFromCGRect(visible)]);});
     ut_droot();ut_req([ut_store lsTsks:nil].count==0,@"退出草稿和评估没有创建任务");
     NSCalendar *cal=NSCalendar.currentCalendar;NSDate *today=[cal startOfDayForDate:NSDate.date];
     NSDate *yesterday=[cal dateByAddingUnit:NSCalendarUnitDay value:-1 toDate:today options:0],*tomorrow=[cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:today options:0],*dayAfter=[cal dateByAddingUnit:NSCalendarUnitDay value:2 toDate:today options:0];
@@ -86,6 +103,10 @@ static void ut_todo_create(void) {
     ut_req(past!=nil && future!=nil,@"整日窗口已保存到隔离库");
     NSString *pastID=[@"star." stringByAppendingString:past[@"task_id"]],*futureID=[@"star." stringByAppendingString:future[@"task_id"]];
     ut_wait(^BOOL{return [ut_find(ut_surface(),pastID).accessibilityValue isEqual:@"时间已过半"] && [ut_find(ut_surface(),futureID).accessibilityValue isEqual:@"0"];},@"普通清单在窗口过半后自动点亮星标");
+    ut_tap(@"list.starred");
+    ut_wait(^BOOL{return ut_find(ut_surface(),pastID)!=nil && !ut_find(ut_surface(),pastID).hidden;},@"时间过半任务进入星标列表");
+    ut_req(ut_find(ut_surface(),futureID)==nil || ut_find(ut_surface(),futureID).hidden,@"未过半任务不提前进入星标列表");
+    ut_tap([@"list." stringByAppendingString:TS_DFLT_LST]);
     NSDictionary *saved=[ut_store rdTsk:past[@"task_id"] error:nil];ut_req([saved[@"starred"] intValue]==0 && [saved[@"urgency"] intValue]==0,@"自动亮星不改数据库星标或紧急度");
 }
 

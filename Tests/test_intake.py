@@ -73,7 +73,7 @@ def run(root):
  before=tstcmd(db,'snapshot');admit(malformed,ok=False);req(tstcmd(db,'snapshot')==before,'失败的父子提交完全回滚')
  # 午夜和重复事件只影响当前日，不重新生成副本。
  tstcmd(db,'complete-next',part(1,45)['task_id']);req(not any(r['task_id']==part(1,45)['task_id'] and r['status']!='completed' for r in tstcmd(db,'today',str(at),'UTC')),'完成子任务不再作为未完成出现')
- req(tstcmd(db,'schema')['schema_version']==13,'单库迁移版本正确')
+ req(tstcmd(db,'schema')['schema_version']==14,'单库迁移版本正确')
 
 # 验证真实请求分档、结构化输出和服务静默换模型的阻断。
 def network(root):
@@ -136,7 +136,7 @@ def boundaries(root):
  tstcmd(migration,'schema',success=False)
  with connect(migration) as connection:
   req(connection.execute('SELECT schema_version FROM store_meta').fetchone()[0]==11,'迁移失败保留版本十一');req(not any(r[1]=='planning_mode' for r in connection.execute('PRAGMA table_info(tasks)')),'迁移失败回滚新增列');connection.execute('DROP TRIGGER fail_v12')
- req(tstcmd(migration,'schema')['schema_version']==13 and tstcmd(migration,'get',old['task_id'])['title']=='原任务','迁移恢复保留原身份与内容')
+ req(tstcmd(migration,'schema')['schema_version']==14 and tstcmd(migration,'get',old['task_id'])['title']=='原任务','迁移恢复保留原身份与内容')
 
 # 通过真实事务校验整日窗口、最长天数、加星和备注保留。
 def calendar_days(root):

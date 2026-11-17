@@ -384,6 +384,10 @@ static BOOL ts_pth(NSString *path, NSError **error) {
             "INSERT OR IGNORE INTO task_archive(entry_id,task_id,occurrence_id,title,notes,routine_kind,completed_at,scheduled_at) "
             "SELECT NEW.occurrence_id,task_id,NEW.occurrence_id,title,notes,routine_kind,NEW.handled_at,NEW.scheduled_at FROM tasks WHERE task_id=NEW.task_id; END;"
             "UPDATE store_meta SET schema_version=13 WHERE singleton=1;" error:failure]) return NO;
+        // 创建草稿与正式任务分开，只保留最近一份。
+        if (version <= 13 && ![self exec:
+            "CREATE TABLE IF NOT EXISTS task_drafts(singleton INTEGER PRIMARY KEY CHECK(singleton=1),data TEXT NOT NULL,updated_at REAL NOT NULL);"
+            "UPDATE store_meta SET schema_version=14 WHERE singleton=1;" error:failure]) return NO;
         return YES;
     } error:error];
 }
@@ -1273,6 +1277,23 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
     NSData *bytes=[NSJSONSerialization dataWithJSONObject:data options:NSJSONWritingSortedKeys error:error];if(!bytes)return NO;
     return [self wrTxn:^BOOL(NSError **failure){return [self qry:"INSERT INTO task_reviews(task_id,data) VALUES(?,?) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data"
         values:@[taskID,[[NSString alloc]initWithData:bytes encoding:NSUTF8StringEncoding]] error:failure]!=nil;} error:error];
+}
+// 读取最近一份创建草稿，没有时返回空对象。
+- (NSDictionary *)rdDrft:(NSError **)error {
+    @synchronized(self) {
+        NSArray *rows=[self qry:"SELECT data FROM task_drafts WHERE singleton=1" values:@[] error:error];if(!rows)return nil;
+        return rows.count ? [NSJSONSerialization JSONObjectWithData:[rows[0][@"data"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:error] : @{};
+    }
+}
+// 单条覆盖保存创建草稿。
+- (BOOL)svDrft:(NSDictionary *)data error:(NSError **)error {
+    NSData *bytes=[NSJSONSerialization dataWithJSONObject:data options:NSJSONWritingSortedKeys error:error];if(!bytes)return NO;
+    return [self wrTxn:^BOOL(NSError **failure){return [self qry:"INSERT INTO task_drafts(singleton,data,updated_at) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at"
+        values:@[[[NSString alloc]initWithData:bytes encoding:NSUTF8StringEncoding],@(NSDate.date.timeIntervalSince1970)] error:failure]!=nil;} error:error];
+}
+// 删除创建草稿。
+- (BOOL)clrDrft:(NSError **)error {
+    return [self wrTxn:^BOOL(NSError **failure){return [self qry:"DELETE FROM task_drafts WHERE singleton=1" values:@[] error:failure]!=nil;} error:error];
 }
 // 逐日模拟既有任务，已分配的一次性任务不在次日重复占用。
 - (NSDictionary *)roomAt:(NSTimeInterval)start until:(NSTimeInterval)end zone:(NSString *)zone excluding:(NSArray *)ids now:(NSTimeInterval)now error:(NSError **)error {
