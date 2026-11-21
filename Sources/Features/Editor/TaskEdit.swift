@@ -39,7 +39,7 @@ final class TaskDate {
     private var extras: TaskFields, dirty: Set<String> = []
     private let zone: TimeZone
     private let quick: Bool
-    private var saving = false, splitAfterSave = false, forceReview = false
+    private var saving = false, forceReview = false
     private var extraActions: [UIAction] = []
     private let titleField = UITextView(), notes = UITextView(), hint = tu_lbl("新建任务")
     private let schedule = tu_lbl(nil)
@@ -64,7 +64,7 @@ final class TaskDate {
     // 保留原始字段与明确的修改集合。
     @objc(initWithStore:task:draft:quick:saved:) init(store: TaskStore, task: TaskFields?, draft: TaskFields?, quick: Bool, saved: (() -> Void)?) {
         self.store = store; self.task = task; self.draft = draft ?? [:]; self.quick = quick; self.saved = saved
-        extras = task ?? ["list_id": TS_DFLT_LST, "parent_id": NSNull(), "starred": 0, "urgency": 0, "difficulty": 0, "recurrence_type": "none", "recurrence_interval": 1, "recurrence": [String]()]
+        extras = task ?? ["list_id": TS_DFLT_LST, "parent_id": NSNull(), "starred": 0, "urgency": 0, "difficulty": 0, "rush": 0, "density": 1, "recurrence_type": "none", "recurrence_interval": 1, "recurrence": [String]()]
         extras.merge(draft ?? [:]) { _, new in new }
         zone = (extras["timezone_id"] as? String).flatMap { TimeZone(identifier: $0) } ?? TaskTimeZone.current
         super.init(nibName: nil, bundle: nil); if quick { preferredContentSize = CGSize(width: 540, height: 128) }
@@ -105,8 +105,7 @@ final class TaskDate {
             var actions = [tu_act("放弃更改", "close", "edit.cancel") { [weak self] in self?.cncl() }]
             if let task = task {
                 let remove = tu_act("删除任务", "delete", "edit.delete") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除任务及子任务") { [weak self] in self?.dl() } }; remove.attributes = .destructive; actions.append(remove)
-                if task["routine_kind"] as? String == "none", task["status"] as? String == "needsAction", (task["recurrence"] as! [String]).isEmpty { actions.append(tu_act("智能拆分", "subtask", "edit.split") { [weak self] in self?.splitAfterSave = true; self?.sv() }) }
-                if task["routine_kind"] as? String=="none",task["status"] as? String=="needsAction"{actions.append(tu_act("重新评估","subtask","edit.assess"){[weak self] in self?.forceReview=true;self?.sv()})}
+                                if task["routine_kind"] as? String=="none",task["status"] as? String=="needsAction"{actions.append(tu_act("重新评估","subtask","edit.assess"){[weak self] in self?.forceReview=true;self?.sv()})}
                 if !routine{actions.append(tu_act("完成记录", "list", "edit.history") { [weak self] in self?.hist() })}
                 if !(task["parent_id"] is NSNull) { actions.append(tu_act("转为独立任务", "subtask", "edit.detach") { [weak self] in self?.extras["parent_id"] = NSNull(); self?.dirty.insert("parent_id"); self?.rfrshDtl() }) }
             }
@@ -267,8 +266,11 @@ final class TaskDate {
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); navigationController?.setNavigationBarHidden(quick, animated: false); if task != nil && subBtn != nil { children() } }
     // 构建紧急程度与难度菜单。
     private func grade(_ key: String) -> UIButton {
-        tu_grade(key, "edit", (extras[key] as? NSNumber)?.intValue ?? 0) { [weak self] index in
-            self?.extras[key] = index; self?.dirty.insert(key)
+        tu_grade(key, "edit", (extras[key] as? NSNumber)?.intValue ?? 0, rush: key == "urgency" && (extras["rush"] as? NSNumber)?.boolValue == true) { [weak self] index in
+            guard let self else{return}
+            if key == "urgency" { self.extras["urgency"] = min(index, 3); self.extras["rush"] = index == 4 ? 1 : 0; self.dirty.insert("rush") }
+            else { self.extras[key] = index }
+            self.dirty.insert(key)
         }
     }
     // 显示独立日期与星标状态。
@@ -547,7 +549,7 @@ final class TaskDate {
         if task == nil || dirty.contains("title") { fields["title"] = titleField.text ?? "" }; if task == nil || dirty.contains("notes") { fields["notes"] = notes.text ?? "" }
         if task == nil { fields["timezone_id"] = zone.identifier }
         if task == nil || dirty.contains("plan") { fields.merge(plan.flds(zone)) { _, new in new } }; if task == nil || dirty.contains("deadline") { fields.merge(deadline.flds(zone)) { _, new in new } }
-        for key in ["list_id", "parent_id", "starred", "urgency", "difficulty", "planned_duration", "recurrence_type", "recurrence_interval", "recurrence", "routine_kind", "routine_end", "routine_enabled"] where dirty.contains(key) { fields[key] = extras[key] }
+        for key in ["list_id", "parent_id", "starred", "urgency", "difficulty", "rush", "density", "planned_duration", "recurrence_type", "recurrence_interval", "recurrence", "routine_kind", "routine_end", "routine_enabled"] where dirty.contains(key) { fields[key] = extras[key] }
         if newTodo {
             guard let dates = dateFields else { return }
             guard let windowEnd = dates.end else {
@@ -585,14 +587,14 @@ final class TaskDate {
             DispatchQueue.main.async {
                 self.saving = false; self.rfrshSv(); self.view.isUserInteractionEnabled = true; self.navigationItem.leftBarButtonItem?.isEnabled = true; self.navigationItem.rightBarButtonItems?.forEach { $0.isEnabled = true }
                 if self.quick { self.navigationController?.isModalInPresentation = false }
-                if let issue = issue { self.splitAfterSave = false; tu_err(self, issue) } else { self.finish() }
+                if let issue = issue { tu_err(self, issue) } else { self.finish() }
             }
         }
     }
-    // 保存后替换编辑页，返回时显示最新快照。
+    // 保存后关闭编辑页，返回时显示最新快照。
     private func finish() {
         TaskHaptics.success()
         saved?()
-        if splitAfterSave, let id = task?["task_id"] as? String, let nav = navigationController { var pages = nav.viewControllers; if pages.last === self { pages.removeLast(); pages.append(TaskAssistantScreen(store: store, taskID: id)); nav.setViewControllers(pages, animated: true) } } else { cncl() }
+        cncl()
     }
 }

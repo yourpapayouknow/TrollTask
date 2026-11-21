@@ -51,7 +51,8 @@
                         if old["status"] as? String != "completed" { try store.updTsk(id,fields:["title":row["title"]!,"notes":row["notes"]!,"planned_duration":row["planned_duration"]!,"position":position]) }
                     } else {
                         var fields = row; fields.removeValue(forKey:"task_id"); fields["parent_id"] = task; fields["position"] = position
-                        for key in ["list_id","timezone_id","urgency","difficulty","deadline_at","deadline_kind"] { fields[key] = parent[key] }
+                        for key in ["list_id","timezone_id","urgency","difficulty","rush","density","deadline_at"] { fields[key] = parent[key] }
+                        fields["deadline_kind"] = parent["deadline_at"] is NSNull ? "none" : "timed"
                         _ = try store.crtTsk(fields,uuid:id)
                     }
                 }

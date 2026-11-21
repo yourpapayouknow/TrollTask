@@ -1,6 +1,6 @@
 // 将创建评估与提醒轮次分开，所有正式保存共用原子门禁。
 @objc(TaskIntake) final class TaskIntake:NSObject {
-    static let keys:Set<String>=["title","notes","due_at","timezone_id","recurrence_type","recurrence_interval","list_id","parent_id","position","starred","schedule_kind","planned_duration","deadline_at","deadline_kind","recurrence","urgency","difficulty","planning_mode"]
+    static let keys:Set<String>=["title","notes","due_at","timezone_id","recurrence_type","recurrence_interval","list_id","parent_id","position","starred","schedule_kind","planned_duration","deadline_at","deadline_kind","recurrence","urgency","difficulty","rush","density","planning_mode"]
     // 对评估有关的任务字段和全部后代签名。
     static func sig(_ store:TaskStore,_ id:String,strict:Bool=false)throws->[TaskFields] {
         let all=try store.lsTsks() as! [TaskFields];var family=Set([id]),changed=true
@@ -12,8 +12,10 @@
         guard at.isFinite,let input=fields as? TaskFields,let rows=parts as? [TaskFields] else{throw TaskAI.err("评估输入无效")}
         let id=input["task_id"] as? String,old:TaskFields?=try id.map{try store.rdTsk($0) as! TaskFields}
         if let id,let baseline=input["_baseline"] as? [TaskFields],!NSDictionary(dictionary:["rows":baseline]).isEqual(to:["rows":try sig(store,id,strict:true)]){throw TaskAI.err("任务已变更，请重载")}
-        var task=old?.filter{keys.contains($0.key)} ?? ["title":"","notes":"","timezone_id":TimeZone.current.identifier,"list_id":TS_DFLT_LST,"recurrence":[],"difficulty":0,"urgency":0]
+        var task=old?.filter{keys.contains($0.key)} ?? ["title":"","notes":"","timezone_id":TimeZone.current.identifier,"list_id":TS_DFLT_LST,"recurrence":[],"difficulty":0,"urgency":0,"rush":0,"density":1]
         task.merge(input.filter{keys.contains($0.key)}){_,new in new}
+        if old == nil { task["density"] = 1 }
+        if (task["rush"] as? NSNumber)?.boolValue == true { task["urgency"] = 3 }
         try TaskStore.vldTxt(task["title"] as? String ?? "",notes:task["notes"] as? String ?? "")
         if let old,old["status"] as? String != "needsAction" || (old["deleted"] as? NSNumber)?.boolValue==true{throw TaskAI.err("任务已处理或删除")}
         guard let start=task["due_at"] as? NSNumber,ts_num(start),let end=task["deadline_at"] as? NSNumber,ts_num(end),end.doubleValue>start.doubleValue,end.doubleValue>at,
@@ -34,7 +36,9 @@
         let room=try store.room(start:start.doubleValue,end:end.doubleValue,zone:zone,excluding:id.map{[$0]} ?? [],now:at) as! TaskFields
         let horizon=Calendar(identifier:.gregorian).date(byAdding:.day,value:14,to:Date(timeIntervalSince1970:end.doubleValue))!.timeIntervalSince1970
         let future=(end.doubleValue-start.doubleValue < 380*86400) ? try store.room(start:start.doubleValue,end:horizon,zone:zone,excluding:id.map{[$0]} ?? [],now:at) as! TaskFields:room
-        return ["completed_ids":retained.compactMap{$0["task_id"] as? String},"completed_effort":doneEffort,"future_gaps":future["gaps"]!,"task_id":id ?? UUID().uuidString.lowercased(),"existing":id != nil,"fields":task,"parts":rows,"room":room,"revision":snapshot["revision"]!,"at":at]
+        var result:TaskFields=["completed_ids":retained.compactMap{$0["task_id"] as? String},"completed_effort":doneEffort,"future_gaps":future["gaps"]!,"task_id":id ?? UUID().uuidString.lowercased(),"existing":id != nil,"fields":task,"parts":rows,"room":room,"revision":snapshot["revision"]!,"at":at]
+        if !rows.isEmpty {result["dry"]=try store.evaluate(fields:task,parts:rows,now:at)}
+        return result as NSDictionary
     }
     // 以真实空档计算可达到的结束时刻，不把日期窗口当作全程工作。
     static func finish(_ gaps:[TaskFields],_ seconds:Double)->Double? {
@@ -85,6 +89,10 @@
         if offline {var calendar=Calendar(identifier:.gregorian);calendar.timeZone=TimeZone(identifier:fields["timezone_id"] as! String)!;if end>=calendar.date(byAdding:.day,value:3,to:Date(timeIntervalSince1970:start))!.timeIntervalSince1970 {state="blocked";reason="离线窗口须不足三天"}}
         let durations=parts.filter{!completed.contains($0["task_id"] as? String ?? "")}.compactMap{($0["planned_duration"] as? NSNumber)?.doubleValue}
         if !durations.isEmpty,fit(room["gaps"] as! [TaskFields],durations)==nil {state="adjust";reason="子任务顺序排不下"}
+        if let dry=context["dry"] as? TaskFields,(dry["feasible"] as? Bool) != true {
+            state = parts.isEmpty ? "split" : "adjust"
+            reason = dry["reason"] as? String ?? "截止前排不下"
+        }
         let target=recommended
         var result:TaskFields=["state":state,"reason":reason,"minimum":minEff,"recommended":recommended,"maximum":upper,"capacity":capacity,"max_span":maxSpan,"offline":offline,"ddl":ddl]
         let future=(context["future_gaps"] as? [TaskFields]) ?? room["gaps"] as! [TaskFields]
@@ -97,15 +105,17 @@
         try store.wrTxn {pointer in do {
             var issue:NSError?;let revision=store.revision(&issue);if let issue{throw issue};guard revision==(ctx["revision"] as! NSNumber).int64Value else{throw TaskAI.err("安排已变化，请重评")}
             var fields=ctx["fields"] as! TaskFields;let parts=ctx["parts"] as! [TaskFields]
+            if (fields["difficulty"] as? NSNumber)?.intValue ?? 0 == 0, let difficulty = estimate["difficulty"] as? NSNumber { fields["difficulty"] = difficulty }
+            if ddl || (fields["rush"] as? NSNumber)?.boolValue == true { fields["urgency"] = 3 }
             let existing=ctx["existing"] as! Bool
             var input=fields;if existing{input["task_id"]=id}
             let fresh=try self.ctx(store,fields:input as NSDictionary,parts:parts as NSArray,at:at)
             let verdict=try vld(fresh,estimate:estimate,effort:effort,ddl:ddl) as! TaskFields
             guard ["ready","offline"].contains(verdict["state"] as! String) else{throw TaskAI.err(verdict["reason"] as! String)}
+            let dry = parts.isEmpty ? try store.evaluateTask(fields:fields,effort:effort,now:at) : try store.evaluate(fields:fields,parts:parts,now:at)
+            guard (dry["feasible"] as? Bool) == true else{throw TaskAI.err(dry["reason"] as? String ?? "截止前排不下")}
             if ddl {guard (estimate["ddl_verified"] as? Bool)==true,!parts.isEmpty else{throw TaskAI.err("请先取得DDL拆分")}}
             fields["planned_duration"]=effort+((ctx["completed_effort"] as? NSNumber)?.doubleValue ?? 0)
-            if (fields["difficulty"] as? NSNumber)?.intValue ?? 0 == 0, let difficulty = estimate["difficulty"] as? NSNumber { fields["difficulty"] = difficulty }
-            if ddl { fields["urgency"] = 3 }
             if (fields["recurrence"] as? [String] ?? []).isEmpty {
                 if !TaskWindow.dayOnly(fields) { fields["schedule_kind"] = "timed"; fields["deadline_kind"] = "timed" }
                 fields["planning_mode"] = "window"

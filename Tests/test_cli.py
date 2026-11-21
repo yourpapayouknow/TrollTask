@@ -17,7 +17,7 @@ def tstcmd(path, *args, success=True):
 def tstcli():
     with TemporaryDirectory(prefix='trolltask-cli-') as root:
         path = Path(root) / 'tasks.sqlite3'
-        assert tstcmd(path, 'schema')['schema_version'] == 14
+        assert tstcmd(path, 'schema')['schema_version'] == 15
         assert tstcmd(path, 'lists')[0]['title'] == '我的任务'
         task = tstcmd(path, 'create', jdmp({'title': '两天完成', 'planned_duration': 172800, 'deadline_at': 1800000000}))
         task_id = task['task_id']

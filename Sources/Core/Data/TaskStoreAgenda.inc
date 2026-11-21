@@ -81,6 +81,43 @@ static NSMutableArray *ta_free(NSArray *windows, NSArray *busy) {
     return merged;
 }
 
+// 新任务按紧急度和难度限制每日占用，旧任务保持原排法。
+static BOOL ta_density(NSDictionary *task) { return [task[@"density"] boolValue]; }
+static BOOL ta_rush(NSDictionary *task) { return [task[@"rush"] boolValue]; }
+static double ta_nowfloor(double now) { return ceil(now / 60) * 60; }
+static double ta_daytotal(NSArray *gaps, double now) {
+    double total = 0, floor = ta_nowfloor(now);
+    for (NSDictionary *gap in gaps) {
+        double start = fmax([gap[@"start_at"] doubleValue], floor), end = [gap[@"end_at"] doubleValue];
+        if (end > start) total += end - start;
+    }
+    return total;
+}
+static double ta_aftergap(NSArray *gaps, NSDictionary *used, double start, double duration, double now) {
+    double max = 0, floor = ta_nowfloor(now);
+    for (NSDictionary *gap in gaps) {
+        double lo = fmax([gap[@"start_at"] doubleValue], floor), hi = [gap[@"end_at"] doubleValue];
+        if (gap == used) {
+            double placed = fmax(lo, start) + duration;
+            if (hi > placed) max = fmax(max, hi - placed);
+        } else if (hi > lo) max = fmax(max, hi - lo);
+    }
+    return max;
+}
+static double ta_dailycap(NSDictionary *root, double total) {
+    if (!ta_density(root) || ta_rush(root)) return total;
+    NSInteger urgency = [root[@"urgency"] integerValue];
+    if (urgency <= 1) return total / 3.0;
+    if (urgency == 2) return total * 2.0 / 3.0;
+    return fmax(0, total - 3600);
+}
+static NSInteger ta_dailycount(NSDictionary *root) {
+    if (!ta_density(root) || ta_rush(root)) return 64;
+    NSInteger difficulty = [root[@"difficulty"] integerValue];
+    return difficulty == 3 ? 1 : difficulty == 1 ? 3 : 2;
+}
+static NSInteger ta_rank(NSDictionary *root) { return ta_rush(root) ? 4 : [root[@"urgency"] integerValue]; }
+
 // 以纯快照计算当地一天，不移动固定安排或正在处理的提醒。
 static NSDictionary *ta_plan(NSDictionary *snapshot, double stamp, NSString *zone, double now, NSError **error) {
     NSTimeZone *tz = [NSTimeZone timeZoneWithName:zone];
@@ -206,7 +243,19 @@ static NSDictionary *ta_plan(NSDictionary *snapshot, double stamp, NSString *zon
     }
     NSMutableArray *free = ta_free(windows,busy);
     double maxSpan=0;for(NSDictionary *gap in free)maxSpan=fmax(maxSpan,[gap[@"end_at"] doubleValue]-fmax([gap[@"start_at"] doubleValue],ceil(now/60)*60));
+    double dayTotal = ta_daytotal(free, now);
+    NSMutableDictionary *rootUsage=[NSMutableDictionary dictionary], *rootCount=[NSMutableDictionary dictionary];
+    BOOL reserve = NO;
     [flex sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        NSDictionary *ra=[a[@"order"] firstObject], *rb=[b[@"order"] firstObject];
+        BOOL da=ta_density(ra), db=ta_density(rb);
+        if (da != db) return da ? NSOrderedDescending : NSOrderedAscending;
+        if (da) {
+            NSInteger x=ta_rank(ra), y=ta_rank(rb); if (x != y) return x > y ? NSOrderedAscending : NSOrderedDescending;
+            if ([a[@"task"][@"parent_id"] isEqual:b[@"task"][@"parent_id"]]) {
+                NSComparisonResult order=[a[@"task"][@"position"] compare:b[@"task"][@"position"]]; if (order != NSOrderedSame) return order;
+            }
+        }
         NSArray *left=a[@"order"],*right=b[@"order"];
         for(NSUInteger index=0;index<MIN(left.count,right.count);index++)for(NSString *key in @[@"position",@"created_at",@"task_id"]) {
             NSComparisonResult order=[left[index][key] compare:right[index][key]];if(order!=NSOrderedSame)return order;
@@ -217,7 +266,12 @@ static NSDictionary *ta_plan(NSDictionary *snapshot, double stamp, NSString *zon
     for (NSDictionary *candidate in flex) {
         NSDictionary *task = candidate[@"task"], *old = candidate[@"old"] == NSNull.null ? nil : candidate[@"old"];
         NSString *reason = conflicts.count ? @"请先调整冲突" : active ? @"当前提醒尚未处理" : !windows.count ? @"未设置一般任务时段" : @"剩余时段不足";
-        BOOL placed = NO; double duration = [task[@"planned_duration"] doubleValue];
+        NSDictionary *root = [candidate[@"order"] firstObject]; NSString *rootID = root[@"task_id"];
+        BOOL density = ta_density(root), rush = ta_rush(root), high = density && !rush && [root[@"urgency"] integerValue] >= 3;
+        BOOL placed = NO, floorBlocked = NO; double duration = [task[@"planned_duration"] doubleValue];
+        BOOL simple = density && !rush && task[@"parent_id"] == NSNull.null && ![parents containsObject:task[@"task_id"]] && duration < 3600;
+        if (density && !rush && [rootUsage[rootID] doubleValue] + duration > ta_dailycap(root, dayTotal) + 0.001) continue;
+        if (density && !rush && [rootCount[rootID] integerValue] >= ta_dailycount(root)) continue;
         NSNumber *deadline = [TaskRule ddl:task cycle:task[@"due_at"] == NSNull.null ? nil : candidate[@"cycle_at"]];
         if(candidate[@"inherited"]!=NSNull.null && (!deadline || [deadline compare:candidate[@"inherited"]]==NSOrderedDescending))deadline=candidate[@"inherited"];
         if (!active && !conflicts.count) for (NSMutableDictionary *gap in free) {
@@ -225,11 +279,15 @@ static NSDictionary *ta_plan(NSDictionary *snapshot, double stamp, NSString *zon
             if(candidate[@"release"]!=NSNull.null)start=fmax(start,[candidate[@"release"] doubleValue]);
             for(NSDictionary *ancestor in candidate[@"order"])if(![ancestor[@"task_id"] isEqual:task[@"task_id"]])start=fmax(start,[familyEnds[ancestor[@"task_id"]] doubleValue]);double end=start+duration;
             if (end > [gap[@"end_at"] doubleValue] || (deadline && end > deadline.doubleValue)) continue;
+            if (density && !rush && !simple && (reserve || high) && ta_aftergap(free, gap, start, duration, now) < 3600) { floorBlocked = YES; continue; }
             NSDictionary *entry = ta_entry(task,candidate[@"cycle_at"],start,end,@"task",NO); [entries addObject:entry];
             [allocations addObject:@{@"task_id":task[@"task_id"],@"generation":task[@"reminder_version"],@"cycle_at":candidate[@"cycle_at"],
                 @"scheduled_at":old ? old[@"scheduled_at"] : (candidate[@"scheduled_at"] == NSNull.null ? @(start) : candidate[@"scheduled_at"]),
-                @"day_at":@(lo),@"start_at":@(start),@"end_at":@(end)}]; gap[@"start_at"] = @(end);for(NSDictionary *ancestor in candidate[@"order"])if(![ancestor[@"task_id"] isEqual:task[@"task_id"]])familyEnds[ancestor[@"task_id"]]=@(end); placed = YES; break;
+                @"day_at":@(lo),@"start_at":@(start),@"end_at":@(end)}]; gap[@"start_at"] = @(end);for(NSDictionary *ancestor in candidate[@"order"])if(![ancestor[@"task_id"] isEqual:task[@"task_id"]])familyEnds[ancestor[@"task_id"]]=@(end); placed = YES;
+            if (density) { rootUsage[rootID] = @([rootUsage[rootID] doubleValue] + duration); rootCount[rootID] = @([rootCount[rootID] integerValue] + 1); if (high && !simple) reserve = YES; }
+            break;
         }
+        if (!placed && floorBlocked) continue;
         if (!placed) {
             double capacity=0;for(NSDictionary *gap in ta_free(windows,busy)) {
                 double start=fmax([gap[@"start_at"] doubleValue],ceil(now/60)*60),end=[gap[@"end_at"] doubleValue];

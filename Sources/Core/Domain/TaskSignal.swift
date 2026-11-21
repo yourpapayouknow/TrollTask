@@ -3,7 +3,7 @@ struct SignalPlan {
     let limit: Double, pulses: Int
     // 未评估沿用中档，不通过难度改变强制规则。
     init(_ urgency: Int) {
-        switch urgency { case 1: limit = 5; pulses = 1; case 3: limit = 30; pulses = 6; default: limit = 15; pulses = 3 }
+        switch urgency { case 1: limit = 5; pulses = 1; case 3, 4: limit = 30; pulses = 6; default: limit = 15; pulses = 3 }
     }
     // 双时钟限制重启后的剩余时长，异常或跨启动时钟直接静音。
     func remaining(_ row: TaskFields, wall: Double, uptime: Double) -> Double {
@@ -76,7 +76,7 @@ final class TaskSignal {
             guard self.key != key else { return }; self.clear(); self.key = key; self.store = store; self.occurrence = id; self.trigger = trigger
             do {
                 guard let state = try store.sigOcc(id, trigger: trigger, ack: false) as? TaskFields else { return }
-                let plan = SignalPlan((task["urgency"] as? NSNumber)?.intValue ?? 0)
+                let plan = SignalPlan((task["rush"] as? NSNumber)?.boolValue == true ? 4 : ((task["urgency"] as? NSNumber)?.intValue ?? 0))
                 let left = plan.remaining(state, wall: Date().timeIntervalSince1970, uptime: ProcessInfo.processInfo.systemUptime)
                 guard left > 0 else { return }; self.play(plan, remaining: left, fresh: (state["signal_new"] as? NSNumber)?.boolValue == true)
             } catch { NSLog("声振状态不可用：%@", error as NSError) }

@@ -9,14 +9,14 @@ func tr_draft() -> TaskFields {
             "recurrence": ["RRULE:FREQ=DAILY;INTERVAL=1"], "timezone_id": zone.identifier]
 }
 
-// 将冲突、未估时和拆分入口保留为可处理的独立页面。
+// 将冲突和未估时保留为可处理的独立页面。
 final class TaskAgendaIssues: TaskScreen, UITableViewDataSource, UITableViewDelegate {
-    private let store: TaskStore, rows: [TaskFields], maxSpan: Double
+    private let store: TaskStore, rows: [TaskFields]
     private let table = UITableView(frame: .zero, style: .plain)
     // 接收当前日程快照，点击时重新检查任务。
-    init(store: TaskStore, rows: [TaskFields], maxSpan: Double) { self.store = store; self.rows = rows; self.maxSpan = maxSpan; super.init(nibName: nil, bundle: nil) }
+    init(store: TaskStore, rows: [TaskFields]) { self.store = store; self.rows = rows; super.init(nibName: nil, bundle: nil) }
     // 禁用归档初始化。
-    required init?(coder: NSCoder) { fatalError("Use init(store:rows:maxSpan:)") }
+    required init?(coder: NSCoder) { fatalError("Use init(store:rows:)") }
     // 使用共用全宽列表和动态字体。
     override func viewDidLoad() { super.viewDidLoad(); title = "待处理安排"; table.dataSource = self; table.delegate = self; table.backgroundColor = .clear; table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 72; table.accessibilityIdentifier = "agenda.problems"; view.addSubview(table); tu_wdth(table, view, inset: 0); NSLayoutConstraint.activate([table.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), table.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)]) }
     // 返回本日问题数量。
@@ -25,8 +25,8 @@ final class TaskAgendaIssues: TaskScreen, UITableViewDataSource, UITableViewDele
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell { let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil); cell.backgroundColor = .clear
         if rows.isEmpty { var content = tu_cell(); content.text = "暂无待处理安排"; cell.contentConfiguration = content; cell.selectionStyle = .none; return cell }
         let row = rows[indexPath.row], task = row["task"] as! TaskFields; var content = tu_cell(); content.text = task["title"] as? String; content.secondaryText = row["reason"] as? String; if let peer = row["peer"] as? TaskFields { content.secondaryText = (content.secondaryText ?? "") + "：" + (peer["title"] as! String) }; content.textProperties.font = lb_fnt(.body, traitCollection); content.textProperties.color = TaskTheme.ink; content.textProperties.numberOfLines = 0; content.secondaryTextProperties.color = TaskTheme.muted; content.secondaryTextProperties.numberOfLines = 0; cell.contentConfiguration = content; cell.accessoryType = .disclosureIndicator; cell.accessibilityIdentifier = "agenda.problem.\(indexPath.row)"; return cell }
-    // 超长任务进入拆分，其他问题继续使用完整编辑器。
-    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { tableView.deselectRow(at: indexPath, animated: true); guard rows.indices.contains(indexPath.row) else { return }; let row = rows[indexPath.row]; do { let task = try store.rdTsk(((row["task"] as! TaskFields)["task_id"] as! String)) as! TaskFields; try tu_live(task);if row["reason"] as? String == "未设置一般任务时段" { navigationController?.pushViewController(TaskRoutineRules(store: store), animated: true) } else if (row["needs_split"] as? NSNumber)?.boolValue == true { navigationController?.pushViewController(TaskAssistantScreen(store: store, taskID: task["task_id"] as? String, maxMinutes: ((row["max_span"] as? NSNumber)?.doubleValue ?? maxSpan) > 0 ? max(1, Int(((row["max_span"] as? NSNumber)?.doubleValue ?? maxSpan) / 60)) : nil, automatic: true), animated: true) } else { let page = TaskEdit(store: store, task: task, saved: nil); if (row["reason"] as? String)?.contains("估时") == true { page.estTime() }; navigationController?.pushViewController(page, animated: true) } } catch { tu_err(self, error) } }
+    // 所有问题继续使用完整编辑器。
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { tableView.deselectRow(at: indexPath, animated: true); guard rows.indices.contains(indexPath.row) else { return }; let row = rows[indexPath.row]; do { let task = try store.rdTsk(((row["task"] as! TaskFields)["task_id"] as! String)) as! TaskFields; try tu_live(task);if row["reason"] as? String == "未设置一般任务时段" { navigationController?.pushViewController(TaskRoutineRules(store: store), animated: true) } else { let page = TaskEdit(store: store, task: task, saved: nil); if (row["reason"] as? String)?.contains("估时") == true { page.estTime() }; navigationController?.pushViewController(page, animated: true) } } catch { tu_err(self, error) } }
 }
 
 // 首页与设置共用模板下载和正式常律导入。

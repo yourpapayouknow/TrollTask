@@ -3,7 +3,7 @@
 #define TS_DB_PATH @"/var/mobile/Library/Application Support/com.iwmei.taskforiwmei/tasks.sqlite3"
 #define TS_DFLT_LST @"00000000-0000-4000-8000-000000000001"
 #define TS_RTN_LST @"00000000-0000-4000-8000-000000000002"
-#define TS_SCH_VER 14
+#define TS_SCH_VER 15
 #define TS_ATT_MAX 6
 #define TS_DATA_NOTE "com.iwmei.taskforiwmei.data"
 #define TS_CAPTURE_NOTE "com.iwmei.taskforiwmei.capture"
@@ -45,6 +45,10 @@
 + (NSTimeInterval)nextExpiry:(NSTimeInterval)stamp zone:(NSString *)zone;
 // 只在内存中预览禁用常律，不启动提醒。
 - (NSDictionary *)draftDay:(NSTimeInterval)stamp zone:(NSString *)zone now:(NSTimeInterval)now error:(NSError **)error;
+// 用快照干跑待创建父子任务，不写数据库。
+- (NSDictionary *)evaluateFields:(NSDictionary *)fields parts:(NSArray *)parts now:(NSTimeInterval)now error:(NSError **)error NS_SWIFT_NAME(evaluate(fields:parts:now:));
+// 无子任务时把整任务作为单步干跑，支持 1 小时例外。
+- (NSDictionary *)evaluateTaskFields:(NSDictionary *)fields effort:(double)effort now:(NSTimeInterval)now error:(NSError **)error NS_SWIFT_NAME(evaluateTask(fields:effort:now:));
 // 事务创建正式常律；重复导入不覆盖用户修改。
 - (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error;
 // 事务创建已核验的正式常律（与 importRtns 同实现）。

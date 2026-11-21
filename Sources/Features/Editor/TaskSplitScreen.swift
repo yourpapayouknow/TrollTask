@@ -10,6 +10,7 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
     private var scroll: UIScrollView!, splitButton: UIButton!, create: UIButton!, draftButton: UIButton!
     private weak var dragged: UIView?
     private var dragStart: CGFloat = 0
+    private var freeLabel: UILabel!, gaugeTicket = UUID(), gaugeWork: DispatchWorkItem?
     // 接收第二页草稿、已有子任务、评估结果与手动拆分状态。
     init(store: TaskStore, draft: TaskFields, parts: [TaskFields], estimate: TaskFields?, manual: Bool, unreachable: Bool, reply: @escaping (String, [TaskFields], Bool, Bool, Bool) -> Void) {
         self.store = store; self.draft = draft; self.parts = parts; self.estimate = estimate; self.reply = reply; self.manual = manual; self.unreachable = unreachable
@@ -42,9 +43,10 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
         view.addSubview(footer); view.bringSubviewToFront(footer)
         view.constraints.filter { ($0.firstItem as? UIView) === scroll && $0.firstAttribute == .bottom }.forEach { $0.isActive = false }
         let rule = TaskHair(); rule.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(rule)
+        freeLabel = tu_lbl("空余—"); freeLabel.font = lb_fnt(.subheadline, traitCollection); freeLabel.textColor = TaskTheme.muted; freeLabel.accessibilityIdentifier = "split.free"; freeLabel.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(freeLabel)
         create = tu_btn("创建", nil, self, #selector(createTap)); create.accessibilityIdentifier = "split.create"; create.contentHorizontalAlignment = .center; tu_fill(create, primary: true)
         create.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(create)
-        NSLayoutConstraint.activate([scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -TaskTheme.gap), footer.leadingAnchor.constraint(equalTo: view.leadingAnchor), footer.trailingAnchor.constraint(equalTo: view.trailingAnchor), footer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), footer.heightAnchor.constraint(equalToConstant: 52), rule.leadingAnchor.constraint(equalTo: footer.leadingAnchor), rule.trailingAnchor.constraint(equalTo: footer.trailingAnchor), rule.topAnchor.constraint(equalTo: footer.topAnchor), rule.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale), create.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), create.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), create.bottomAnchor.constraint(equalTo: footer.bottomAnchor), create.heightAnchor.constraint(equalToConstant: 44)])
+        NSLayoutConstraint.activate([scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -TaskTheme.gap), footer.leadingAnchor.constraint(equalTo: view.leadingAnchor), footer.trailingAnchor.constraint(equalTo: view.trailingAnchor), footer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), footer.heightAnchor.constraint(equalToConstant: 76), rule.leadingAnchor.constraint(equalTo: footer.leadingAnchor), rule.trailingAnchor.constraint(equalTo: footer.trailingAnchor), rule.topAnchor.constraint(equalTo: footer.topAnchor), rule.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale), create.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), create.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), create.bottomAnchor.constraint(equalTo: footer.bottomAnchor), create.heightAnchor.constraint(equalToConstant: 44), freeLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), freeLabel.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), freeLabel.bottomAnchor.constraint(equalTo: create.topAnchor, constant: -4)])
         draftButton = tu_ibtn("notes", "保存草稿", "split.draft", self, #selector(saveDraft)); var style = draftButton.configuration; style?.baseForegroundColor = TaskTheme.ink; draftButton.configuration = style
         navigationItem.rightBarButtonItem = UIBarButtonItem(customView: draftButton)
         buildList(); render()
@@ -52,7 +54,17 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
     // 统一显示导航栏，避免继承首页隐藏状态。
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); preferredContentSize = CGSize(width: 540, height: UIScreen.main.bounds.height); navigationController?.setNavigationBarHidden(false, animated: false) }
     // 首次进入且没有子任务时探测网关。
-    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); if !checked && parts.isEmpty { checked = true; ping() } }
+    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); if !checked && parts.isEmpty { checked = true; ping() }; gaugeDebounced() }
+    // 合并连续变化，按当前窗口显示空余时间。
+    private func gaugeDebounced() { gaugeWork?.cancel(); let work = DispatchWorkItem { [weak self] in self?.gauge() }; gaugeWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work) }
+    private func gauge() {
+        guard isViewLoaded else { return }; let token = UUID(); gaugeTicket = token
+        DispatchQueue.global(qos: .utility).async {
+            var text = "空余—"
+            if let raw = try? TaskIntake.ctx(self.store, fields: self.draft as NSDictionary, parts: self.parts as NSArray, at: Date().timeIntervalSince1970), let ctx = raw as? TaskFields, let room = ctx["room"] as? TaskFields, let capacity = room["capacity"] as? NSNumber { text = "空余" + tu_free(capacity.doubleValue) }
+            DispatchQueue.main.async { guard self.gaugeTicket == token else { return }; self.freeLabel.text = text }
+        }
+    }
     // 返回或关闭时取消迟到结果；左滑返回同步本页编辑。
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); ticket = UUID(); request?.cancel(); request = nil; if isMovingFromParent && !synced { sync(false) } }
     // 备注变化不触发重排，只在离开或创建时交回。
@@ -79,7 +91,15 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
         guard parts.isEmpty else { return }; view.endEditing(true)
         let title = draft["title"] as? String ?? ""
         guard !title.isEmpty else { tu_err(self, TaskAI.err("请先填写标题")); return }
-        var query: TaskFields = ["mode": "split", "title": title, "notes": notes.text ?? ""]
+        var value = draft; value["notes"] = notes.text ?? ""
+        let at = Date().timeIntervalSince1970
+        guard let raw = try? TaskIntake.ctx(store, fields: value as NSDictionary, parts: [] as NSArray, at: at), let ctx = raw as? TaskFields, let room = ctx["room"] as? TaskFields else { tu_err(self, TaskAI.err("无法读取排程空档")); return }
+        let span = Int(((room["max_span"] as? NSNumber)?.doubleValue ?? 0) / 60)
+        var query: TaskFields = ["mode": "split", "title": title, "notes": notes.text ?? "",
+            "window_start": value["due_at"] ?? 0, "window_end": value["deadline_at"] ?? 0,
+            "urgency": value["urgency"] ?? 0, "rush": (value["rush"] as? NSNumber)?.boolValue == true,
+            "difficulty": value["difficulty"] ?? 0, "capacity_minutes": Int(((room["capacity"] as? NSNumber)?.doubleValue ?? 0) / 60),
+            "available_slots": room["gaps"] ?? [], "max_minutes": max(1, span), "policy": TaskTraits.policy(value, maxStep: span)]
         if let duration = draft["planned_duration"] as? NSNumber, duration.doubleValue > 0 { query["total_minutes"] = Int(ceil(duration.doubleValue / 60)) }
         phase = .splitting; render()
         let token = UUID(); ticket = token
@@ -90,7 +110,7 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
                 if let error { self.failed(error); return }
                 guard let result = result as? TaskFields, let rows = result["steps"] as? [TaskFields], !rows.isEmpty else { self.failed(TaskAI.err("AI结果格式无效")); return }
                 self.parts = rows.map { var row = $0; row["task_id"] = UUID().uuidString.lowercased(); return row }
-                self.phase = .ready; self.buildList(); self.render(); TaskHaptics.success()
+                self.phase = .ready; self.buildList(); self.render(); self.gaugeDebounced(); TaskHaptics.success()
             }
         }
     }
@@ -102,7 +122,7 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
         let row: TaskFields = ["task_id": UUID().uuidString.lowercased(), "title": "", "notes": ""]
         navigationController?.pushViewController(TaskStepEdit(row) { [weak self] updated in
             guard let self, let updated else { return }
-            self.parts.append(updated); self.phase = .offline; self.manual = true; self.buildList(); self.render()
+            self.parts.append(updated); self.phase = .offline; self.manual = true; self.buildList(); self.render(); self.gaugeDebounced()
         }, animated: true)
     }
     // 修改子任务的标题、步骤和预计耗时。
@@ -112,7 +132,7 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
         view.endEditing(true)
         navigationController?.pushViewController(TaskStepEdit(parts[index]) { [weak self] updated in
             guard let self, let updated else { return }
-            self.parts[index] = updated; self.buildList(); self.render()
+            self.parts[index] = updated; self.buildList(); self.render(); self.gaugeDebounced()
         }, animated: true)
     }
     // 重建子任务容器，AI结果不提供拖动，手动项保留拖动图标。

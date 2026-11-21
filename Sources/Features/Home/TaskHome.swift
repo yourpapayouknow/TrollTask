@@ -649,8 +649,7 @@ final class TaskCell: UITableViewCell {
                 switch result {
                 case .success(let plan):
                     let rows = (plan["conflicts"] as? [TaskFields] ?? []) + (plan["unplaced"] as? [TaskFields] ?? [])
-                    let span = (plan["max_span"] as? NSNumber)?.doubleValue ?? 0
-                    self.navigationController?.pushViewController(TaskAgendaIssues(store:store,rows:rows,maxSpan:span),animated:true)
+                    self.navigationController?.pushViewController(TaskAgendaIssues(store:store,rows:rows),animated:true)
                 case .failure(let error): tu_err(self,error)
                 }
             }
@@ -678,7 +677,7 @@ final class TaskCell: UITableViewCell {
         if id == TS_DFLT_LST { remove.attributes = .disabled }
         if id == TS_RTN_LST { rename.attributes = .disabled; remove.attributes = .disabled }
         actions.append(tu_act("智能安排","subtask","today.arrange"){[weak self] in self?.arrange()})
-        actions += [issues, tu_act("智能创建", "subtask", "home.assistant") { [weak self] in guard let self, let store = self.store else { return }; self.navigationController?.setNavigationBarHidden(false, animated: false); self.navigationController?.pushViewController(TaskAssistantScreen(store: store, listID: ["today","starred"].contains(self.listID) ? TS_DFLT_LST : self.listID), animated: true) }, rename, remove]; tu_menu(self, "清单选项", actions, breaks: [3], header: header)
+        actions += [issues, rename, remove]; tu_menu(self, "清单选项", actions, breaks: [3], header: header)
     }
     // 一次只运行一轮AI建议，成功后仍核对数据库版本。
     private func arrange(){guard let store,!dayBusy else{return};dayBusy=true;let ticket=UUID();dayTicket=ticket

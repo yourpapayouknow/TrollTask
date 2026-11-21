@@ -29,8 +29,3 @@ API_AVAILABLE(ios(16.0))
 // 用同一编辑器呈现快捷草稿或子任务。
 - (instancetype)initWithStore:(TaskStore *)store task:(NSDictionary *)task draft:(NSDictionary *)draft quick:(BOOL)quick saved:(void (^)(void))saved;
 @end
-
-// 为原生验收公开草稿页面，不暴露网络密钥。
-@interface TaskAssistantScreen : UIViewController <UITableViewDataSource, UITableViewDelegate, UITextViewDelegate>
-- (instancetype)initWithStore:(TaskStore *)store task:(NSString *)task;
-@end

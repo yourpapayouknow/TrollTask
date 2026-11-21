@@ -873,7 +873,6 @@ static void ut_svc(void) {
 #include "test_signal.inc"
 #include "test_parity.inc"
 #include "test_routine_ui.inc"
-#include "test_assistant_ui.inc"
 #include "test_today_ui.inc"
 #include "test_design_ui.inc"
 #include "test_weekly_ui.inc"
@@ -1189,8 +1188,6 @@ static void ut_hdbg(BOOL seed) {
                 else if ([ut_args containsObject:@"--today"]) {ut_tdy();}
                 else if ([ut_args containsObject:@"--archive"]) {ut_archive();}
                 else if (parityOnly) { ut_prty(); if (@available(iOS 16.0,*)) { ut_refs(); ut_clsr(); ut_edit(); ut_rtn(); } }
-                else if ([ut_args containsObject:@"--assistant-split"]) { ut_ast(); }
-                else if ([ut_args containsObject:@"--assistant"]) { ut_rtn(); ut_ast(); }
                 else if ([ut_args containsObject:@"--routines"]) { ut_rtn(); }
                 else if (signalOnly) { ut_signal(); }
                 else if (settingsOnly) { ut_sttng(); }

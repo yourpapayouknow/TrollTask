@@ -8,6 +8,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     private var lastOffline=false,completed=Set<String>()
     private var request:URLSessionDataTask?,ticket=UUID(),ddl=false,escalated=false
     private var split=false,autoCreate=false,splitManual=false,splitUnreachable=false
+    private var freeLabel:UILabel!,gaugeTicket=UUID(),gaugeWork:DispatchWorkItem?
     private var splitSwitch:UISwitch?
     private let name=UITextView(),notes=UITextView(),start=UIDatePicker(),end=UIDatePicker(),startTime=UIDatePicker(),endTime=UIDatePicker(),minutes=UITextField()
     private var save:UIButton!,steps:UIButton!,offline:UIButton!
@@ -54,7 +55,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
             if starred {
                 controls.append(tu_grade("urgency", "intake", 3))
             } else {
-                controls.append(tu_grade("urgency", "intake", (fields["urgency"] as? NSNumber)?.intValue ?? 0) { [weak self] in self?.fields["urgency"] = $0; self?.chg() })
+                controls.append(tu_grade("urgency", "intake", (fields["urgency"] as? NSNumber)?.intValue ?? 0, rush: (fields["rush"] as? NSNumber)?.boolValue == true) { [weak self] value in guard let self else{return}; self.fields["urgency"] = min(value, 3); self.fields["rush"] = value == 4 ? 1 : 0; self.chg() })
             }
             controls.append(tu_grade("difficulty", "intake", (fields["difficulty"] as? NSNumber)?.intValue ?? 0) { [weak self] in
                 guard let self else { return }
@@ -77,9 +78,10 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         view.addSubview(footer); view.bringSubviewToFront(footer)
         view.constraints.filter { ($0.firstItem as? UIView) === scroll && $0.firstAttribute == .bottom }.forEach { $0.isActive = false }
         let footerRule = TaskHair(); footerRule.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(footerRule)
+        freeLabel=tu_lbl("空余—"); freeLabel.font=lb_fnt(.subheadline,traitCollection); freeLabel.textColor=TaskTheme.muted; freeLabel.accessibilityIdentifier="intake.free"; freeLabel.isHidden = !newTodo; freeLabel.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(freeLabel)
         if !newTodo { steps.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(steps) }
         save.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(save)
-        var footerRules: [NSLayoutConstraint] = [scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -TaskTheme.gap), footer.leadingAnchor.constraint(equalTo: view.leadingAnchor), footer.trailingAnchor.constraint(equalTo: view.trailingAnchor), footer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), footer.heightAnchor.constraint(equalToConstant: newTodo ? 52 : 96), footerRule.leadingAnchor.constraint(equalTo: footer.leadingAnchor), footerRule.trailingAnchor.constraint(equalTo: footer.trailingAnchor), footerRule.topAnchor.constraint(equalTo: footer.topAnchor), footerRule.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale), save.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), save.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), save.bottomAnchor.constraint(equalTo: footer.bottomAnchor), save.heightAnchor.constraint(equalToConstant: 44)]
+        var footerRules: [NSLayoutConstraint] = [scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -TaskTheme.gap), footer.leadingAnchor.constraint(equalTo: view.leadingAnchor), footer.trailingAnchor.constraint(equalTo: view.trailingAnchor), footer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), footer.heightAnchor.constraint(equalToConstant: newTodo ? 76 : 96), footerRule.leadingAnchor.constraint(equalTo: footer.leadingAnchor), footerRule.trailingAnchor.constraint(equalTo: footer.trailingAnchor), footerRule.topAnchor.constraint(equalTo: footer.topAnchor), footerRule.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale), save.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), save.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), save.bottomAnchor.constraint(equalTo: footer.bottomAnchor), save.heightAnchor.constraint(equalToConstant: 44), freeLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), freeLabel.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), freeLabel.bottomAnchor.constraint(equalTo: save.topAnchor, constant: -4)]
         if !newTodo { footerRules += [steps.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), steps.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), steps.topAnchor.constraint(equalTo: footer.topAnchor), steps.heightAnchor.constraint(equalToConstant: 44)] }
         NSLayoutConstraint.activate(footerRules)
         scroll.contentInset.bottom = TaskTheme.gap; scroll.verticalScrollIndicatorInsets.bottom = TaskTheme.gap
@@ -97,12 +99,18 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     override func viewDidLayoutSubviews(){super.viewDidLayoutSubviews();for (picker,width) in zip([start,startTime,end,endTime],dateWidths){let value=max(44,picker.sizeThatFits(.zero).width);if abs(width.constant-value)>0.1{width.constant=value}};if dayOnly{return};for (index,row) in dateRows.enumerated(){let vertical=dateWidths[index*2].constant+dateWidths[index*2+1].constant+TaskTheme.gap>row.bounds.width;row.axis=vertical ? .vertical:.horizontal;row.alignment=vertical ? .leading:.center;row.arrangedSubviews.last?.isHidden=vertical}}
     // 返回编辑后主动丢弃上一轮容量与估时结果。
     override func viewWillAppear(_ animated:Bool){super.viewWillAppear(animated);navigationController?.setNavigationBarHidden(false,animated:false);navigationController?.preferredContentSize=preferredContentSize;navigationController?.presentationController?.containerView?.setNeedsLayout()}
+    // 进入页面后按当前窗口计算空余时间。
+    override func viewDidAppear(_ animated:Bool){super.viewDidAppear(animated);gaugeDebounced()}
+    // 合并连续输入，避免每次按键都读排程。
+    private func gaugeDebounced(){guard newTodo,isViewLoaded else{return};gaugeWork?.cancel();let work=DispatchWorkItem{[weak self] in self?.gauge()};gaugeWork=work;DispatchQueue.main.asyncAfter(deadline:.now()+0.25,execute:work)}
+    // 用同一份排程快照显示窗口空余时间。
+    private func gauge(){guard newTodo,isViewLoaded else{return};let value=input(),rows=parts,token=UUID();gaugeTicket=token;DispatchQueue.global(qos:.utility).async{var text="空余—";if let raw=try? TaskIntake.ctx(self.store,fields:value as NSDictionary,parts:rows as NSArray,at:Date().timeIntervalSince1970),let ctx=raw as? TaskFields,let room=ctx["room"] as? TaskFields,let capacity=room["capacity"] as? NSNumber{text="空余"+tu_free(capacity.doubleValue)};DispatchQueue.main.async{guard self.gaugeTicket==token else{return};self.freeLabel.text=text}}}
     // 离开时取消请求，保存事务期间禁止返回。
     override func viewWillDisappear(_ animated:Bool){super.viewWillDisappear(animated);if phase != .saving {cancel()}}
     // 撤销网络代次而不修改用户草稿。
     private func cancel(){ticket=UUID();request?.cancel();request=nil;if phase == .checking{phase = .editing};if isViewLoaded{render()}}
     // 输入变化使评估失效，迟到响应被丢弃。
-    @objc private func chg(){view.setNeedsLayout();cancel();context=nil;estimate=nil;ddl=false;phase = .editing;offline.isHidden = !lastOffline;render()}
+    @objc private func chg(){view.setNeedsLayout();cancel();context=nil;estimate=nil;ddl=false;phase = .editing;offline.isHidden = !lastOffline;render();gaugeDebounced()}
     // 工时只重新进行本地匹配判断。
     @objc private func budget(){ddl=false;render()}
     // 标题和说明改动必须重新请求评估。
@@ -159,9 +167,11 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         DispatchQueue.global(qos:.userInitiated).async {
             do {let context=try TaskIntake.ctx(self.store,fields:value as NSDictionary,parts:rows as NSArray,at:Date().timeIntervalSince1970) as! TaskFields
                 DispatchQueue.main.async {guard self.ticket==token,self.view.window != nil else{return};self.context=context
-                    let room=context["room"] as! TaskFields;var query:TaskFields=["mode":"assessment","title":value["title"]!,"window_start":value["due_at"]!,"window_end":value["deadline_at"]!,"capacity_minutes":Int((room["capacity"] as! NSNumber).doubleValue/60),"available_slots":room["gaps"]!,"existing_steps":rows,"completed_ids":context["completed_ids"] ?? [],"difficulty":self.escalated ? 3:value["difficulty"] ?? 0,"ddl":urgent]
+                    let room=context["room"] as! TaskFields;var query:TaskFields=["mode":"assessment","title":value["title"]!,"window_start":value["due_at"]!,"window_end":value["deadline_at"]!,"capacity_minutes":Int((room["capacity"] as! NSNumber).doubleValue/60),"available_slots":room["gaps"]!,"existing_steps":rows,"completed_ids":context["completed_ids"] ?? [],"difficulty":self.escalated ? 3:value["difficulty"] ?? 0,"ddl":urgent,"urgency":value["urgency"] ?? 0,"rush":(value["rush"] as? NSNumber)?.boolValue == true]
+                    let span=Int((room["max_span"] as! NSNumber).doubleValue/60)
+                    query["policy"]=TaskTraits.policy(value,maxStep:span)
                     if let amount=Double(self.minutes.text ?? ""),urgent{query["total_minutes"]=Int(amount)}
-                    if (room["max_span"] as! NSNumber).doubleValue>=60,urgent || rows.isEmpty{query["max_minutes"]=Int((room["max_span"] as! NSNumber).doubleValue/60)}
+                    if span>0{query["max_minutes"]=max(1,span)}
                     self.request=TaskAI.gen(query as NSDictionary,config:TaskAIConfig.ld() as NSDictionary){[weak self] result,error in DispatchQueue.main.async {
                         guard let self,self.ticket==token,self.view.window != nil else{return};self.request=nil;self.phase = .review
                         if let error {self.estimate=nil;self.autoCreate=false;self.lastOffline=error.code==2;self.offline.isHidden = !self.lastOffline;self.render();tu_err(self,error);return}
@@ -181,10 +191,10 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     private func failure(_ error:Error){guard error.localizedDescription=="任务已变更，请重载" else{tu_err(self,error);return};let alert=UIAlertController(title:"任务已变更",message:nil,preferredStyle:.alert);alert.addAction(UIAlertAction(title:"保留草稿",style:.cancel));alert.addAction(UIAlertAction(title:"载入最新",style:.destructive){[weak self] _ in self?.reload()});present(alert,animated:true)}
     // 重新读取最新任务和子任务后恢复可评估状态。
     private func reload(){guard let id=fields["task_id"] as? String else{return};do{let latest=try store.rdTsk(id) as! TaskFields;fields=latest.filter{TaskIntake.keys.contains($0.key)};fields["task_id"]=id;fields["_baseline"]=try TaskIntake.sig(store,id,strict:true);let all=try store.lsTsks() as! [TaskFields];parts=all.filter{$0["parent_id"] as? String==id && ($0["deleted"] as? Bool)==false}.sorted{($0["position"] as! NSNumber).intValue<($1["position"] as! NSNumber).intValue}.map{$0.filter{["task_id","title","notes","planned_duration"].contains($0.key)}};completed=Set(all.filter{$0["status"] as? String=="completed"}.map{$0["task_id"] as! String});name.text=latest["title"] as? String;notes.text=latest["notes"] as? String;if let value=latest["due_at"] as? NSNumber{start.date=Date(timeIntervalSince1970:value.doubleValue);startTime.date=start.date};if let value=latest["deadline_at"] as? NSNumber{end.date=Date(timeIntervalSince1970:value.doubleValue);endTime.date=end.date};let finished=parts.filter{completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};minutes.text=(latest["planned_duration"] as? NSNumber).map{String(Int(ceil(max(0,$0.doubleValue-finished)/60)))} ?? "";chg()}catch{tu_err(self,error)}}
-    // 展示可理解的评估原因、投入区间、容量和实际模型。
+    // 展示可理解的评估原因、投入区间、容量和实际模型；排不下时提供延后拆分。
     @objc private func info(){guard let result=verdict(),let estimate else{return};let formatter=DateFormatter();formatter.timeZone=start.timeZone;formatter.dateFormat=dayOnly ? "MM-dd" : "MM-dd HH:mm";var message="最低\(Int((result["minimum"] as! NSNumber).doubleValue/60))分钟\n建议\(Int((result["recommended"] as! NSNumber).doubleValue/60))分钟\n上限\(Int((result["maximum"] as! NSNumber).doubleValue/60))分钟\n可用\(Int((result["capacity"] as! NSNumber).doubleValue/60))分钟"
         if let end=result["suggested_end"] as? NSNumber{message+="\n建议结束："+formatter.string(from:suggestedDay(end))};if let model=estimate["model"] as? String{message+="\n模型："+model}
-        let alert=UIAlertController(title:result["reason"] as? String,message:message,preferredStyle:.alert);alert.addAction(UIAlertAction(title:"继续修改",style:.cancel));if result["suggested_end"] != nil {alert.addAction(UIAlertAction(title:"采用建议",style:.default){[weak self] _ in self?.suggest()})};if result["state"] as? String=="split" {alert.addAction(UIAlertAction(title:"创建子任务",style:.default){[weak self] _ in self?.editParts()})};present(alert,animated:true)
+        let alert=UIAlertController(title:result["reason"] as? String,message:message,preferredStyle:.alert);alert.addAction(UIAlertAction(title:"继续修改",style:.cancel));if result["suggested_end"] != nil {alert.addAction(UIAlertAction(title:"采用建议",style:.default){[weak self] _ in self?.suggest()})};let needsSplit=result["state"] as? String=="split",shortWindow=result["reason"] as? String=="窗口内工时不足";if parts.isEmpty && (needsSplit || shortWindow) {alert.addAction(UIAlertAction(title:"延后并拆分",style:.default){[weak self] _ in self?.extendSplit()})};if needsSplit {alert.addAction(UIAlertAction(title:"创建子任务",style:.default){[weak self] _ in self?.editParts()})};present(alert,animated:true)
     }
     // 采用推荐工时和实际可到达的结束时刻后只重算容量。
     @objc private func suggest(){guard let result=verdict() else{return};minutes.text=String(Int((result["recommended"] as! NSNumber).doubleValue/60));if let value=result["suggested_end"] as? NSNumber{end.date=suggestedDay(value);endTime.date=end.date};resync()}
@@ -201,7 +211,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     // 编辑草稿步骤，不用临时父任务污染正式数据库。
     @objc private func editParts(){if !(fields["recurrence"] as? [String] ?? []).isEmpty{tu_err(self,TaskAI.err("请先改为单次任务"));return};cancel();let suggestions=parts.isEmpty ? estimate?["steps"] as? [TaskFields] ?? []:parts;let rows=suggestions.map{row->TaskFields in var row=row;if row["task_id"]==nil{row["task_id"]=UUID().uuidString.lowercased()};return row}
         var draft=input();if !ddl,let recommended=estimate?["recommended_minutes"] as? NSNumber{draft["planned_duration"]=recommended.doubleValue*60}
-        navigationController?.pushViewController(TaskSplitScreen(store:store,draft:draft,parts:rows,estimate:estimate,manual:splitManual,unreachable:splitUnreachable){[weak self] notes,rows,create,manual,unreachable in guard let self else{return};self.notes.text=notes;self.parts=rows;self.splitManual=manual;self.splitUnreachable=unreachable;let total=rows.filter{!self.completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};self.minutes.text=String(Int(ceil(total/60)));self.chg();if create{if unreachable{self.startOffline(true)}else{self.autoCreate=true;self.run(false)}}},animated:true)
+        navigationController?.pushViewController(TaskSplitScreen(store:store,draft:draft,parts:rows,estimate:estimate,manual:splitManual,unreachable:splitUnreachable){[weak self] notes,rows,create,manual,unreachable in guard let self else{return};self.notes.text=notes;self.parts=rows;self.splitManual=manual;self.splitUnreachable=unreachable;let total=rows.filter{!self.completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};self.minutes.text=String(Int(ceil(total/60)));if create,!rows.isEmpty,let raw=try? self.store.evaluate(fields:self.input(),parts:rows,now:Date().timeIntervalSince1970),let dry=raw as? TaskFields,(dry["feasible"] as? Bool)==true{let days=(dry["placements"] as? [Any] ?? []).compactMap{($0 as? NSDictionary)?["day_at"] as? NSNumber}.map{$0.doubleValue};if let last=days.max(){self.end.date=Date(timeIntervalSince1970:last);self.endTime.date=self.end.date}};self.chg();if create{if unreachable{self.startOffline(true)}else{self.autoCreate=true;self.run(false)}}},animated:true)
     }
     // 离线仅提供短窗口、有效估时与明确确认的例外。
     @objc private func local(){startOffline(false)}
@@ -267,10 +277,26 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     // 关闭从草稿继续打开的面板。
     @objc private func closeSheet(){dismissSheet()}
     private func dismissSheet(){if let nav=navigationController,nav.presentingViewController != nil{nav.dismiss(animated:true)}else{dismiss(animated:true)}}
+    // 当前窗口按密度排不下时询问是否延后并拆分。
+    private func extendPrompt(){
+        let alert=UIAlertController(title:"当前窗口排不下",message:"是否自动延后截止时间并进入拆分子任务？",preferredStyle:.alert)
+        alert.addAction(UIAlertAction(title:"否",style:.cancel))
+        alert.addAction(UIAlertAction(title:"是",style:.default){[weak self] _ in self?.extendSplit()})
+        present(alert,animated:true)
+    }
+    // 先延长七天，拆分后再按实际落点收紧截止日期。
+    private func extendSplit(){
+        let calendar=TaskWindow.calendar(start.timeZone ?? .current)
+        let base=calendar.startOfDay(for:start.date)
+        let limit=calendar.date(byAdding:.day,value:29,to:base)!
+        let proposed=calendar.date(byAdding:.day,value:7,to:end.date)!
+        end.date=min(proposed,limit); endTime.date=end.date; chg()
+        editParts()
+    }
     // 数据变化或时间流逝导致容量不足时保留完整草稿。
     private func commit(){guard phase != .saving,let context,let estimate,let effort=Double(minutes.text ?? "") else{return};phase = .saving;render()
         DispatchQueue.global(qos:.userInitiated).async {var failure:Error?;do{_ = try TaskIntake.cmt(self.store,context:context as NSDictionary,estimate:estimate as NSDictionary,effort:effort*60,ddl:self.ddl,at:Date().timeIntervalSince1970);if self.newTodo{_ = try? self.store.clearDraft()}}catch{failure=error}
-            DispatchQueue.main.async {if let failure{self.phase = .editing;self.context=nil;self.estimate=nil;self.ddl=false;self.render();tu_err(self,failure)}else{self.phase = .done;self.render();self.navigationController?.interactivePopGestureRecognizer?.isEnabled=true;self.done()}}
+            DispatchQueue.main.async {if let failure{self.phase = .editing;self.context=nil;self.estimate=nil;self.ddl=false;self.render();if failure.localizedDescription=="截止前排不下",self.parts.isEmpty{self.extendPrompt()}else{tu_err(self,failure)}}else{self.phase = .done;self.render();self.navigationController?.interactivePopGestureRecognizer?.isEnabled=true;self.done()}}
         }
     }
 }

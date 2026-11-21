@@ -173,6 +173,11 @@ func tu_phl(_ text: String, _ font: UIFont? = nil) -> NSAttributedString {
     if let font { style[.font] = font }
     return NSAttributedString(string: text, attributes: style)
 }
+// 以小时和分钟显示窗口空余时间。
+func tu_free(_ seconds: Double) -> String {
+    let minutes = max(0, Int((seconds / 60).rounded())), hours = minutes / 60, rest = minutes % 60
+    return hours > 0 ? (rest > 0 ? "\(hours)h\(rest)min" : "\(hours)h") : "\(rest)min"
+}
 // 创建动态字体标签。
 func tu_lbl(_ text: String?) -> UILabel {
     let label = UILabel(); label.text = text; label.font = lb_fnt(.body, nil)
@@ -195,17 +200,18 @@ func tu_cell() -> UIListContentConfiguration {
     content.directionalLayoutMargins = .init(top:12,leading:16,bottom:12,trailing:16);content.imageToTextPadding=12;return content
 }
 // 使用同一组分档标签编辑待办属性。
-func tu_grade(_ key: String, _ prefix: String, _ rating: Int, selected: ((Int) -> Void)? = nil) -> UIButton {
+func tu_grade(_ key: String, _ prefix: String, _ rating: Int, rush: Bool = false, selected: ((Int) -> Void)? = nil) -> UIButton {
     let field = key == "urgency" ? "紧急程度" : "难易程度"
-    let titles = key == "urgency" ? ["未设置", "低", "中", "高"] : ["未评估", "简单", "一般", "困难"]
+    let titles = key == "urgency" ? ["未设置", "低", "中", "高", "赶DDL"] : ["未评估", "简单", "一般", "困难"]
+    let current = key == "urgency" ? (rush ? 4 : min(max(rating, 0), 3)) : min(max(rating, 0), 3)
     let button = UIButton(type: .system)
     button.accessibilityIdentifier = prefix + "." + key
     button.accessibilityLabel = field
-    button.accessibilityValue = titles[rating]
+    button.accessibilityValue = titles[current]
     // 左字段名、右当前值和菜单指示，未设置使用次级文字。
     let name = tu_lbl(field); name.numberOfLines = 1
-    let value = tu_lbl(titles[rating]); value.numberOfLines = 1; value.textAlignment = .right
-    value.textColor = rating == 0 ? TaskTheme.muted : TaskTheme.ink
+    let value = tu_lbl(titles[current]); value.numberOfLines = 1; value.textAlignment = .right
+    value.textColor = current == 0 ? TaskTheme.muted : TaskTheme.ink
     value.setContentHuggingPriority(.required, for: .horizontal)
     value.setContentCompressionResistancePriority(.required, for: .horizontal)
     for view in [name, value] as [UIView] { view.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(view) }
@@ -226,7 +232,7 @@ func tu_grade(_ key: String, _ prefix: String, _ rating: Int, selected: ((Int) -
                 value.text = title; value.textColor = index == 0 ? TaskTheme.muted : TaskTheme.ink
                 (button?.menu?.children as? [UIAction])?.forEach { $0.state = $0.title == title ? .on : .off }
             }
-            action.state = rating == index ? .on : .off
+            action.state = current == index ? .on : .off
             return action
         }); button.showsMenuAsPrimaryAction = true
         TaskPress.attach(button)

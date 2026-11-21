@@ -73,7 +73,7 @@ def run(root):
  before=tstcmd(db,'snapshot');admit(malformed,ok=False);req(tstcmd(db,'snapshot')==before,'失败的父子提交完全回滚')
  # 午夜和重复事件只影响当前日，不重新生成副本。
  tstcmd(db,'complete-next',part(1,45)['task_id']);req(not any(r['task_id']==part(1,45)['task_id'] and r['status']!='completed' for r in tstcmd(db,'today',str(at),'UTC')),'完成子任务不再作为未完成出现')
- req(tstcmd(db,'schema')['schema_version']==14,'单库迁移版本正确')
+ req(tstcmd(db,'schema')['schema_version']==15,'单库迁移版本正确')
 
 # 验证真实请求分档、结构化输出和服务静默换模型的阻断。
 def network(root):
@@ -105,8 +105,8 @@ def network(root):
 def boundaries(root):
  db=root/'boundaries.db';day=datetime(2030,1,7,tzinfo=timezone.utc).timestamp();at=day+8*3600;work=seed(db,day);tstcmd(db,'update',work,jdmp({'routine_end':720}))
  busy=tstcmd(db,'create',jdmp({'title':'固定占用','due_at':day+10*3600,'planned_duration':3600}))
- fields={'title':'碎片空档','due_at':day+9*3600,'deadline_at':day+12*3600,'timezone_id':'UTC','planned_duration':7200}
- estimate={'minimum_minutes':90,'recommended_minutes':120,'maximum_minutes':150,'difficulty':3}
+ fields={'title':'碎片空档','due_at':day+9*3600,'deadline_at':day+12*3600,'timezone_id':'UTC','planned_duration':7200,'rush':True}
+ estimate={'minimum_minutes':90,'recommended_minutes':120,'maximum_minutes':150,'difficulty':2}
  rows=[part(10,45),part(11,45),part(12,30)]
  c=tstcmd(db,'intake',jdmp(fields),jdmp(rows),str(at));v=tstcmd(db,'verdict',jdmp(c),jdmp(estimate),'7200','false')
  req(c['room']['capacity']==7200 and v['state']=='adjust','两小时总空档仍排不下45、45、30分钟的依赖步骤')
@@ -117,7 +117,8 @@ def boundaries(root):
  tstcmd(db,'admit',jdmp(c),jdmp(estimate),'7200','false',str(at),success=False);req(tstcmd(db,'snapshot')==before,'评估保存失败时父子与全部时刻均整体回滚')
  with connect(db) as connection:connection.execute('DROP TRIGGER fail_review')
  parent=tstcmd(db,'admit',jdmp(c),jdmp(estimate),'7200','false',str(at));plan=tstcmd(db,'day',str(day),'UTC');entries=[e for e in plan['entries'] if e['task']['parent_id']==parent['task_id']]
- req([e['task_id'] for e in entries]==[part(10,45)['task_id'],part(11,45)['task_id']],'次序不足时不能把后一步提前塞回前面空档')
+ actual=[e['task_id'] for e in entries];expected=[part(10,45)['task_id'],part(11,45)['task_id']]
+ req(actual==expected,'次序不足时不能把后一步提前塞回前面空档 actual=%r expected=%r'%(actual,expected))
  req(entries[0]['end_at']<=entries[1]['start_at'],'子任务按依赖顺序执行')
  # 日内排序必须是原候选的置换，旧排序不能重复应用。
  context=tstcmd(db,'day-order',str(at));order=[r['task_id'] for r in context['tasks']]
@@ -138,7 +139,7 @@ def boundaries(root):
  tstcmd(migration,'schema',success=False)
  with connect(migration) as connection:
   req(connection.execute('SELECT schema_version FROM store_meta').fetchone()[0]==11,'迁移失败保留版本十一');req(not any(r[1]=='planning_mode' for r in connection.execute('PRAGMA table_info(tasks)')),'迁移失败回滚新增列');connection.execute('DROP TRIGGER fail_v12')
- req(tstcmd(migration,'schema')['schema_version']==14 and tstcmd(migration,'get',old['task_id'])['title']=='原任务','迁移恢复保留原身份与内容')
+ req(tstcmd(migration,'schema')['schema_version']==15 and tstcmd(migration,'get',old['task_id'])['title']=='原任务','迁移恢复保留原身份与内容')
 
 # 通过真实事务校验整日窗口、最长天数、加星和备注保留。
 def calendar_days(root):
@@ -160,6 +161,43 @@ def calendar_days(root):
  local=dict(fields,due_at=first,deadline_at=last,timezone_id='America/New_York')
  req(tstcmd(db,'intake',jdmp(local),'[]',str(first))['fields']['deadline_at']==last,'跨夏令时按当地日历而非固定小时数计30天')
 
+# 验证低/中/高/赶DDL的每日配额、难度数量和创建门禁。
+def density(root):
+ day=int(datetime(2030,1,7,tzinfo=timezone.utc).timestamp());at=day+8*3600
+ def fresh(name):
+  db=root/(name+'.db');seed(db,day);return db
+ def base(**kw):
+  row={'title':'密度','due_at':day+9*3600,'deadline_at':day+17*3600,'timezone_id':'UTC','difficulty':2}
+  row.update(kw);return row
+ def case(name,fields,parts,ok):
+  db=fresh(name);c=tstcmd(db,'intake',jdmp(fields),jdmp(parts),str(at));effort=sum(p['planned_duration'] for p in parts) if parts else 60
+  est={'minimum_minutes':max(1,effort//60),'recommended_minutes':max(1,effort//60),'maximum_minutes':max(1,effort//60),'difficulty':fields.get('difficulty',2)}
+  v=tstcmd(db,'verdict',jdmp(c),jdmp(est),str(effort),'false')
+  if ok:
+   req(v['state'] in ['ready','offline'],name+' 允许');tstcmd(db,'admit',jdmp(c),jdmp(est),str(effort),'false',str(at))
+  else:
+   req(v['state'] not in ['ready','offline'] or tstcmd(db,'admit',jdmp(c),jdmp(est),str(effort),'false',str(at),success=False) is not None,name+' 拒绝')
+  return db,c
+ # 低紧急 1/3：一天 8 小时最多 2h40，三小时排不下；延到两天可行。
+ case('low-one-day',base(urgency=1),[part(20,60),part(21,60),part(22,60)],False)
+ db,c=case('low-two-days',base(urgency=1,deadline_at=day+17*3600+86400),[part(23,60),part(24,60),part(25,60)],True)
+ days=[int((p['day_at']-day)//86400) for p in c.get('dry',{}).get('placements',[])]
+ req(days.count(0)==2 and days.count(1)==1,'低紧急跨天密度')
+ # 高紧急留 1 小时：七小时可行，七小时半不可行。
+ case('high-seven',base(urgency=3),[part(26,420)],True)
+ case('high-seven-half',base(urgency=3),[part(27,450)],False)
+ # 赶DDL可以占满：八小时可行，八小时半不可行。
+ case('ddl-eight',base(urgency=3,rush=True),[part(28,480)],True)
+ case('ddl-eight-half',base(urgency=3,rush=True),[part(29,510)],False)
+ # 困难任务每天最多一个：三天窗口可行，一天不可行。
+ case('hard-one-day',base(urgency=1,difficulty=3),[part(30,20),part(31,20),part(32,20)],False)
+ case('hard-three-days',base(urgency=1,difficulty=3,deadline_at=day+17*3600+2*86400),[part(33,20),part(34,20),part(35,20)],True)
+ # 窗口被已有任务占满时禁止新任务。
+ db=fresh('full');tstcmd(db,'create',jdmp({'title':'占满','due_at':day+9*3600,'deadline_at':day+17*3600,'timezone_id':'UTC','planned_duration':8*3600,'planning_mode':'window'}))
+ c=tstcmd(db,'intake',jdmp(base(title='新任务')),'[]',str(at));req(c['room']['capacity']==0,'占满窗口空余为零')
+ v=tstcmd(db,'verdict',jdmp(c),jdmp({'minimum_minutes':60,'recommended_minutes':60,'maximum_minutes':60,'difficulty':2}),'3600','false')
+ req(v['state']=='adjust' and tstcmd(db,'admit',jdmp(c),jdmp({'minimum_minutes':60,'recommended_minutes':60,'maximum_minutes':60,'difficulty':2}),'3600','false',str(at),success=False) is not None,'占满窗口拒绝创建')
+
 with TemporaryDirectory(prefix='trolltask-intake-') as folder:
- root=Path(folder);run(root);network(root);boundaries(root);calendar_days(root)
+ root=Path(folder);run(root);network(root);boundaries(root);calendar_days(root);density(root)
 print(f'创建评估专项通过：{checks}项')

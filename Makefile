@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 APP := TrollTask
 BUILD := build
 APP_DIR := $(BUILD)/Payload/$(APP).app
-TIPA := $(BUILD)/TrollTask-0.21.45.tipa
+TIPA := $(BUILD)/TrollTask-0.21.48.tipa
 CLOUD_CLIENTS ?=
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC := xcrun --sdk iphoneos clang
@@ -229,7 +229,7 @@ $(BUILD)/ui/touch/%.o: Sources/Support/Touch/%.m $(HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 
-$(BUILD)/ui/test_ui.o: Tests/test_ui.m Tests/test_hud.inc Tests/test_signal.inc Tests/test_parity.inc Tests/test_routine_ui.inc Tests/test_assistant_ui.inc Tests/test_today_ui.inc Tests/test_design_ui.inc Tests/test_weekly_ui.inc Tests/test_create_ui.inc $(HEADERS) Makefile
+$(BUILD)/ui/test_ui.o: Tests/test_ui.m Tests/test_hud.inc Tests/test_signal.inc Tests/test_parity.inc Tests/test_routine_ui.inc Tests/test_today_ui.inc Tests/test_design_ui.inc Tests/test_weekly_ui.inc Tests/test_create_ui.inc $(HEADERS) Makefile
 	mkdir -p $(dir $@)
 	$(SIM_CC) $(SIM_FLAGS) -fobjc-arc -fblocks -Wall -Wextra -Werror -DLB_HOST_TEST -DLB_UI_TEST -c $< -o $@
 

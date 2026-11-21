@@ -28,6 +28,11 @@ static NSMutableArray *sc_records;
 static void sc_req(BOOL valid, NSString *name) {
     if (!valid) { NSLog(@"调度失败：%@",name); abort(); } sc_checks++;
 }
+// 检查点之后是否出现过明确错误，后续刷新不得覆盖已回报的失败。
+static BOOL sc_failed(NSUInteger mark) {
+    for (NSUInteger index=mark; index<sc_events.count; index++) if ([sc_events[index][@"error"] isKindOfClass:NSError.class]) return YES;
+    return NO;
+}
 // 运行主线程展示队列，保留有界等待。
 static void sc_wait(NSTimeInterval seconds, BOOL (^check)(void), NSString *name) {
     NSDate *end = [NSDate dateWithTimeIntervalSinceNow:MAX(seconds, 3)];
@@ -115,7 +120,7 @@ static void sc_restart(ScStore *reader, TaskStore *writer) {
 // 验证数据库失败退避恢复且恢复后再次静默等待。
 static void sc_fault(ScStore *reader, TaskStore *writer) {
     NSDictionary *task=sc_mk(writer,NSDate.date.timeIntervalSince1970+60); reader.failReads=1; sc_start(reader);
-    sc_wait(1,^BOOL { return [sc_events.lastObject[@"error"] isKindOfClass:NSError.class]; },@"数据库读取失败有明确错误");
+    sc_wait(1,^BOOL { return sc_failed(0); },@"数据库读取失败有明确错误");
     sc_req(sc_sched.nextFireAt==nil,@"失败不保留旧触发时刻");
     sc_wait(2,^BOOL { return fabs(sc_sched.nextFireAt.timeIntervalSince1970-[task[@"due_at"] doubleValue])<0.001; },@"单次故障通过有界退避恢复");
     sc_span(0.1); NSUInteger plans=reader.plans,revisions=reader.revisions; sc_span(1.2);
@@ -133,8 +138,9 @@ static void sc_overlap(ScStore *reader, TaskStore *writer) {
     sc_wait(1,^BOOL{return [writer lsOcc:b[@"task_id"] error:nil].count==1;},@"A未提交时B照常登记到期");
     sc_req([sc_alert[@"occurrence_id"] isEqual:aid],@"B到期不替换A");
     for (NSDictionary *event in sc_events) sc_req(![event[@"alert"] isKindOfClass:NSDictionary.class] || ![event[@"alert"][@"task_id"] isEqual:b[@"task_id"]],@"等待期间B不抢占");
+    NSUInteger mark=sc_events.count;
     [sc_sched check:aid attachments:@[]];
-    sc_wait(1,^BOOL{return [sc_events.lastObject[@"error"] isKindOfClass:NSError.class];},@"无效提交回报失败");
+    sc_wait(1,^BOOL{return sc_failed(mark);},@"无效提交回报失败");
     sc_req([sc_alert[@"occurrence_id"] isEqual:aid],@"提交失败仍保留A并继续等待");
     NSDictionary *file=@{@"method":@"file",@"image":[@"proof" dataUsingEncoding:NSUTF8StringEncoding],@"name":@"a.txt",@"content_type":@"public.plain-text"};
     for (NSUInteger i=0;i<30;i++) {[sc_sched check:aid attachments:@[file]];notify_post(reader.changeNote.UTF8String);}

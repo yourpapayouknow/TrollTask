@@ -8,7 +8,7 @@
     private let reminders = ReminderQueue()
     private var active: TaskFields? { reminders.current }
     private var tokens: [Int32] = [], epoch = 0, ticket = 0, faults = 0
-    private var running = false, queued = false
+    private var running = false, queued = false, failing = false
     private var reopening = false
     private var observers: [NSObjectProtocol] = []
     private var displayedID: String?
@@ -50,8 +50,11 @@
     }
     // 调度队列完成数据核验，主线程只接收尚未取消的呈现结果。
     private func pub(_ alert: TaskFields?, _ error: NSError? = nil, ready: Bool = false, reopen: Bool = false) {
+        // 刷新不能取消尚未交付的失败提示。
+        if error == nil && failing { return }
         publication?.cancel()
         guard running || alert == nil else { return }
+        if error != nil { failing = true }
         if !ready { delivery += 1 }
         // 主线程开始消费后再异步核验，拦截阻塞期间提交的修改。
         if !ready && alert != nil {
@@ -66,7 +69,8 @@
         }
         let expected = epoch
         var fresh = alert, failure = error
-        if let alert, let store {
+        // 错误直接交付，不再按活动轮次替换。
+        if let alert, let store, error == nil {
             guard active?["occurrence_id"] as? String == alert["occurrence_id"] as? String else { return }
             do {
                 let snapshot = try store.snapshot() as? TaskFields ?? [:]
@@ -82,6 +86,7 @@
         let value = fresh, issue = failure
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            if issue != nil { self.failing = false }
             if self.displayedEpoch != expected {
                 if value != nil && self.displayedID != nil { self.handler(nil, nil) }
                 self.displayedID = nil; self.displayed = nil; self.displayedEpoch = expected
@@ -219,7 +224,7 @@
     // 停止后拒绝上一轮计时和已排队的展示结果。
     @objc(stop) func stp() {
         qsyn {
-            running = false; epoch += 1; queued = false;reopening=false; clr(); reminders.clr()
+            running = false; epoch += 1; queued = false;reopening=false; failing=false; clr(); reminders.clr()
             tokens.forEach { notify_cancel($0) }; tokens.removeAll()
             observers.forEach { NotificationCenter.default.removeObserver($0) }; observers.removeAll(); pub(nil)
         }
