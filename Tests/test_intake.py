@@ -93,8 +93,10 @@ def network(root):
   for variant in ['range','sum','negative','tool','model']:
    server.variant=variant;before=tstcmd(db,'snapshot');failure=call(base,False);req(failure['code']!=2,'无效结果和静默模型替换不能伪装离线');req(tstcmd(db,'snapshot')==before,'无效AI响应不修改数据库')
   server.variant='';query={'mode':'order','difficulty':3,'tasks':[{'task_id':'a','notes':'日内备注'},{'task_id':'b'}]};req(call(query)['order']==['b','a'],'日内AI排序返回完整原ID集合')
-  call({'title':'拆分请求','notes':'本机拆分备注'})
-  req(all(not jld(record)['has_notes'] for record in server.log.read_text().splitlines()),'评估、拆分和排序请求均不携带用户备注')
+  call({'mode':'split','title':'拆分请求','notes':'本机拆分备注'})
+  records=[jld(record) for record in server.log.read_text().splitlines()]
+  req(records[-1]['has_notes'],'拆分请求携带用户备注以贴合任务')
+  req(all(not record['has_notes'] for record in records[:-1]),'评估和排序请求仍不携带用户备注')
   for variant in ['duplicate','foreign']:
    server.variant=variant;call(query,False);req(True,'重复或外来任务不能进入日内排序')
  finally:server.shutdown();worker.join();server.server_close()

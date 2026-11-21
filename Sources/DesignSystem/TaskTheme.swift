@@ -331,8 +331,8 @@ func tu_act(_ title: String, _ icon: String?, _ id: String, _ work: @escaping ()
 private final class TaskDock: UIPresentationController, UIGestureRecognizerDelegate {
     private let shade = UIControl()
     private var keyboard: CGRect = .zero
-    private var observer: NSObjectProtocol?
-    private var contentHeight: CGFloat { (presentedViewController as? UINavigationController)?.topViewController?.preferredContentSize.height ?? presentedViewController.preferredContentSize.height }
+    private var observer: NSObjectProtocol?, active: NSObjectProtocol?
+    private var contentHeight: CGFloat { let top=(presentedViewController as? UINavigationController)?.topViewController?.preferredContentSize.height ?? 0; return top > 0 ? top : presentedViewController.preferredContentSize.height }
     // 计算紧凑输入面板及展开表单的可用区域。
     override var frameOfPresentedViewInContainerView: CGRect {
         guard let container = containerView else { return .zero }
@@ -353,6 +353,11 @@ private final class TaskDock: UIPresentationController, UIGestureRecognizerDeleg
             UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) { container.setNeedsLayout(); container.layoutIfNeeded() }
         }
         let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swp)); swipe.direction = .down; swipe.delegate = self; presentedView?.addGestureRecognizer(swipe)
+        // 锁屏或后台恢复时清掉旧键盘位置并按内容重算，避免面板高度塌陷。
+        active = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self, weak container] _ in
+            guard let self, let container else { return }
+            self.keyboard = .zero; container.setNeedsLayout(); container.layoutIfNeeded()
+        }
     }
     // 顶部下拉退出，正文滚动和控件操作不触发取消。
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
@@ -382,8 +387,8 @@ private final class TaskDock: UIPresentationController, UIGestureRecognizerDeleg
     }
     // 退出时同步淡出遮罩，和面板保持同一路径。
     override func dismissalTransitionWillBegin() { super.dismissalTransitionWillBegin(); TaskMotion.animate(.sheet) { self.shade.alpha = 0 } }
-    // 注销键盘监听。
-    deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
+    // 注销键盘与前台监听。
+    deinit { if let observer { NotificationCenter.default.removeObserver(observer) }; if let active { NotificationCenter.default.removeObserver(active) } }
 }
 // 在系统给定的面板尺寸内完成出现和退出动画。
 private final class TaskDockMotion: NSObject, UIViewControllerAnimatedTransitioning {

@@ -483,8 +483,8 @@ final class TaskCell: UITableViewCell {
     // 从保存的草稿直接回到创建评估页。
     private func resumeDraft(_ saved:TaskFields,_ store:TaskStore){
         guard let fields=saved["fields"] as? TaskFields else{openCreate(store);return}
-        let parts=saved["parts"] as? [TaskFields] ?? [],estimate=saved["estimate"] as? TaskFields,split=(saved["split"] as? NSNumber)?.boolValue
-        let page=TaskAdmissionScreen(store:store,fields:fields,parts:parts,estimate:estimate,split:split){[weak self] in self?.rfrsh();self?.dismiss(animated:true)}
+        let parts=saved["parts"] as? [TaskFields] ?? [],estimate=saved["estimate"] as? TaskFields,split=(saved["split"] as? NSNumber)?.boolValue,manual=(saved["manual"] as? NSNumber)?.boolValue,unreachable=(saved["unreachable"] as? NSNumber)?.boolValue
+        let page=TaskAdmissionScreen(store:store,fields:fields,parts:parts,estimate:estimate,split:split,manual:manual,unreachable:unreachable){[weak self] in self?.rfrsh();self?.dismiss(animated:true)}
         tu_sheet(self,UINavigationController(rootViewController:page),compact:true)
     }
     // 打开新的快捷创建面板。

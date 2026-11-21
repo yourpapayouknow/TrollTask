@@ -37,20 +37,22 @@ enum TaskAIConfig {
 }
 
 // 手动编辑单个建议，确认之前不写入任务数据库。
-private final class TaskStepEdit:TaskScreen {
+final class TaskStepEdit:TaskScreen {
     private let name=UITextView(),notes=UITextView(),minutes=UITextField()
     private var fields:TaskFields
     private let reply:(TaskFields?)->Void
     // 保留草稿UUID和未修改字段。
-    init(_ fields:TaskFields,reply:@escaping(TaskFields?)->Void) { self.fields=fields;self.reply=reply;super.init(nibName:nil,bundle:nil) }
+    init(_ fields:TaskFields,reply:@escaping(TaskFields?)->Void) { self.fields=fields;self.reply=reply;super.init(nibName:nil,bundle:nil);preferredContentSize=CGSize(width:540,height:UIScreen.main.bounds.height) }
     // 禁用归档初始化。
     required init?(coder:NSCoder) { fatalError("Use init(_:reply:)") }
+    // 在紧凑面板中保持可用高度。
+    override func viewWillAppear(_ animated:Bool) { super.viewWillAppear(animated); preferredContentSize=CGSize(width:540,height:UIScreen.main.bounds.height) }
     // 使用现有字体、表单和按钮形状。
     override func viewDidLoad() {
-        super.viewDidLoad();title="编辑步骤"
+        super.viewDidLoad();title="修改子任务"
         for (field,id) in [(name,"title"),(notes,"notes")] { tu_fld(field);field.font=lb_fnt(.body,traitCollection);field.textColor=TaskTheme.ink;field.isScrollEnabled=false;if field === notes {field.heightAnchor.constraint(greaterThanOrEqualToConstant:72).isActive=true};field.accessibilityIdentifier="step."+id;field.text=fields[id] as? String ?? "" }
-        tu_fld(minutes);minutes.font=lb_fnt(.body,traitCollection);minutes.textColor=TaskTheme.ink;minutes.keyboardType = .numberPad;minutes.accessibilityIdentifier="step.minutes";minutes.attributedPlaceholder=tu_phl("分钟");if let value=fields["planned_duration"] as? NSNumber { minutes.text=String(Int(ceil(value.doubleValue/60))) }
-        _ = tu_form(self,tu_stk([tu_stk([tu_lbl("标题"),name]),tu_stk([tu_lbl("用时"),minutes]),tu_stk([tu_lbl("备注"),notes])]),"step.content")
+        tu_fld(minutes);minutes.font=lb_fnt(.body,traitCollection);minutes.textColor=TaskTheme.ink;minutes.keyboardType = .numberPad;minutes.accessibilityIdentifier="step.minutes";minutes.accessibilityLabel="预计耗时";minutes.attributedPlaceholder=tu_phl("分钟");if let value=fields["planned_duration"] as? NSNumber { minutes.text=String(Int(ceil(value.doubleValue/60))) }
+        _ = tu_form(self,tu_stk([tu_stk([tu_lbl("标题"),name]),tu_stk([tu_lbl("步骤"),notes]),tu_stk([tu_lbl("预计耗时"),minutes])]),"step.content")
         let save=tu_btn("完成",nil,self,#selector(sv));save.accessibilityIdentifier="step.save";navigationItem.rightBarButtonItem=UIBarButtonItem(customView:save)
     }
     // 修改草稿后返回原步骤列表。
@@ -63,21 +65,18 @@ private final class TaskStepEdit:TaskScreen {
 @objc(TaskAssistantScreen) final class TaskAssistantScreen:TaskScreen,UITableViewDataSource,UITableViewDelegate,UITextViewDelegate {
     private let store:TaskStore,taskID:String?,listID:String,maxMinutes:Int?,automatic:Bool
     private let name=UITextField(),goal=UITextView(),table=UITableView(frame:.zero,style:.plain)
-    private var draftInput:TaskFields?,draftReply:(([TaskFields])->Void)?
     private var parts:[TaskFields]=[],expected:TaskFields?,sourceTask:TaskFields?,completed=Set<String>()
     private var request:URLSessionDataTask?,generation=UUID(),started=false,saving=false
     private var generate:UIButton!,save:UIButton!,manual:UIButton!,reorder:UIButton!,header:UIView!,nameHeight:NSLayoutConstraint?
     // 只携带当前任务，现有子任务直接复用，不重复请求AI。
     init(store:TaskStore,taskID:String?=nil,listID:String=TS_DFLT_LST,maxMinutes:Int?=nil,automatic:Bool=false) { self.store=store;self.taskID=taskID;self.listID=listID;self.maxMinutes=maxMinutes;self.automatic=automatic;super.init(nibName:nil,bundle:nil) }
-    // 编辑尚未创建任务的步骤，保存只交回父级草稿。
-    convenience init(store:TaskStore,draft:TaskFields,parts:[TaskFields],reply:@escaping([TaskFields])->Void){self.init(store:store);draftInput=draft;self.parts=parts;draftReply=reply;if let all=try? store.lsTsks() as? [TaskFields]{completed=Set(all.filter{$0["status"] as? String=="completed"}.map{$0["task_id"] as! String})}}
     // 为原生验收和共用入口保留默认构造。
     @objc(initWithStore:task:) convenience init(store:TaskStore,task:String?) { self.init(store:store,taskID:task) }
     // 禁用归档初始化。
     required init?(coder:NSCoder) { fatalError("Use init(store:taskID:)") }
     // 建立常驻手动入口，网络请求不锁住编辑。
     override func viewDidLoad() {
-        super.viewDidLoad();title=draftReply != nil ? "编辑子任务":taskID==nil ? "智能创建":"拆分任务"
+        super.viewDidLoad();title=taskID==nil ? "智能创建":"拆分任务"
         tu_fld(name);name.font=lb_fnt(.body,traitCollection);name.adjustsFontForContentSizeCategory=true;name.textColor=TaskTheme.ink;name.attributedPlaceholder=tu_phl("任务标题");name.accessibilityIdentifier="assistant.title"
         nameHeight=name.heightAnchor.constraint(equalToConstant:max(44,ceil(name.font!.lineHeight)+16));nameHeight?.isActive=true;name.addTarget(self,action:#selector(chg),for:.editingChanged);goal.delegate=self
         tu_fld(goal);goal.font=lb_fnt(.body,traitCollection);goal.adjustsFontForContentSizeCategory=true;goal.textColor=TaskTheme.ink;goal.accessibilityLabel="目标与说明";goal.accessibilityIdentifier="assistant.goal";goal.heightAnchor.constraint(equalToConstant:96).isActive=true
@@ -89,7 +88,7 @@ private final class TaskStepEdit:TaskScreen {
         header=UIView();let fields=tu_stk([name,tu_stk([tu_lbl("任务说明"),goal]),buttons]);fields.spacing=16;fields.setCustomSpacing(TaskTheme.section,after:goal.superview!);header.addSubview(fields);tu_wdth(fields,header);NSLayoutConstraint.activate([fields.topAnchor.constraint(equalTo:header.topAnchor,constant:16),fields.bottomAnchor.constraint(equalTo:header.bottomAnchor,constant:-16)])
         table.dataSource=self;table.delegate=self;table.backgroundColor = .clear;table.rowHeight=UITableView.automaticDimension;table.estimatedRowHeight=72;table.keyboardDismissMode = .interactive;table.accessibilityIdentifier="assistant.steps";view.addSubview(table);tu_wdth(table,view,inset:0);table.tableHeaderView=header
         NSLayoutConstraint.activate([table.topAnchor.constraint(equalTo:view.safeAreaLayoutGuide.topAnchor),table.bottomAnchor.constraint(equalTo:view.keyboardLayoutGuide.topAnchor)])
-        save=tu_btn(draftReply != nil ? "完成步骤":taskID==nil ? "评估任务":"评估拆分",nil,self,#selector(sv));save.accessibilityIdentifier="assistant.save"
+        save=tu_btn(taskID==nil ? "评估任务":"评估拆分",nil,self,#selector(sv));save.accessibilityIdentifier="assistant.save"
         navigationItem.rightBarButtonItem=UIBarButtonItem(customView:save)
         ld();state()
     }
@@ -107,7 +106,6 @@ private final class TaskStepEdit:TaskScreen {
     func textViewDidChange(_ textView:UITextView) {stop()}
     // 重新读取显式保存的版本，原有完成步骤保持只读。
     private func ld() {
-        if let draftInput{name.text=draftInput["title"] as? String;goal.text=draftInput["notes"] as? String;sourceTask=draftInput;table.reloadData();return}
         guard let taskID else{return}
         do { let draft=try TaskDivision.drft(store,task:taskID) as! TaskFields;expected=draft;sourceTask=draft["task"] as? TaskFields;name.text=sourceTask?["title"] as? String;goal.text=sourceTask?["notes"] as? String
             let children=draft["children"] as! [TaskFields];completed=Set(children.filter{$0["status"] as? String=="completed"}.map{$0["task_id"] as! String});parts=children.map {row in Dictionary(uniqueKeysWithValues:["task_id","title","notes","planned_duration"].map{($0,row[$0]!)})};table.reloadData()
@@ -144,7 +142,6 @@ private final class TaskStepEdit:TaskScreen {
     @objc private func sv() {
         guard !saving,!parts.isEmpty else{return};stop();view.endEditing(true)
         do {try TaskStore.vldTxt(name.text ?? "",notes:goal.text ?? "")}catch{tu_err(self,error);return}
-        if let draftReply{draftReply(parts);navigationController?.popViewController(animated:true);return}
         if let taskID,let expected{do{let latest=try TaskDivision.drft(store,task:taskID) as! TaskFields;guard NSDictionary(dictionary:["rows":expected["signature"]!]).isEqual(to:["rows":latest["signature"]!]) else{throw TaskAI.err("任务已变更，请重载")}}catch{let alert=UIAlertController(title:"任务已变更",message:nil,preferredStyle:.alert);alert.addAction(UIAlertAction(title:"保留草稿",style:.cancel));alert.addAction(UIAlertAction(title:"重新载入",style:.destructive){[weak self] _ in self?.ld();self?.state()});present(alert,animated:true);return}}
         var fields=sourceTask?.filter{TaskIntake.keys.contains($0.key)} ?? ["list_id":listID,"timezone_id":TimeZone.current.identifier]
         if let taskID{fields["task_id"]=taskID};fields["title"]=name.text ?? "";fields["notes"]=goal.text ?? "";fields["planned_duration"]=parts.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)}

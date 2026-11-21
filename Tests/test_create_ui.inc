@@ -95,6 +95,31 @@ static void ut_todo_create(void) {
         UIScrollView *form=(UIScrollView *)ut_find(page,@"intake.content");
         CGRect row=[last convertRect:last.bounds toView:page],saveRect=[footerSave convertRect:footerSave.bounds toView:page],visible=[form convertRect:form.bounds toView:page];
         ut_req(CGRectGetMaxY(row)<=CGRectGetMinY(saveRect) && CGRectGetMaxY(row)<=CGRectGetMaxY(visible),[NSString stringWithFormat:@"第二页最后一行完整位于页脚上方 row=%@ visible=%@",NSStringFromCGRect(row),NSStringFromCGRect(visible)]);});
+    // 第三页保持只读主任务、可编辑备注；网关不可达时降级手动创建。
+    ut_ui(^{[NSUserDefaults.standardUserDefaults setObject:@"http://127.0.0.1:9/v1" forKey:@"assistant.endpoint"];});
+    ut_tap(@"intake.save");
+    ut_wait(^BOOL{return ut_find(ut_surface(),@"split.title")!=nil && !ut_nav.transitionCoordinator;},@"进入拆分页");
+    ut_wait(^BOOL{return [((UIButton *)ut_find(ut_surface(),@"split.parts")).configuration.title isEqual:@"手动创建"];},@"网关不可达降级手动创建");
+    ut_ui(^{
+        ut_req([((UILabel *)ut_find(ut_surface(),@"split.title")).text isEqual:@"可交付的总目标"],@"主任务标题只读展示");
+        ut_req([((UITextView *)ut_find(ut_surface(),@"split.notes")).text isEqual:@"仅自己可见的备注"],@"备注带入第三页");
+        ut_req(![(UIButton *)ut_find(ut_surface(),@"split.create") isEnabled],@"无子任务不能创建");
+        ut_req(ut_find(ut_surface(),@"split.draft")!=nil,@"第三页保留保存草稿");
+    });
+    ut_tap(@"split.parts");
+    ut_wait(^BOOL{return ut_find(ut_surface(),@"step.title")!=nil && !ut_nav.transitionCoordinator;},@"手动子任务编辑页就绪");
+    ut_ui(^{
+        UITextView *name=(UITextView *)ut_find(ut_surface(),@"step.title"),*notes=(UITextView *)ut_find(ut_surface(),@"step.notes");
+        name.text=@"先整理资料";notes.text=@"输出清单";((UITextField *)ut_find(ut_surface(),@"step.minutes")).text=@"15";
+    });
+    ut_tap(@"step.save");
+    ut_wait(^BOOL{return ut_find(ut_surface(),@"split.step.0")!=nil && !ut_nav.transitionCoordinator;},@"手动子任务显示卡片");
+    ut_ui(^{
+        ut_req([((UILabel *)ut_find(ut_surface(),@"split.step.0")).text isEqual:@"先整理资料"],@"子任务内容完整显示");
+        ut_req(ut_find(ut_surface(),@"split.drag.0")!=nil,@"手动子任务可按住拖动");
+        ut_req([(UIButton *)ut_find(ut_surface(),@"split.create") isEnabled],@"有子任务可以创建");
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:@"assistant.endpoint"];
+    });
     ut_droot();ut_req([ut_store lsTsks:nil].count==0,@"退出草稿和评估没有创建任务");
     NSCalendar *cal=NSCalendar.currentCalendar;NSDate *today=[cal startOfDayForDate:NSDate.date];
     NSDate *yesterday=[cal dateByAddingUnit:NSCalendarUnitDay value:-1 toDate:today options:0],*tomorrow=[cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:today options:0],*dayAfter=[cal dateByAddingUnit:NSCalendarUnitDay value:2 toDate:today options:0];

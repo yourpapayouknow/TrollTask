@@ -7,7 +7,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     private var fields:TaskFields,parts:[TaskFields],context:TaskFields?,estimate:TaskFields?,phase=IntakePhase.editing
     private var lastOffline=false,completed=Set<String>()
     private var request:URLSessionDataTask?,ticket=UUID(),ddl=false,escalated=false
-    private var split=false,autoCreate=false
+    private var split=false,autoCreate=false,splitManual=false,splitUnreachable=false
     private var splitSwitch:UISwitch?
     private let name=UITextView(),notes=UITextView(),start=UIDatePicker(),end=UIDatePicker(),startTime=UIDatePicker(),endTime=UIDatePicker(),minutes=UITextField()
     private var save:UIButton!,steps:UIButton!,offline:UIButton!
@@ -15,7 +15,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     private var dayOnly: Bool { TaskWindow.dayOnly(fields) }
     private var newTodo: Bool { dayOnly && fields["task_id"] == nil }
     // 接收未提交的输入与可编辑子任务。
-    init(store:TaskStore,fields:TaskFields,parts:[TaskFields]=[],estimate:TaskFields?=nil,split:Bool?=nil,done:@escaping()->Void) {self.store=store;self.fields=fields;self.parts=parts;self.done=done;self.estimate=estimate;self.split=split ?? (((fields["difficulty"] as? NSNumber)?.intValue ?? 0) != 1);if let id=fields["task_id"] as? String{self.fields["_baseline"]=try? TaskIntake.sig(store,id,strict:true)};super.init(nibName:nil,bundle:nil);preferredContentSize=CGSize(width:540,height:UIScreen.main.bounds.height)}
+    init(store:TaskStore,fields:TaskFields,parts:[TaskFields]=[],estimate:TaskFields?=nil,split:Bool?=nil,manual:Bool?=nil,unreachable:Bool?=nil,done:@escaping()->Void) {self.store=store;self.fields=fields;self.parts=parts;self.done=done;self.estimate=estimate;self.split=split ?? (((fields["difficulty"] as? NSNumber)?.intValue ?? 0) != 1);self.splitManual=manual ?? false;self.splitUnreachable=unreachable ?? false;if let id=fields["task_id"] as? String{self.fields["_baseline"]=try? TaskIntake.sig(store,id,strict:true)};super.init(nibName:nil,bundle:nil);preferredContentSize=CGSize(width:540,height:UIScreen.main.bounds.height)}
     // 禁用归档初始化。
     required init?(coder:NSCoder){fatalError("Use init(store:fields:parts:done:)")}
     // 用统一表单展示窗口、工时和功能入口。
@@ -161,7 +161,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
                 DispatchQueue.main.async {guard self.ticket==token,self.view.window != nil else{return};self.context=context
                     let room=context["room"] as! TaskFields;var query:TaskFields=["mode":"assessment","title":value["title"]!,"window_start":value["due_at"]!,"window_end":value["deadline_at"]!,"capacity_minutes":Int((room["capacity"] as! NSNumber).doubleValue/60),"available_slots":room["gaps"]!,"existing_steps":rows,"completed_ids":context["completed_ids"] ?? [],"difficulty":self.escalated ? 3:value["difficulty"] ?? 0,"ddl":urgent]
                     if let amount=Double(self.minutes.text ?? ""),urgent{query["total_minutes"]=Int(amount)}
-                    if (room["max_span"] as! NSNumber).doubleValue>=60{query["max_minutes"]=Int((room["max_span"] as! NSNumber).doubleValue/60)}
+                    if (room["max_span"] as! NSNumber).doubleValue>=60,urgent || rows.isEmpty{query["max_minutes"]=Int((room["max_span"] as! NSNumber).doubleValue/60)}
                     self.request=TaskAI.gen(query as NSDictionary,config:TaskAIConfig.ld() as NSDictionary){[weak self] result,error in DispatchQueue.main.async {
                         guard let self,self.ticket==token,self.view.window != nil else{return};self.request=nil;self.phase = .review
                         if let error {self.estimate=nil;self.autoCreate=false;self.lastOffline=error.code==2;self.offline.isHidden = !self.lastOffline;self.render();tu_err(self,error);return}
@@ -201,10 +201,12 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     // 编辑草稿步骤，不用临时父任务污染正式数据库。
     @objc private func editParts(){if !(fields["recurrence"] as? [String] ?? []).isEmpty{tu_err(self,TaskAI.err("请先改为单次任务"));return};cancel();let suggestions=parts.isEmpty ? estimate?["steps"] as? [TaskFields] ?? []:parts;let rows=suggestions.map{row->TaskFields in var row=row;if row["task_id"]==nil{row["task_id"]=UUID().uuidString.lowercased()};return row}
         var draft=input();if !ddl,let recommended=estimate?["recommended_minutes"] as? NSNumber{draft["planned_duration"]=recommended.doubleValue*60}
-        navigationController?.pushViewController(TaskAssistantScreen(store:store,draft:draft,parts:rows){[weak self] rows in guard let self else{return};self.parts=rows;let total=rows.filter{!self.completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};self.minutes.text=String(Int(ceil(total/60)));if self.estimate == nil {self.chg()}else{self.resync()}},animated:true)
+        navigationController?.pushViewController(TaskSplitScreen(store:store,draft:draft,parts:rows,estimate:estimate,manual:splitManual,unreachable:splitUnreachable){[weak self] notes,rows,create,manual,unreachable in guard let self else{return};self.notes.text=notes;self.parts=rows;self.splitManual=manual;self.splitUnreachable=unreachable;let total=rows.filter{!self.completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};self.minutes.text=String(Int(ceil(total/60)));self.chg();if create{if unreachable{self.startOffline(true)}else{self.autoCreate=true;self.run(false)}}},animated:true)
     }
     // 离线仅提供短窗口、有效估时与明确确认的例外。
-    @objc private func local(){guard !offline.isHidden else{return};do {let ctx=try TaskIntake.ctx(store,fields:input() as NSDictionary,parts:parts as NSArray,at:Date().timeIntervalSince1970) as! TaskFields;context=ctx;estimate=["offline":true];phase = .offline;ddl=false;render();if verdict()?["state"] as? String != "offline"{info()}}catch{tu_err(self,error)}}
+    @objc private func local(){startOffline(false)}
+    // 直接进入离线门禁时不受入口可见性限制。
+    private func startOffline(_ direct:Bool){guard direct || !offline.isHidden else{return};do {let ctx=try TaskIntake.ctx(store,fields:input() as NSDictionary,parts:parts as NSArray,at:Date().timeIntervalSince1970) as! TaskFields;context=ctx;estimate=["offline":true];phase = .offline;ddl=false;render();if verdict()?["state"] as? String != "offline"{info()}}catch{tu_err(self,error)}}
     // 常律编辑返回后必须重新评估容量。
     @objc private func routines(){chg();navigationController?.pushViewController(TaskRoutineRules(store:store),animated:true)}
     // 重复与子任务沿用互斥规则，由用户明确选择改单次。
@@ -253,7 +255,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     }
     // 保存当前字段、子任务与AI建议，供下次继续。
     private func saveDraft(_ completion:(()->Void)?=nil){
-        var data:TaskFields=["fields":input(),"parts":parts,"split":split,"saved_at":Date().timeIntervalSince1970]
+        var data:TaskFields=["fields":input(),"parts":parts,"split":split,"manual":splitManual,"unreachable":splitUnreachable,"saved_at":Date().timeIntervalSince1970]
         if let estimate {data["estimate"]=estimate}
         DispatchQueue.global(qos:.utility).async {
             do{try self.store.storeDraft(data as [AnyHashable:Any])}catch{NSLog("保存草稿失败：%@",error as NSError)}
