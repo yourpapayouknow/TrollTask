@@ -23,7 +23,12 @@ API_AVAILABLE(ios(16.0))
 - (void)rfrsh;
 @end
 
-// 编辑任务基础字段并保留未呈现的数据。
+// 展示只读任务详情，修改从编辑进入创建管道第二页。
+@interface TaskDetailScreen : UIViewController
+- (instancetype)initWithStore:(TaskStore *)store task:(NSDictionary *)task saved:(void (^)(void))saved;
+@end
+
+// 快捷草稿与常律模板编辑，普通任务详情由只读页承担。
 @interface TaskEdit : UIViewController <UITextViewDelegate, UITextFieldDelegate>
 - (instancetype)initWithStore:(TaskStore *)store task:(NSDictionary *)task saved:(void (^)(void))saved;
 // 用同一编辑器呈现快捷草稿或子任务。

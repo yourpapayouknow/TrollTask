@@ -200,10 +200,6 @@
             catch { self.pub(self.active, error as NSError) }
         }
     }
-    // 证据与完成记录提交成功后才撤下当前提醒。
-    @objc(check:method:image:) func chk(_ occID: String, method: String, image: Data) {
-        chk(occID, attachments: [["method": method, "image": image]])
-    }
     // 在唯一数据库内原子提交整组附件。
     @objc(check:attachments:) func chk(_ occID: String, attachments: [TaskFields]) {
         wrk(occID) { store in

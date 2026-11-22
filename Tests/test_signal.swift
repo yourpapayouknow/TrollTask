@@ -31,13 +31,14 @@
             }
         }
         req(SignalPlan(1).ticks(4.8).count==0 && SignalPlan(3).ticks(29.8).count==5, "恢复不重放首振且不增加总名额")
-        let tasks = [task("b",3,1,600), task("c",1,3,60), task("a",3,1,600), task("d",0,0,nil)]
+        var tasks = [task("b",3,1,600), task("c",1,3,60), task("a",3,1,600), task("d",0,0,nil)]
+        tasks[0]["title"] = "Bravo"; tasks[1]["title"] = "alpha"; tasks[2]["title"] = "Charlie"; tasks[3]["title"] = "Delta"
         // 读取排序后的稳定任务身份。
         func ids(_ mode: String) -> [String] { TaskTraits.order(tasks, by:mode).map { $0["task_id"] as! String } }
         req(ids("date") == ["b","c","a","d"], "日期排序保持存储计划")
+        req(ids("name") == ["c","b","a","d"], "名称排序且稳定同值")
         req(ids("urgency") == ["a","b","c","d"], "紧急优先且未设置后")
         req(ids("difficulty") == ["c","a","b","d"], "困难优先且稳定同值")
-        req(ids("effort") == ["c","a","b","d"], "短任务优先且未设置后")
         let parent: TaskFields = ["task_id":"p","created_at":1], kid: TaskFields = ["task_id":"k","parent_id":"p","created_at":2], lone: TaskFields = ["task_id":"x","created_at":3]
         func tree(_ rows: [TaskFields]) -> [String] { TaskTraits.group(rows).map { $0["task_id"] as! String } }
         req(tree([kid, parent, lone]) == ["p","k","x"], "子任务紧随父任务")

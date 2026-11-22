@@ -1,14 +1,15 @@
 // 核对日期、时间、重复与逐层草稿接续。
 static void ut_pdate(void) API_AVAILABLE(ios(16.0));
 static void ut_pdate(void) {
-    ut_edt(nil);ut_title(@"日期接续验收");ut_tap(@"edit.date");
+    // 常律模板复用系统月历与重复页。
+    NSTimeInterval base=NSDate.date.timeIntervalSince1970;
+    NSDictionary *draft=[ut_store crtTsk:@{@"title":@"日期接续验收",@"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_enabled":@1,
+        @"routine_end":@570,@"due_at":@(base),@"timezone_id":@"UTC",@"recurrence_type":@"daily",@"recurrence":@[@"RRULE:FREQ=DAILY;INTERVAL=1"]} error:nil];
+    ut_req(draft!=nil,@"常律日期夹具");
+    ut_rte(draft);ut_tap(@"edit.date");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskCalendar.class];},@"日期抽屉就绪");
-    ut_ui(^{UIDatePicker *time=(UIDatePicker *)ut_find(ut_surface(),@"calendar.time");ut_req(time.preferredDatePickerStyle==UIDatePickerStyleWheels && time.hidden && [ut_find(ut_surface(),@"calendar.timed") isKindOfClass:UIButton.class],@"日期默认显示月历和设置时间按钮");});
-    ut_tap(@"calendar.timed");
-    ut_ui(^{ut_req(ut_find(ut_surface(),@"calendar.month").hidden && !ut_find(ut_surface(),@"calendar.time").hidden,@"设置时间在当前面板切换系统滚轮");});
-    ut_tap(@"calendar.removeTime");
-    ut_ui(^{ut_req(!ut_find(ut_surface(),@"calendar.month").hidden && ut_find(ut_surface(),@"calendar.time").hidden,@"移除时间恢复日期模式");});
-    ut_tap(@"calendar.timed");ut_tap(@"calendar.day");ut_tap(@"calendar.repeat");
+    ut_ui(^{ut_req(!ut_find(ut_surface(),@"calendar.month").hidden && [ut_find(ut_surface(),@"calendar.timed") isKindOfClass:UIButton.class],@"日期默认显示月历和设置时间按钮");});
+    ut_tap(@"calendar.repeat");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskRepeat.class];},@"重复预设进入独立全屏页");
     ut_ui(^{ut_req(ut_top().navigationController.modalPresentationStyle==UIModalPresentationFullScreen && ut_find(ut_surface(),@"repeat.type.ordinal") && ut_find(ut_surface(),@"repeat.type.workdays") && !ut_find(ut_surface(),@"repeat.done"),@"预设包含按星期每月和工作日，选择即返回");});
     ut_tap(@"repeat.type.custom");
@@ -21,20 +22,20 @@ static void ut_pdate(void) {
     ut_tap(@"repeat.done");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskCalendar.class];},@"重复完成回到同一日期面板");ut_tap(@"calendar.done");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController;},@"日期完成回到同一任务草稿");
-    ut_ui(^{ut_req(!ut_find(ut_surface(),@"edit.clearDate").hidden,@"日期摘要提供独立移除入口");});ut_save();ut_home();
-    NSDictionary *task=nil;
-    for(NSDictionary *row in [ut_store lsPnd:nil])if([row[@"title"] isEqual:@"日期接续验收"])task=row;
+    ut_save();ut_home();
+    NSDictionary *task=[ut_store rdTsk:draft[@"task_id"] error:nil];
     NSString *rule=[task[@"recurrence"] firstObject];
     ut_req([task[@"schedule_kind"] isEqual:@"timed"] && [task[@"recurrence_interval"] isEqual:@2] && [rule containsString:@"COUNT=7"] && [rule containsString:@"FREQ=WEEKLY"],@"逐层完成只保存最终日期和完整重复条件");
-    ut_edt(task);ut_tap(@"edit.clearDate");ut_save();ut_home();
-    NSDictionary *cleared=[ut_store rdTsk:task[@"task_id"] error:nil];ut_req([cleared[@"schedule_kind"] isEqual:@"none"] && [cleared[@"recurrence"] count]==0,@"日期移除同步清除重复，不残留隐藏提醒");
-    ut_req([ut_store delTsk:task[@"task_id"] error:nil],@"清理日期接续夹具");
+    ut_req([ut_store delTsk:draft[@"task_id"] error:nil],@"清理日期接续夹具");
     for(NSString *key in @[@"ordinal",@"workdays"]) {
-        ut_edt(nil);ut_title(@"预设规则验收");ut_tap(@"edit.more");ut_tap(@"edit.repeat");ut_tap([@"repeat.type." stringByAppendingString:key]);
+        NSDictionary *row=[ut_store crtTsk:@{@"title":@"预设规则验收",@"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_enabled":@1,
+            @"routine_end":@570,@"due_at":@(base),@"timezone_id":@"UTC",@"recurrence_type":@"daily",@"recurrence":@[@"RRULE:FREQ=DAILY;INTERVAL=1"]} error:nil];
+        ut_req(row!=nil,@"预设规则夹具");
+        ut_rte(row);ut_tap(@"edit.repeat");ut_tap([@"repeat.type." stringByAppendingString:key]);
         ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController;},@"预设选择后立即回到草稿");ut_save();ut_home();
-        NSDictionary *saved=nil;for(NSDictionary *row in [ut_store lsPnd:nil])if([row[@"title"] isEqual:@"预设规则验收"])saved=row;
+        NSDictionary *saved=[ut_store rdTsk:row[@"task_id"] error:nil];
         NSString *line=[saved[@"recurrence"] firstObject];ut_req([saved[@"recurrence_type"] isEqual:@"custom"] && [line containsString:[key isEqual:@"ordinal"]?@"FREQ=MONTHLY":@"BYDAY=MO,TU,WE,TH,FR"],@"新增预设交给既有完整规则引擎");
-        ut_req([ut_store delTsk:saved[@"task_id"] error:nil],@"清理重复预设夹具");
+        ut_req([ut_store delTsk:row[@"task_id"] error:nil],@"清理重复预设夹具");
     }
 }
 
@@ -57,14 +58,14 @@ static void ut_prty(void) {
     ut_tap(@"home.lists");ut_tap(@"list.starred");
     ut_wait(^BOOL{return [ut_find(ut_window,@"list.starred").accessibilityValue isEqual:@"已选中"];},@"抽屉星标入口切到正确页签");
     ut_tap([@"list." stringByAppendingString:listID]);ut_tap(@"home.more");
-    ut_wait(^BOOL{return ut_find(ut_surface(),@"sort.more")!=nil && !ut_top().isBeingPresented;},@"选项抽屉完成布局");
+    ut_wait(^BOOL{return ut_find(ut_surface(),@"sort.date")!=nil && !ut_top().isBeingPresented;},@"清单选项完成布局");
     ut_ui(^{
         UITableViewController *menu=(UITableViewController *)ut_top();
-        ut_req([menu.tableView numberOfRowsInSection:0]==6 && ut_find(menu.view,@"sort.more")!=nil,@"基础抽屉保留三项排序和三项维护");
-        ut_req(ut_find(menu.view,@"sort.urgency")==nil,@"扩展排序不混入默认抽屉");
+        ut_req([menu.tableView numberOfRowsInSection:0]==6 && ut_find(menu.view,@"sort.date") && ut_find(menu.view,@"sort.name") && ut_find(menu.view,@"sort.urgency") && ut_find(menu.view,@"sort.difficulty"),@"清单选项保留四项排序和两项维护");
+        ut_req(ut_find(menu.view,@"sort.more")==nil && ut_find(menu.view,@"list.reorder")==nil,@"排序不再进入第二层且无拖动入口");
     });
-    ut_tap(@"sort.more");ut_tap(@"sort.urgency");
-    ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskHome.class];},@"第二层排序可以执行并返回首页");
+    ut_tap(@"sort.urgency");
+    ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskHome.class];},@"排序可以执行并返回首页");
     ut_tap(@"home.lists");
     ut_wait(^BOOL{return ut_find(ut_surface(),@"list.create")!=nil && !ut_top().isBeingPresented;},@"新建清单菜单就绪");
     ut_ui(^{UITableViewController *menu=(UITableViewController *)ut_top();UITableViewCell *cell=(UITableViewCell *)ut_find(menu.view,@"list.create");NSIndexPath *path=[menu.tableView indexPathForCell:cell];[menu.tableView.delegate tableView:menu.tableView didSelectRowAtIndexPath:path];[menu.tableView.delegate tableView:menu.tableView didSelectRowAtIndexPath:path];});

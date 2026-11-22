@@ -51,8 +51,6 @@
 - (NSDictionary *)evaluateTaskFields:(NSDictionary *)fields effort:(double)effort now:(NSTimeInterval)now error:(NSError **)error NS_SWIFT_NAME(evaluateTask(fields:effort:now:));
 // 事务创建正式常律；重复导入不覆盖用户修改。
 - (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error;
-// 事务创建已核验的正式常律（与 importRtns 同实现）。
-- (NSDictionary *)applyRtns:(NSDictionary *)document error:(NSError **)error;
 // 按最新快照原子安排当天普通待办，保留已呈现和已到期轮次。
 - (BOOL)arrangeAt:(NSTimeInterval)stamp zone:(NSString *)zone error:(NSError **)error;
 // 计算窗口内扣除现有安排后的真实工作空档。
@@ -116,8 +114,6 @@
 - (BOOL)rsmOcc:(NSString *)occID error:(NSError **)error;
 // 记录当前呈现的首次声振与静音，不转换任务状态。
 - (NSDictionary *)sigOcc:(NSString *)occID trigger:(NSNumber *)trigger ack:(BOOL)ack error:(NSError **)error;
-// 原子保存有效图片与当前轮次的完成记录。
-- (BOOL)chkOcc:(NSString *)occID method:(NSString *)method image:(NSData *)image error:(NSError **)error;
 // 校验并原子提交最多六个附件，全部成功后完成提醒。
 - (BOOL)chkOcc:(NSString *)occID attachments:(NSArray<NSDictionary *> *)attachments error:(NSError **)error;
 // 按附件序号读取同库证据，元数据读取不加载图片。

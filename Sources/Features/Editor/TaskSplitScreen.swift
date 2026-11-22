@@ -204,8 +204,12 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
         var data: TaskFields = ["fields": fields, "parts": parts, "split": true, "manual": manual, "unreachable": unreachable, "saved_at": Date().timeIntervalSince1970]
         if let estimate { data["estimate"] = estimate }
         DispatchQueue.global(qos: .utility).async {
-            do { try self.store.storeDraft(data as [AnyHashable: Any]) } catch { NSLog("保存草稿失败：%@", error as NSError) }
-            DispatchQueue.main.async { self.synced = true; if let nav = self.navigationController, nav.presentingViewController != nil { nav.dismiss(animated: true) } else { self.dismiss(animated: true) } }
+            var failure: Error?
+            do { try self.store.storeDraft(data as [AnyHashable: Any]) } catch { failure = error }
+            DispatchQueue.main.async {
+                if let failure { self.saving = false; self.render(); tu_err(self, failure); return }
+                self.synced = true; if let nav = self.navigationController, nav.presentingViewController != nil { nav.dismiss(animated: true) } else { self.dismiss(animated: true) }
+            }
         }
     }
     // 更新拆分按钮、创建与草稿可用状态。

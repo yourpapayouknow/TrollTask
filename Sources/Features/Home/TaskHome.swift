@@ -194,8 +194,7 @@ final class TaskCell: UITableViewCell {
     private let queue = DispatchQueue(label: "com.iwmei.taskforiwmei.home")
     private var load = 0, token: Int32 = -1
     private var loaded = false, failed = false
-    private var dayRequest:URLSessionDataTask?,dayTicket=UUID(),dayBusy=false
-    private var todayRows:[TaskFields]=[]
+        private var todayRows:[TaskFields]=[]
     private var tdyDay: Date?, tdyAnchor: String?, tdyManual = false
     private var tdyBottom: CGFloat = 16
     private var rtnPicker:TaskRtnPicker?
@@ -258,7 +257,7 @@ final class TaskCell: UITableViewCell {
     // 应用回到前台时重新跟随当前时段。
     @objc private func activated() { tdyReset(); rfrsh() }
     // 离开后丢弃尚未返回的AI排序。
-    override func viewWillDisappear(_ animated:Bool){super.viewWillDisappear(animated);dayTicket=UUID();dayRequest?.cancel();dayRequest=nil;dayBusy=false;dueTimer?.invalidate();dueTimer=nil}
+    override func viewWillDisappear(_ animated:Bool){super.viewWillDisappear(animated);dueTimer?.invalidate();dueTimer=nil}
     // 适应动态字体高度。
     override func viewWillLayoutSubviews() { super.viewWillLayoutSubviews(); tabHeight.constant = max(48, ceil(lb_fnt(.subheadline, traitCollection).lineHeight) + 8 + 8) }
     // 切换清单或屏幕宽度后完整显示选中页签，不干扰普通刷新时的浏览位置。
@@ -304,7 +303,7 @@ final class TaskCell: UITableViewCell {
                 self.onStore?(issue == nil ? active : nil)
                 if let error = issue { self.pending = [];self.rtnSections=[];self.rtnRevision+=1;self.tdyReset(); NSLog("读取待办失败：%@", error as NSError) }
                 else {
-                    if let note = active?.changeNote { self.sort = UserDefaults.standard.string(forKey: "\(note).\(self.listID).sort") ?? "date" }
+                    if let note = active?.changeNote { self.sort = self.srtSaved(note) }
                     self.allPnd = pnd;self.todayRows=todayRows
                     self.lists = lists.filter { $0["list_id"] as? String == TS_RTN_LST } + lists.filter { $0["list_id"] as? String != TS_RTN_LST }
                     self.fltr(); self.bldTabs(); self.reg()
@@ -591,8 +590,7 @@ final class TaskCell: UITableViewCell {
         if changed { TaskHaptics.pick() }
         listID = selected
         if todayOnly { tdyReset() }
-        sort = UserDefaults.standard.string(forKey: "\(store.changeNote!).\(listID).sort") ?? "date"
-        table.setEditing(false, animated: false); fltr(); bldTabs()
+        sort = srtSaved(store.changeNote!); fltr(); bldTabs()
         if changed { TaskMotion.crossfade(table) { self.table.reloadData() } } else { table.reloadData() }
         if routineOnly { rtnRead(0) }
         if reset { table.setContentOffset(CGPoint(x:0,y:-table.adjustedContentInset.top),animated:false) }
@@ -634,79 +632,35 @@ final class TaskCell: UITableViewCell {
         }
         let add=tu_act("新建清单", "add", "list.create") { [weak self] in self?.crtLst() };if todayOnly{add.attributes = .disabled};actions.append(add); tu_menu(self, "清单", actions, breaks: [actions.count - 1], lists: true)
     }
-    // 用独立列表处理冲突和待补信息。
-    private func agendaIssues() {
-        guard let store else { return }
-        let list = listID, routine = routineOnly
-        queue.async {
-            let result = Result { () throws -> TaskFields in
-                let at = Date().timeIntervalSince1970, zone = TimeZone.current.identifier
-                if routine { return (try store.rtnDays(at,count:1,zone:zone) as! [TaskFields])[0] }
-                return try store.day(at:at,zone:zone,now:at) as! TaskFields
-            }
-            DispatchQueue.main.async {
-                guard self.listID == list, self.navigationController?.topViewController === self, self.presentedViewController == nil else { return }
-                switch result {
-                case .success(let plan):
-                    let rows = (plan["conflicts"] as? [TaskFields] ?? []) + (plan["unplaced"] as? [TaskFields] ?? [])
-                    self.navigationController?.pushViewController(TaskAgendaIssues(store:store,rows:rows),animated:true)
-                case .failure(let error): tu_err(self,error)
-                }
-            }
-        }
-    }
-    // 展示排序及清单维护。
+    // 只保留四项显示排序和清单维护。
     @objc private func more() {
         guard !todayOnly else{return}
         guard let store else { rfrsh(); return }
-        let issues = tu_act("待处理安排","list","agenda.issues"){[weak self] in self?.agendaIssues()}
         if listID == TS_RTN_LST {
-            tu_menu(self,"常律选项",[issues,tu_act("导入常律","upload","rules.import"){[weak self] in
+            tu_menu(self,"常律选项",[tu_act("导入常律","upload","rules.import"){[weak self] in
                 guard let self else{return}
                 if self.rtnPicker == nil {self.rtnPicker=TaskRtnPicker(store:store,host:self){[weak self] in self?.rfrsh()}}
                 self.rtnPicker?.open()
             }]);return
         }
-        var actions: [UIAction] = []
-        for (key, name) in zip(["manual", "date", "star"], ["我的顺序", "日期", "最近加注星标时间"]) { actions.append(srtAct(key, name)) }
-        let extra = ["urgency":"紧急优先", "difficulty":"困难优先", "effort":"短任务优先"][sort]
-        let header = tu_act(extra.map { "排序依据：" + $0 } ?? "排序依据", nil, "sort.more") { [weak self] in self?.srtMenu() }
         let rename = tu_act("重命名清单", nil, "list.rename") { [weak self] in self?.lstName(false) }, id = listID
         let remove = tu_act("删除清单", nil, "list.delete") { [weak self] in guard let self = self else { return }; tu_cfrm(self, "删除清单及全部任务") { self.wrt { try $0.delLst(id) } } }; remove.attributes = .destructive
         if ["today","starred"].contains(id) { rename.attributes = .disabled; remove.attributes = .disabled }
         if id == TS_DFLT_LST { remove.attributes = .disabled }
-        if id == TS_RTN_LST { rename.attributes = .disabled; remove.attributes = .disabled }
-        actions.append(tu_act("智能安排","subtask","today.arrange"){[weak self] in self?.arrange()})
-        actions += [issues, rename, remove]; tu_menu(self, "清单选项", actions, breaks: [3], header: header)
+        let sorts = zip(["date","name","urgency","difficulty"],["日期","名称","紧急优先","困难优先"]).map { srtAct($0,$1) }
+        tu_menu(self, "清单选项", sorts + [rename, remove], breaks: [4])
     }
-    // 一次只运行一轮AI建议，成功后仍核对数据库版本。
-    private func arrange(){guard let store,!dayBusy else{return};dayBusy=true;let ticket=UUID();dayTicket=ticket
-        queue.async {do {let context=try TaskDayOrder.ctx(store,at:Date().timeIntervalSince1970)
-            DispatchQueue.main.async {guard self.dayTicket==ticket else{return};self.dayRequest=TaskAI.gen(context,config:TaskAIConfig.ld() as NSDictionary){[weak self] result,error in
-                guard let self else{return};DispatchQueue.main.async {guard self.dayTicket==ticket else{return};self.dayRequest=nil
-                    if let error{self.dayBusy=false;tu_err(self,error);return};guard let result else{self.dayBusy=false;return}
-                    let tasks=(context["tasks"] as? [TaskFields] ?? []),titles=Dictionary(uniqueKeysWithValues:tasks.map{($0["task_id"] as! String,$0["title"] as! String)});let proposal=(result["order"] as? [String] ?? []).enumerated().map{String($0.offset+1)+". "+(titles[$0.element] ?? "")}.joined(separator:"\n")
-                    let alert=UIAlertController(title:"应用智能安排",message:proposal,preferredStyle:.alert);alert.addAction(UIAlertAction(title:"取消",style:.cancel){_ in self.dayBusy=false});alert.addAction(UIAlertAction(title:"应用",style:.default){_ in self.queue.async{var failure:Error?;do{_ = try TaskDayOrder.aply(store,context:context,result:result,at:Date().timeIntervalSince1970)}catch{failure=error};DispatchQueue.main.async{self.dayBusy=false;self.rfrsh();if let failure{tu_err(self,failure)}}}});self.present(alert,animated:true)
-                }
-            }}
-        }catch{DispatchQueue.main.async{guard self.dayTicket==ticket else{return};self.dayBusy=false;tu_err(self,error)}}}
+    // 读取并校验显示排序，旧值回落到日期。
+    private func srtSaved(_ note: String) -> String {
+        let value = UserDefaults.standard.string(forKey: "\(note).\(listID).sort") ?? "date"
+        return ["date","name","urgency","difficulty"].contains(value) ? value : "date"
     }
-    // 共用持久化排序操作，入口分组不改变排序语义。
+    // 保存显示排序，不修改任何任务的排程。
     private func srtAct(_ key: String, _ name: String) -> UIAction {
         let action = tu_act(name, nil, "sort." + key) { [weak self] in
             guard let self, let store = self.store else { return }; self.sort = key; UserDefaults.standard.set(key, forKey: "\(store.changeNote!).\(self.listID).sort")
-            self.table.setEditing(false, animated: false); self.fltr(); self.table.reloadData()
+            self.fltr(); self.table.reloadData()
         }; action.state = sort == key ? .on : .off; return action
-    }
-    // 将已有评估排序和拖动入口保留在第二层。
-    private func srtMenu() {
-        var actions = zip(["urgency", "difficulty", "effort"], ["紧急优先", "困难优先", "短任务优先"]).map { srtAct($0, $1) }
-        let reorder = tu_act("调整顺序", "list", "list.reorder") { [weak self] in
-            guard let self, let store = self.store else { return }; self.sort = "manual"; UserDefaults.standard.set("manual", forKey: "\(store.changeNote!).\(self.listID).sort")
-            self.fltr(); self.table.reloadData(); self.table.setEditing(!self.table.isEditing, animated: true)
-        }
-        if ["today","starred"].contains(listID) || pending.isEmpty { reorder.attributes = .disabled }; actions.append(reorder)
-        tu_menu(self, "更多排序", actions, breaks: [3], caption: "更多排序")
     }
     // 提交明确星标意图。
     @objc func tglStar(_ button: UIButton) {
@@ -720,22 +674,11 @@ final class TaskCell: UITableViewCell {
         guard !todayOnly else{return}
         guard let store = store else { rfrsh(); return }
         navigationController?.setNavigationBarHidden(false, animated: false)
-        navigationController?.pushViewController(TaskEdit(store: store, task: task) { [weak self] in self?.rfrsh() }, animated: true)
-    }
-    // 限定手动排序的可移动行。
-    func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool { !routineOnly && listID != "today" && indexPath.section == 0 && !pending.isEmpty && sort == "manual" }
-    // 隐藏重复删除入口。
-    func tableView(_ tableView: UITableView, editingStyleForRowAt indexPath: IndexPath) -> UITableViewCell.EditingStyle { .none }
-    // 只接受同一父级的排序。
-    func tableView(_ tableView: UITableView, targetIndexPathForMoveFromRowAt from: IndexPath, toProposedIndexPath to: IndexPath) -> IndexPath {
-        guard !routineOnly else{return from}
-        guard to.section == 0, to.row < pending.count, (pending[from.row]["parent_id"] as! NSObject).isEqual(pending[to.row]["parent_id"]) else { return from }; return to
-    }
-    // 原子保存排序，失败重新读取。
-    func tableView(_ tableView: UITableView, moveRowAt from: IndexPath, to: IndexPath) {
-        guard !routineOnly else{return}
-        var order = pending; order.insert(order.remove(at: from.row), at: to.row); tableView.reloadData()
-        wrt { store in for (index, task) in order.enumerated() { let id = task["task_id"] as! String; try tu_live(try store.rdTsk(id) as! TaskFields); try store.updTsk(id, fields: ["position": index]) } }
+        if task["list_id"] as? String == TS_RTN_LST {
+            navigationController?.pushViewController(TaskEdit(store: store, task: task) { [weak self] in self?.rfrsh() }, animated: true)
+        } else {
+            navigationController?.pushViewController(TaskDetailScreen(store: store, task: task) { [weak self] in self?.rfrsh() }, animated: true)
+        }
     }
     // 空态重试或创建。
     @objc private func empt() { guard loaded else { return }; if failed { rfrsh() } else { crt() } }

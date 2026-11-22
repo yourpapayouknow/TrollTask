@@ -16,8 +16,6 @@
 - (void)hold:(NSString *)mode occID:(NSString *)occID;
 // 提前展开仍然有效的边栏轮次。
 - (void)resumeOcc:(NSString *)occID;
-// 提交本次打卡证据。
-- (void)check:(NSString *)occID method:(NSString *)method image:(NSData *)image;
 // 通过同一事务提交最多六个附件。
 - (void)check:(NSString *)occID attachments:(NSArray<NSDictionary *> *)attachments;
 @end

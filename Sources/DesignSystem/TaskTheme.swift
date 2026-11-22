@@ -217,11 +217,11 @@ func tu_grade(_ key: String, _ prefix: String, _ rating: Int, rush: Bool = false
     for view in [name, value] as [UIView] { view.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(view) }
     NSLayoutConstraint.activate([
         button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-        name.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+        name.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: TaskTheme.pad),
         name.topAnchor.constraint(equalTo: button.topAnchor, constant: TaskTheme.gap),
         name.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -TaskTheme.gap),
         value.leadingAnchor.constraint(greaterThanOrEqualTo: name.trailingAnchor, constant: TaskTheme.gap),
-        value.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+        value.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -TaskTheme.pad),
         value.centerYAnchor.constraint(equalTo: name.centerYAnchor)
     ])
     if let selected {
@@ -244,6 +244,32 @@ func tu_grade(_ key: String, _ prefix: String, _ rating: Int, rush: Bool = false
 // 创建同组内容的纵向布局。
 func tu_stk(_ views: [UIView]) -> UIStackView {
     let stack = UIStackView(arrangedSubviews: views); stack.axis = .vertical; stack.spacing = TaskTheme.gap; return stack
+}
+// 详情页共用：组头与只读导航行。
+func tu_header(_ title: String) -> UIStackView {
+    let label = tu_lbl(title); label.font = lb_fnt(.subheadline, nil); label.textColor = TaskTheme.muted; label.numberOfLines = 1
+    let row = tu_stk([label, UIView()]); row.axis = .horizontal; row.alignment = .center
+    row.isLayoutMarginsRelativeArrangement = true; row.layoutMargins = .init(top: 4, left: 12, bottom: 4, right: 12)
+    return row
+}
+func tu_link(_ title: String, icon: String? = nil, id: String, muted: Bool = false, action: @escaping () -> Void) -> UIButton {
+    var config = UIButton.Configuration.plain()
+    if let icon { config.image = lb_icon(icon); config.imagePadding = 12 }
+    config.title = title; config.baseForegroundColor = muted ? TaskTheme.muted : TaskTheme.ink
+    config.titleLineBreakMode = .byWordWrapping
+    config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in var value = attributes; value.font = lb_fnt(.body, nil); return value }
+    config.contentInsets = .init(top: 8, leading: 12, bottom: 8, trailing: 40)
+    let button = UIButton(configuration: config); button.contentHorizontalAlignment = .leading
+    button.titleLabel?.numberOfLines = 0
+    button.accessibilityIdentifier = id; button.accessibilityLabel = title
+    button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+    button.imageView?.contentMode = .scaleAspectFit; button.imageView?.tintColor = TaskTheme.muted
+    let arrow = UIImageView(image: lb_icon("down")); arrow.tintColor = TaskTheme.muted; arrow.contentMode = .scaleAspectFit
+    arrow.transform = CGAffineTransform(scaleX: 0.7, y: 0.7).rotated(by: -.pi / 2); arrow.translatesAutoresizingMaskIntoConstraints = false; button.addSubview(arrow)
+    NSLayoutConstraint.activate([arrow.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -12), arrow.centerYAnchor.constraint(equalTo: button.centerYAnchor), arrow.widthAnchor.constraint(equalToConstant: 16), arrow.heightAnchor.constraint(equalToConstant: 16)])
+    TaskPress.attach(button)
+    button.addAction(UIAction { _ in action() }, for: .touchUpInside)
+    return button
 }
 // 将功能行组合为单层卡片，行间使用发丝线。
 func tu_card(_ rows: [UIView]) -> UIView {

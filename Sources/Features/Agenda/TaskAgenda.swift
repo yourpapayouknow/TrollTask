@@ -9,26 +9,6 @@ func tr_draft() -> TaskFields {
             "recurrence": ["RRULE:FREQ=DAILY;INTERVAL=1"], "timezone_id": zone.identifier]
 }
 
-// 将冲突和未估时保留为可处理的独立页面。
-final class TaskAgendaIssues: TaskScreen, UITableViewDataSource, UITableViewDelegate {
-    private let store: TaskStore, rows: [TaskFields]
-    private let table = UITableView(frame: .zero, style: .plain)
-    // 接收当前日程快照，点击时重新检查任务。
-    init(store: TaskStore, rows: [TaskFields]) { self.store = store; self.rows = rows; super.init(nibName: nil, bundle: nil) }
-    // 禁用归档初始化。
-    required init?(coder: NSCoder) { fatalError("Use init(store:rows:)") }
-    // 使用共用全宽列表和动态字体。
-    override func viewDidLoad() { super.viewDidLoad(); title = "待处理安排"; table.dataSource = self; table.delegate = self; table.backgroundColor = .clear; table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 72; table.accessibilityIdentifier = "agenda.problems"; view.addSubview(table); tu_wdth(table, view, inset: 0); NSLayoutConstraint.activate([table.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), table.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)]) }
-    // 返回本日问题数量。
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { max(1,rows.count) }
-    // 原因作为可操作行的副标题。
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell { let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil); cell.backgroundColor = .clear
-        if rows.isEmpty { var content = tu_cell(); content.text = "暂无待处理安排"; cell.contentConfiguration = content; cell.selectionStyle = .none; return cell }
-        let row = rows[indexPath.row], task = row["task"] as! TaskFields; var content = tu_cell(); content.text = task["title"] as? String; content.secondaryText = row["reason"] as? String; if let peer = row["peer"] as? TaskFields { content.secondaryText = (content.secondaryText ?? "") + "：" + (peer["title"] as! String) }; content.textProperties.font = lb_fnt(.body, traitCollection); content.textProperties.color = TaskTheme.ink; content.textProperties.numberOfLines = 0; content.secondaryTextProperties.color = TaskTheme.muted; content.secondaryTextProperties.numberOfLines = 0; cell.contentConfiguration = content; cell.accessoryType = .disclosureIndicator; cell.accessibilityIdentifier = "agenda.problem.\(indexPath.row)"; return cell }
-    // 所有问题继续使用完整编辑器。
-    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { tableView.deselectRow(at: indexPath, animated: true); guard rows.indices.contains(indexPath.row) else { return }; let row = rows[indexPath.row]; do { let task = try store.rdTsk(((row["task"] as! TaskFields)["task_id"] as! String)) as! TaskFields; try tu_live(task);if row["reason"] as? String == "未设置一般任务时段" { navigationController?.pushViewController(TaskRoutineRules(store: store), animated: true) } else { let page = TaskEdit(store: store, task: task, saved: nil); if (row["reason"] as? String)?.contains("估时") == true { page.estTime() }; navigationController?.pushViewController(page, animated: true) } } catch { tu_err(self, error) } }
-}
-
 // 首页与设置共用模板下载和正式常律导入。
 final class TaskRtnPicker:NSObject,UIDocumentPickerDelegate {
     private let store:TaskStore,changed:()->Void
@@ -102,33 +82,6 @@ final class TaskRtnPicker:NSObject,UIDocumentPickerDelegate {
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { importing = false; clear() }
 }
 
-// 周期模板只在显式管理入口展示，不混入今日律。
-final class TaskRoutineRules: TaskScreen, UITableViewDataSource, UITableViewDelegate {
-    private let store: TaskStore, table = UITableView(frame: .zero, style: .plain)
-    private var rows: [TaskFields] = []
-    private lazy var importer=TaskRtnPicker(store:store,host:self){[weak self] in self?.rfrsh()}
-    // 复用唯一任务存储。
-    init(store: TaskStore) { self.store = store; super.init(nibName: nil, bundle: nil) }
-    // 禁用归档初始化。
-    required init?(coder: NSCoder) { fatalError("Use init(store:)") }
-    // 保留模板新增入口。
-    override func viewDidLoad() { super.viewDidLoad(); title = "常律"; table.dataSource = self; table.delegate = self; table.backgroundColor = .clear; table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 72; table.accessibilityIdentifier = "agenda.rules"; view.addSubview(table); tu_wdth(table, view, inset: 0); NSLayoutConstraint.activate([table.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), table.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)]); navigationItem.rightBarButtonItems = [UIBarButtonItem(customView: tu_ibtn("add", "新增常律", "rules.create", self, #selector(crt))), UIBarButtonItem(customView: tu_ibtn("upload", "导入常律", "rules.import", self, #selector(imp)))] }
-    // 编辑返回后重新读取，不展示删除记录。
-    override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated);navigationController?.setNavigationBarHidden(false,animated:false);rfrsh() }
-    // 导入或编辑返回后更新同一模板列表。
-    private func rfrsh() { do { rows = try store.lsPnd() as! [TaskFields]; rows = rows.filter { $0["list_id"] as? String == TS_RTN_LST }; table.reloadData() } catch { tu_err(self, error) } }
-    // 沿用完整编辑器。
-    @objc private func crt() { navigationController?.pushViewController(TaskEdit(store: store, task: nil, draft: tr_draft(), quick: false, saved: nil), animated: true) }
-    // 复用首页相同的时间表导入入口。
-    @objc private func imp() { importer.open() }
-    // 返回模板数量。
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { rows.count }
-    // 显示启用状态和原定时刻。
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell { let row = rows[indexPath.row], cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil); cell.backgroundColor = .clear; var content = tu_cell(); content.text = row["title"] as? String; content.textProperties.font = lb_fnt(.body, traitCollection); content.textProperties.color = TaskTheme.ink; content.textProperties.numberOfLines = 0; let format = DateFormatter(); format.dateFormat = "HH:mm"; content.secondaryText = ((row["routine_enabled"] as? NSNumber)?.boolValue == true ? "已启用" : "已停用") + " · " + ((row["due_at"] as? NSNumber).map { format.string(from: Date(timeIntervalSince1970: $0.doubleValue)) } ?? "未设时刻"); content.secondaryTextProperties.color = TaskTheme.muted; cell.contentConfiguration = content; cell.accessoryType = .disclosureIndicator; return cell }
-    // 点击模板编辑现有规则。
-    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) { tableView.deselectRow(at: indexPath, animated: true); navigationController?.pushViewController(TaskEdit(store: store, task: rows[indexPath.row], saved: nil), animated: true) }
-}
-
 // 按单个附件读取并交给原生QuickLook，不一次解码整组图片。
 final class TaskProofScreen: TaskScreen, UITableViewDataSource, UITableViewDelegate, QLPreviewControllerDataSource {
     private let store: TaskStore, occurrence: String
@@ -156,7 +109,7 @@ final class TaskProofScreen: TaskScreen, UITableViewDataSource, UITableViewDeleg
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil); cell.backgroundColor = .clear
         var content = tu_cell(); content.textProperties.font = lb_fnt(.body, traitCollection); content.textProperties.color = TaskTheme.ink; content.textProperties.numberOfLines = 0; content.secondaryTextProperties.color = TaskTheme.muted
         if items.isEmpty { content.text = failure == nil ? "无附件" : "重新读取"; cell.selectionStyle = failure == nil ? .none : .default }
-        else { let item = items[indexPath.row]; content.text = (item["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "图片\(indexPath.row+1)"; content.image = lb_icon(item["method"] as? String == "file" ? "file" : "image"); content.secondaryText = ByteCountFormatter.string(fromByteCount: (item["image_bytes"] as! NSNumber).int64Value, countStyle: .file); cell.accessoryType = .disclosureIndicator }
+        else { let item = items[indexPath.row]; content.text = (item["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "图片\(indexPath.row+1)"; content.image = lb_icon(item["method"] as? String == "file" ? "folder" : "pic"); content.secondaryText = ByteCountFormatter.string(fromByteCount: (item["image_bytes"] as! NSNumber).int64Value, countStyle: .file); cell.accessoryType = .disclosureIndicator }
         cell.accessibilityIdentifier = "proof.item.\(indexPath.row)"; content.imageProperties.tintColor = lb_acnt(); cell.contentConfiguration = content; return cell
     }
     // 只导出用户点击的附件，文件名不能逃出临时目录。

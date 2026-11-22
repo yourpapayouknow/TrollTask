@@ -44,9 +44,7 @@ static id ts_cmd(TaskStore *store, NSArray *args, NSError **error) {
         return version >= 0 ? @{@"schema_version": @(version), @"path": store.path, @"sqlite_version": @(sqlite3_libversion())} : nil;
     }
     if ([command isEqual:@"snapshot"] && args.count == 1) return [store snapshot:error];
-    if ([command isEqual:@"day-order"] && args.count==2){id at=ts_json(args[1],error);return ts_num(at) ? [TaskDayOrder context:store at:[at doubleValue] error:error] : ts_bad(error);}
-    if ([command isEqual:@"apply-order"] && args.count==4){id context=ts_json(args[1],error),result=ts_json(args[2],error),at=ts_json(args[3],error);return [context isKindOfClass:NSDictionary.class] && [result isKindOfClass:NSDictionary.class] && ts_num(at) ? ([TaskDayOrder apply:store context:context result:result at:[at doubleValue] error:error] ? @{@"applied":@YES}:nil) : ts_bad(error);}
-    // 核对原轮次后通知唯一调度器，不能直接完成任务。
+        // 核对原轮次后通知唯一调度器，不能直接完成任务。
     if ([command isEqual:@"retry"] && args.count == 3) {
         id task=ts_json(args[1],error),stamp=ts_json(args[2],error);
         if(![task isKindOfClass:NSDictionary.class] || !ts_num(stamp))return ts_bad(error);

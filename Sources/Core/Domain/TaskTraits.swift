@@ -2,9 +2,18 @@
 enum TaskTraits {
     // 缺失评估置后，同值保持创建时间与身份的稳定次序。
     static func order(_ tasks: [TaskFields], by mode: String) -> [TaskFields] {
-        let key = ["manual":"position", "star":"starred_at", "urgency":"urgency", "difficulty":"difficulty", "effort":"planned_duration"][mode]
+        if mode == "name" {
+            return tasks.sorted { a, b in
+                let order = (a["title"] as? String ?? "").localizedStandardCompare(b["title"] as? String ?? "")
+                if order != .orderedSame { return order == .orderedAscending }
+                let ac = (a["created_at"] as? NSNumber)?.doubleValue ?? 0, bc = (b["created_at"] as? NSNumber)?.doubleValue ?? 0
+                if ac != bc { return ac < bc }
+                return (a["task_id"] as? String ?? "") < (b["task_id"] as? String ?? "")
+            }
+        }
+        let key = ["urgency":"urgency", "difficulty":"difficulty"][mode]
         guard let key else { return tasks }
-        let descending = ["star", "urgency", "difficulty"].contains(mode)
+        let descending = ["urgency", "difficulty"].contains(mode)
         // 过滤未设置的评估与异常数值。
         func number(_ task: TaskFields) -> Double? {
             if mode == "urgency", (task["rush"] as? NSNumber)?.boolValue == true { return 4 }

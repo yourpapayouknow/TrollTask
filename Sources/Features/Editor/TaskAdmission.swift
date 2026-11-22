@@ -7,7 +7,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     private var fields:TaskFields,parts:[TaskFields],context:TaskFields?,estimate:TaskFields?,phase=IntakePhase.editing
     private var lastOffline=false,completed=Set<String>()
     private var request:URLSessionDataTask?,ticket=UUID(),ddl=false,escalated=false
-    private var split=false,autoCreate=false,splitManual=false,splitUnreachable=false
+    private var split=false,autoCreate=false,splitManual=false,splitUnreachable=false,partsDirty=false
     private var freeLabel:UILabel!,gaugeTicket=UUID(),gaugeWork:DispatchWorkItem?
     private var splitSwitch:UISwitch?
     private let name=UITextView(),notes=UITextView(),start=UIDatePicker(),end=UIDatePicker(),startTime=UIDatePicker(),endTime=UIDatePicker(),minutes=UITextField()
@@ -15,13 +15,15 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     private var dateWidths:[NSLayoutConstraint]=[],dateRows:[UIStackView]=[]
     private var dayOnly: Bool { TaskWindow.dayOnly(fields) }
     private var newTodo: Bool { dayOnly && fields["task_id"] == nil }
+    private var existing: Bool { fields["task_id"] is String }
+    private var childEdit: Bool { existing && fields["parent_id"] is String }
     // 接收未提交的输入与可编辑子任务。
     init(store:TaskStore,fields:TaskFields,parts:[TaskFields]=[],estimate:TaskFields?=nil,split:Bool?=nil,manual:Bool?=nil,unreachable:Bool?=nil,done:@escaping()->Void) {self.store=store;self.fields=fields;self.parts=parts;self.done=done;self.estimate=estimate;self.split=split ?? (((fields["difficulty"] as? NSNumber)?.intValue ?? 0) != 1);self.splitManual=manual ?? false;self.splitUnreachable=unreachable ?? false;if let id=fields["task_id"] as? String{self.fields["_baseline"]=try? TaskIntake.sig(store,id,strict:true)};super.init(nibName:nil,bundle:nil);preferredContentSize=CGSize(width:540,height:UIScreen.main.bounds.height)}
     // 禁用归档初始化。
     required init?(coder:NSCoder){fatalError("Use init(store:fields:parts:done:)")}
     // 用统一表单展示窗口、工时和功能入口。
     override func viewDidLoad(){
-        super.viewDidLoad();title="创建评估"
+        super.viewDidLoad();title=existing ? "编辑任务" : "创建评估"
         for (view,key) in [(name,"title"),(notes,"notes")] {tu_fld(view);view.font=lb_fnt(.body,traitCollection);view.adjustsFontForContentSizeCategory=true;view.textColor=TaskTheme.ink;view.isScrollEnabled=false;view.delegate=self;view.accessibilityIdentifier="intake."+key;view.text=fields[key] as? String ?? "";if view === notes {view.heightAnchor.constraint(greaterThanOrEqualToConstant:72).isActive=true}}
         let zone=TimeZone(identifier:fields["timezone_id"] as? String ?? "") ?? .current
         for (picker,key) in [(start,"start"),(end,"end"),(startTime,"start.time"),(endTime,"end.time")] {picker.datePickerMode = key.hasSuffix("time") ? .time:.date;picker.maximumContentSizeCategory = .extraExtraExtraLarge;picker.preferredDatePickerStyle = .compact;picker.locale=Locale(identifier:"zh_CN");picker.timeZone=zone;picker.accessibilityIdentifier="intake."+key;picker.addTarget(self,action:#selector(chg),for:.valueChanged);picker.heightAnchor.constraint(equalToConstant:44).isActive=true}
@@ -36,11 +38,10 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         steps=tu_btn("拆分子任务",nil,self,#selector(editParts));steps.accessibilityIdentifier="intake.parts"
         offline=tu_btn("离线创建",nil,self,#selector(local));offline.accessibilityIdentifier="intake.offline";offline.isHidden=true
         let single=tu_btn("改为单次",nil,self,#selector(single));single.accessibilityIdentifier="intake.single";single.isHidden=(fields["recurrence"] as? [String] ?? []).isEmpty
-        let rules=tu_btn("编辑常律","calendar",self,#selector(routines));rules.accessibilityIdentifier="intake.routines"
-        save=tu_btn("确认创建",nil,self,#selector(confirm));save.accessibilityIdentifier="intake.save";tu_fill(save,primary:true)
+        save=tu_btn(existing ? "保存修改" : "确认创建",nil,self,#selector(confirm));save.accessibilityIdentifier="intake.save";tu_fill(save,primary:true)
         save.titleLabel?.numberOfLines = 1; save.contentHorizontalAlignment = .center; var saveConfig=save.configuration; saveConfig?.titleLineBreakMode = .byTruncatingTail; save.configuration=saveConfig
         steps.contentHorizontalAlignment = .center
-        for button in [steps!,offline!,single,rules] { var config=button.configuration; config?.baseForegroundColor=TaskTheme.ink; button.configuration=config }
+        for button in [steps!,offline!,single] { var config=button.configuration; config?.baseForegroundColor=TaskTheme.ink; button.configuration=config }
         dateRows=[(start,startTime),(end,endTime)].map { day,clock -> UIStackView in
             let space=UIView();space.heightAnchor.constraint(equalToConstant:0).isActive=true;let row=tu_stk(dayOnly ? [day,space] : [day,clock,space]);row.axis = .horizontal;row.alignment = .center;return row
         };let begin=dateRows[0],finish=dateRows[1]
@@ -69,9 +70,11 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
             splitSwitch = toggle
             let row = tu_row("拆分子任务", toggle); row.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
             controls.append(row)
+        } else if existing && !childEdit {
+            controls.append(tu_grade("urgency", "intake", (fields["urgency"] as? NSNumber)?.intValue ?? 0, rush: (fields["rush"] as? NSNumber)?.boolValue == true) { [weak self] value in guard let self else{return}; self.fields["urgency"] = min(value, 3); self.fields["rush"] = value == 4 ? 1 : 0; self.chg() })
+            controls.append(tu_grade("difficulty", "intake", (fields["difficulty"] as? NSNumber)?.intValue ?? 0) { [weak self] value in guard let self else{return}; self.fields["difficulty"] = value; self.chg() })
         }
         controls += [offline, single]
-        if (fields["list_id"] as? String) == TS_RTN_LST { controls.append(rules) }
         let form = tu_stk(controls); let scroll = tu_form(self, form, "intake.content"); form.spacing = TaskTheme.gap
         form.isLayoutMarginsRelativeArrangement = true; form.directionalLayoutMargins = .init(top: 0, leading: 0, bottom: 0, trailing: 4)
         let footer = UIView(); footer.backgroundColor = TaskTheme.base; footer.translatesAutoresizingMaskIntoConstraints = false
@@ -79,10 +82,10 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         view.constraints.filter { ($0.firstItem as? UIView) === scroll && $0.firstAttribute == .bottom }.forEach { $0.isActive = false }
         let footerRule = TaskHair(); footerRule.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(footerRule)
         freeLabel=tu_lbl("空余—"); freeLabel.font=lb_fnt(.subheadline,traitCollection); freeLabel.textColor=TaskTheme.muted; freeLabel.accessibilityIdentifier="intake.free"; freeLabel.isHidden = !newTodo; freeLabel.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(freeLabel)
-        if !newTodo { steps.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(steps) }
+        if !newTodo && !childEdit { steps.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(steps) }
         save.translatesAutoresizingMaskIntoConstraints = false; footer.addSubview(save)
-        var footerRules: [NSLayoutConstraint] = [scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -TaskTheme.gap), footer.leadingAnchor.constraint(equalTo: view.leadingAnchor), footer.trailingAnchor.constraint(equalTo: view.trailingAnchor), footer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), footer.heightAnchor.constraint(equalToConstant: newTodo ? 76 : 96), footerRule.leadingAnchor.constraint(equalTo: footer.leadingAnchor), footerRule.trailingAnchor.constraint(equalTo: footer.trailingAnchor), footerRule.topAnchor.constraint(equalTo: footer.topAnchor), footerRule.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale), save.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), save.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), save.bottomAnchor.constraint(equalTo: footer.bottomAnchor), save.heightAnchor.constraint(equalToConstant: 44), freeLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), freeLabel.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), freeLabel.bottomAnchor.constraint(equalTo: save.topAnchor, constant: -4)]
-        if !newTodo { footerRules += [steps.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), steps.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), steps.topAnchor.constraint(equalTo: footer.topAnchor), steps.heightAnchor.constraint(equalToConstant: 44)] }
+        var footerRules: [NSLayoutConstraint] = [scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -TaskTheme.gap), footer.leadingAnchor.constraint(equalTo: view.leadingAnchor), footer.trailingAnchor.constraint(equalTo: view.trailingAnchor), footer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -8), footer.heightAnchor.constraint(equalToConstant: newTodo || childEdit ? 76 : 96), footerRule.leadingAnchor.constraint(equalTo: footer.leadingAnchor), footerRule.trailingAnchor.constraint(equalTo: footer.trailingAnchor), footerRule.topAnchor.constraint(equalTo: footer.topAnchor), footerRule.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale), save.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), save.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), save.bottomAnchor.constraint(equalTo: footer.bottomAnchor), save.heightAnchor.constraint(equalToConstant: 44), freeLabel.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), freeLabel.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), freeLabel.bottomAnchor.constraint(equalTo: save.topAnchor, constant: -4)]
+        if !newTodo && !childEdit { footerRules += [steps.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), steps.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), steps.topAnchor.constraint(equalTo: footer.topAnchor), steps.heightAnchor.constraint(equalToConstant: 44)] }
         NSLayoutConstraint.activate(footerRules)
         scroll.contentInset.bottom = TaskTheme.gap; scroll.verticalScrollIndicatorInsets.bottom = TaskTheme.gap
         if newTodo {
@@ -152,12 +155,13 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
             else { save.isEnabled = true; button?.title = (!parts.isEmpty || !split) ? "评估并创建" : "下一步" }
         }
         else if phase == .checking { save.isEnabled = true; button?.title = "取消评估" }
-        else if phase == .saving || phase == .done { save.isEnabled = false; button?.title = fields["task_id"] == nil ? "确认创建" : "保存评估" }
-        else if estimate == nil { save.isEnabled = true; button?.title = "智能评估" }
+        else if phase == .saving || phase == .done { save.isEnabled = false; button?.title = fields["task_id"] == nil ? "确认创建" : "保存修改" }
+        else if estimate == nil { save.isEnabled = true; button?.title = fields["task_id"] == nil ? "智能评估" : "保存修改" }
         else if result == nil { save.isEnabled = false; button?.title = "填写分钟" }
-        else { save.isEnabled = true; button?.title = state=="ddl" ? "确认赶DDL" : ready ? (fields["task_id"] == nil ? "确认创建" : "保存评估") : "查看评估" }
+        else { save.isEnabled = true; button?.title = state=="ddl" ? "确认赶DDL" : ready ? (fields["task_id"] == nil ? "确认创建" : "保存修改") : "查看评估" }
         save.configuration=button
         save.accessibilityValue=result?["reason"] as? String ?? "等待评估"
+        if phase != .checking, (name.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { save.isEnabled = false }
     }
     // 普通待办先快速评估，复杂结果只升级一次；DDL使用最高服务档。
     @objc private func evaluate(){if phase == .checking{cancel();return};escalated=false;ddl=false;run(false)}
@@ -190,7 +194,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     // 外部修改时保留本地草稿，只有用户选择重载才覆盖表单。
     private func failure(_ error:Error){guard error.localizedDescription=="任务已变更，请重载" else{tu_err(self,error);return};let alert=UIAlertController(title:"任务已变更",message:nil,preferredStyle:.alert);alert.addAction(UIAlertAction(title:"保留草稿",style:.cancel));alert.addAction(UIAlertAction(title:"载入最新",style:.destructive){[weak self] _ in self?.reload()});present(alert,animated:true)}
     // 重新读取最新任务和子任务后恢复可评估状态。
-    private func reload(){guard let id=fields["task_id"] as? String else{return};do{let latest=try store.rdTsk(id) as! TaskFields;fields=latest.filter{TaskIntake.keys.contains($0.key)};fields["task_id"]=id;fields["_baseline"]=try TaskIntake.sig(store,id,strict:true);let all=try store.lsTsks() as! [TaskFields];parts=all.filter{$0["parent_id"] as? String==id && ($0["deleted"] as? Bool)==false}.sorted{($0["position"] as! NSNumber).intValue<($1["position"] as! NSNumber).intValue}.map{$0.filter{["task_id","title","notes","planned_duration"].contains($0.key)}};completed=Set(all.filter{$0["status"] as? String=="completed"}.map{$0["task_id"] as! String});name.text=latest["title"] as? String;notes.text=latest["notes"] as? String;if let value=latest["due_at"] as? NSNumber{start.date=Date(timeIntervalSince1970:value.doubleValue);startTime.date=start.date};if let value=latest["deadline_at"] as? NSNumber{end.date=Date(timeIntervalSince1970:value.doubleValue);endTime.date=end.date};let finished=parts.filter{completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};minutes.text=(latest["planned_duration"] as? NSNumber).map{String(Int(ceil(max(0,$0.doubleValue-finished)/60)))} ?? "";chg()}catch{tu_err(self,error)}}
+    private func reload(){guard let id=fields["task_id"] as? String else{return};do{let latest=try store.rdTsk(id) as! TaskFields;fields=latest.filter{TaskIntake.keys.contains($0.key)};fields["task_id"]=id;fields["_baseline"]=try TaskIntake.sig(store,id,strict:true);let all=try store.lsTsks() as! [TaskFields];parts=all.filter{$0["parent_id"] as? String==id && ($0["deleted"] as? Bool)==false}.sorted{($0["position"] as! NSNumber).intValue<($1["position"] as! NSNumber).intValue}.map{$0.filter{TaskIntake.partKeys.contains($0.key)}};completed=Set(all.filter{$0["status"] as? String=="completed"}.map{$0["task_id"] as! String});name.text=latest["title"] as? String;notes.text=latest["notes"] as? String;if let value=latest["due_at"] as? NSNumber{start.date=Date(timeIntervalSince1970:value.doubleValue);startTime.date=start.date};if let value=latest["deadline_at"] as? NSNumber{end.date=Date(timeIntervalSince1970:value.doubleValue);endTime.date=end.date};let finished=parts.filter{completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};minutes.text=(latest["planned_duration"] as? NSNumber).map{String(Int(ceil(max(0,$0.doubleValue-finished)/60)))} ?? "";chg()}catch{tu_err(self,error)}}
     // 展示可理解的评估原因、投入区间、容量和实际模型；排不下时提供延后拆分。
     @objc private func info(){guard let result=verdict(),let estimate else{return};let formatter=DateFormatter();formatter.timeZone=start.timeZone;formatter.dateFormat=dayOnly ? "MM-dd" : "MM-dd HH:mm";var message="最低\(Int((result["minimum"] as! NSNumber).doubleValue/60))分钟\n建议\(Int((result["recommended"] as! NSNumber).doubleValue/60))分钟\n上限\(Int((result["maximum"] as! NSNumber).doubleValue/60))分钟\n可用\(Int((result["capacity"] as! NSNumber).doubleValue/60))分钟"
         if let end=result["suggested_end"] as? NSNumber{message+="\n建议结束："+formatter.string(from:suggestedDay(end))};if let model=estimate["model"] as? String{message+="\n模型："+model}
@@ -209,16 +213,14 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     // 结束恰好到日界时仍展示前一天为截止日期。
     private func suggestedDay(_ value: NSNumber) -> Date { Date(timeIntervalSince1970: value.doubleValue - (dayOnly ? 1 : 0)) }
     // 编辑草稿步骤，不用临时父任务污染正式数据库。
-    @objc private func editParts(){if !(fields["recurrence"] as? [String] ?? []).isEmpty{tu_err(self,TaskAI.err("请先改为单次任务"));return};cancel();let suggestions=parts.isEmpty ? estimate?["steps"] as? [TaskFields] ?? []:parts;let rows=suggestions.map{row->TaskFields in var row=row;if row["task_id"]==nil{row["task_id"]=UUID().uuidString.lowercased()};return row}
+    @objc private func editParts(){if childEdit{return};if !(fields["recurrence"] as? [String] ?? []).isEmpty{tu_err(self,TaskAI.err("请先改为单次任务"));return};cancel();let suggestions=parts.isEmpty ? estimate?["steps"] as? [TaskFields] ?? []:parts;let rows=suggestions.map{row->TaskFields in var row=row;if row["task_id"]==nil{row["task_id"]=UUID().uuidString.lowercased()};return row}
         var draft=input();if !ddl,let recommended=estimate?["recommended_minutes"] as? NSNumber{draft["planned_duration"]=recommended.doubleValue*60}
-        navigationController?.pushViewController(TaskSplitScreen(store:store,draft:draft,parts:rows,estimate:estimate,manual:splitManual,unreachable:splitUnreachable){[weak self] notes,rows,create,manual,unreachable in guard let self else{return};self.notes.text=notes;self.parts=rows;self.splitManual=manual;self.splitUnreachable=unreachable;let total=rows.filter{!self.completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};self.minutes.text=String(Int(ceil(total/60)));if create,!rows.isEmpty,let raw=try? self.store.evaluate(fields:self.input(),parts:rows,now:Date().timeIntervalSince1970),let dry=raw as? TaskFields,(dry["feasible"] as? Bool)==true{let days=(dry["placements"] as? [Any] ?? []).compactMap{($0 as? NSDictionary)?["day_at"] as? NSNumber}.map{$0.doubleValue};if let last=days.max(){self.end.date=Date(timeIntervalSince1970:last);self.endTime.date=self.end.date}};self.chg();if create{if unreachable{self.startOffline(true)}else{self.autoCreate=true;self.run(false)}}},animated:true)
+        navigationController?.pushViewController(TaskSplitScreen(store:store,draft:draft,parts:rows,estimate:estimate,manual:splitManual,unreachable:splitUnreachable){[weak self] notes,rows,create,manual,unreachable in guard let self else{return};self.notes.text=notes;self.parts=rows;self.partsDirty=true;self.splitManual=manual;self.splitUnreachable=unreachable;let total=rows.filter{!self.completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)};self.minutes.text=String(Int(ceil(total/60)));if create,!rows.isEmpty,let raw=try? self.store.evaluate(fields:self.input(),parts:rows,now:Date().timeIntervalSince1970),let dry=raw as? TaskFields,(dry["feasible"] as? Bool)==true{let days=(dry["placements"] as? [Any] ?? []).compactMap{($0 as? NSDictionary)?["day_at"] as? NSNumber}.map{$0.doubleValue};if let last=days.max(){self.end.date=Date(timeIntervalSince1970:last);self.endTime.date=self.end.date}};self.chg();if create{if unreachable{self.startOffline(true)}else{self.autoCreate=true;self.run(false)}}},animated:true)
     }
     // 离线仅提供短窗口、有效估时与明确确认的例外。
     @objc private func local(){startOffline(false)}
     // 直接进入离线门禁时不受入口可见性限制。
     private func startOffline(_ direct:Bool){guard direct || !offline.isHidden else{return};do {let ctx=try TaskIntake.ctx(store,fields:input() as NSDictionary,parts:parts as NSArray,at:Date().timeIntervalSince1970) as! TaskFields;context=ctx;estimate=["offline":true];phase = .offline;ddl=false;render();if verdict()?["state"] as? String != "offline"{info()}}catch{tu_err(self,error)}}
-    // 常律编辑返回后必须重新评估容量。
-    @objc private func routines(){chg();navigationController?.pushViewController(TaskRoutineRules(store:store),animated:true)}
     // 重复与子任务沿用互斥规则，由用户明确选择改单次。
     @objc private func single(){tu_cfrm(self,"改为单次任务"){[weak self] in guard let self else{return};self.fields["recurrence"]=[];self.fields["recurrence_type"]="none";self.fields["recurrence_interval"]=1;self.chg()}}
     // 拆分开关只改变后续走向，不丢弃已有估时。
@@ -226,6 +228,7 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
     // 新建按拆分开关走创建或下一步，已有任务保留原门禁。
     @objc private func confirm(){
         if phase == .checking {cancel();return};guard phase != .saving,phase != .done else{return}
+        if existing {saveExisting();return}
         if newTodo {
             if !parts.isEmpty {autoCreate=true;if estimate == nil{run(false)}else if context == nil{resync()}else{finishCreate()};return}
             if split {editParts();return}
@@ -239,6 +242,32 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         guard ["ready","offline","ddl"].contains(state ?? "") else {info();return}
         if state=="ddl"{let alert=UIAlertController(title:"确认赶DDL",message:"当前投入低于建议。确认后使用最高服务档重新规划子任务。",preferredStyle:.alert);alert.addAction(UIAlertAction(title:"返回调整",style:.cancel));alert.addAction(UIAlertAction(title:"仍然创建",style:.default){[weak self] _ in self?.run(true)});present(alert,animated:true);return}
         if state=="offline"{let alert=UIAlertController(title:"离线创建",message:"当前工时由你确认，联网后可重新评估。",preferredStyle:.alert);alert.addAction(UIAlertAction(title:"返回调整",style:.cancel));alert.addAction(UIAlertAction(title:"确认创建",style:.default){[weak self] _ in self?.commit()});present(alert,animated:true);return};commit()
+    }
+    // 编辑只写回字段和步骤，不触发网络评估。
+    private func saveExisting(){
+        guard let id=fields["task_id"] as? String else{return}
+        guard let latest=try? store.rdTsk(id) as? TaskFields,(latest["deleted"] as? NSNumber)?.boolValue != true else{tu_err(self,TaskAI.err("任务已处理或删除"));return}
+        let value=input()
+        do{try TaskStore.vldTxt(value["title"] as? String ?? "",notes:value["notes"] as? String ?? "")}catch{tu_err(self,error);return}
+        var patch=value.filter{TaskIntake.keys.contains($0.key)}
+        for key in ["task_id","parent_id","position","timezone_id","recurrence_type","recurrence_interval","recurrence"]{patch.removeValue(forKey:key)}
+        let finished=parts.filter{completed.contains($0["task_id"] as? String ?? "")}.reduce(0.0){$0+(($1["planned_duration"] as? NSNumber)?.doubleValue ?? 0)}
+        if let amount=Double(minutes.text ?? ""){patch["planned_duration"]=amount*60+finished}else if parts.isEmpty{patch["planned_duration"]=NSNull()}
+        if latest["due_at"] == nil || latest["due_at"] is NSNull { patch.removeValue(forKey:"due_at");patch.removeValue(forKey:"schedule_kind") }
+        if latest["deadline_at"] == nil || latest["deadline_at"] is NSNull { patch.removeValue(forKey:"deadline_at");patch.removeValue(forKey:"deadline_kind") }
+        patch=patch.filter { key,value in guard let old=latest[key] as? NSObject,let new=value as? NSObject else{return true};return !old.isEqual(new) }
+        if patch.isEmpty,!partsDirty{phase = .done;render();done();return}
+        let dirty=partsDirty; phase = .saving; render(); view.endEditing(true)
+        DispatchQueue.global(qos:.userInitiated).async {
+            var failure:Error?
+            do{if !patch.isEmpty{try self.store.updTsk(id,fields:patch)}
+                if dirty,!self.childEdit{let expected=try TaskDivision.drft(self.store,task:id);_ = try TaskDivision.aply(self.store,task:id,parts:self.parts as NSArray,expected:expected)}
+            }catch{failure=error}
+            DispatchQueue.main.async{
+                if let failure{self.phase = .editing;self.render();tu_err(self,failure);return}
+                self.phase = .done;self.render();TaskHaptics.success();self.done()
+            }
+        }
     }
     // 评估完成后的自动创建分支，拆分不足时保存草稿并引导进入拆分。
     private func finishCreate(){
@@ -268,8 +297,12 @@ private enum IntakePhase {case editing,checking,review,offline,saving,done}
         var data:TaskFields=["fields":input(),"parts":parts,"split":split,"manual":splitManual,"unreachable":splitUnreachable,"saved_at":Date().timeIntervalSince1970]
         if let estimate {data["estimate"]=estimate}
         DispatchQueue.global(qos:.utility).async {
-            do{try self.store.storeDraft(data as [AnyHashable:Any])}catch{NSLog("保存草稿失败：%@",error as NSError)}
-            DispatchQueue.main.async{completion?()}
+            var failure:Error?
+            do{try self.store.storeDraft(data as [AnyHashable:Any])}catch{failure=error}
+            DispatchQueue.main.async{
+                if let failure{tu_err(self,failure);return}
+                completion?()
+            }
         }
     }
     // 右上角保存并退出创建页。

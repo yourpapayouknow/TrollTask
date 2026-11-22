@@ -294,7 +294,7 @@ private final class TaskArchiveDetail: TaskScreen {
         var fields = [name, completed, state] as [UIView]
         if let notes = row["notes"] as? String, !notes.isEmpty { fields.append(tu_lbl(notes)) }
         if row["occurrence_id"] is String {
-            let proof = tu_btn("打卡附件", "file", self, #selector(openProof))
+            let proof = tu_btn("打卡附件", "folder", self, #selector(openProof))
             proof.accessibilityIdentifier = "archive.proof"
             fields.append(proof)
         }

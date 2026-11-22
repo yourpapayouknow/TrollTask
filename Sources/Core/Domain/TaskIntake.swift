@@ -1,6 +1,8 @@
 // 将创建评估与提醒轮次分开，所有正式保存共用原子门禁。
 @objc(TaskIntake) final class TaskIntake:NSObject {
     static let keys:Set<String>=["title","notes","due_at","timezone_id","recurrence_type","recurrence_interval","list_id","parent_id","position","starred","schedule_kind","planned_duration","deadline_at","deadline_kind","recurrence","urgency","difficulty","rush","density","planning_mode"]
+    // 拆分步骤只保留存储层接受的四个键。
+    static let partKeys:Set<String>=["task_id","title","notes","planned_duration"]
     // 对评估有关的任务字段和全部后代签名。
     static func sig(_ store:TaskStore,_ id:String,strict:Bool=false)throws->[TaskFields] {
         let all=try store.lsTsks() as! [TaskFields];var family=Set([id]),changed=true

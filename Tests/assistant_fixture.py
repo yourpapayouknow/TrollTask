@@ -10,19 +10,15 @@ class Handler(SimpleHTTPRequestHandler):
   body=jld(self.rfile.read(int(self.headers['Content-Length'])))
   user=jld(body['messages'][-1]['content']);model=body['model']
   with self.server.log.open('a') as output:output.write(jdmp({'model':model,'mode':user.get('mode'),'ddl':user.get('ddl',False),'has_notes':'"notes"' in jdmp(user)})+'\n')
-  if user.get('mode')=='order':result={'order':[r['task_id'] for r in reversed(user['tasks'])]}
-  else:
-   urgent=user.get('ddl',False);total=user.get('total_minutes',45) if urgent else 60 if 'DDL' in user.get('title','') else 30
-   minimum=30 if 'DDL' in user.get('title','') else 15
-   steps=[{'title':'整理材料','notes':'输出清单','minutes':total}]
-   if urgent:steps=[{'title':'先做核心','notes':'核心验收','minutes':20},{'title':'检查提交','notes':'提交成果','minutes':total-20}]
-   result={'title':user.get('title','测试'),'notes':'明确成果','minimum_minutes':minimum,'recommended_minutes':60 if minimum==30 else 30,'maximum_minutes':90 if minimum==30 else 60,'difficulty':0,'steps':steps}
+  urgent=user.get('ddl',False);total=user.get('total_minutes',45) if urgent else 60 if 'DDL' in user.get('title','') else 30
+  minimum=30 if 'DDL' in user.get('title','') else 15
+  steps=[{'title':'整理材料','notes':'输出清单','minutes':total}]
+  if urgent:steps=[{'title':'先做核心','notes':'核心验收','minutes':20},{'title':'检查提交','notes':'提交成果','minutes':total-20}]
+  result={'title':user.get('title','测试'),'notes':'明确成果','minimum_minutes':minimum,'recommended_minutes':60 if minimum==30 else 30,'maximum_minutes':90 if minimum==30 else 60,'difficulty':0,'steps':steps}
   variant=getattr(self.server,'variant','')
   if variant=='range':result['minimum_minutes']=True
   if variant=='sum':result['recommended_minutes']=99
   if variant=='negative':result['steps'][0]['minutes']=-1
-  if variant=='duplicate':result['order']=[user['tasks'][0]['task_id']]*len(user['tasks'])
-  if variant=='foreign':result['order']=['33333333-3333-4333-8333-999999999999']
   message={'content':jdmp(result)}
   if variant=='tool':message['tool_calls']=[{'name':'execute'}]
   data=jdmp({'model':'silent-fallback' if variant=='model' else model,'choices':[{'message':message}]}).encode()

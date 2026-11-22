@@ -141,11 +141,11 @@ static void ck_run(NSString *root) {
     ck_req(candidate && [candidate[@"scheduled_at"] isEqual:alert[@"scheduled_at"]] && [candidate[@"cycle_at"] isEqual:alert[@"cycle_at"]]);
     ck_req([store claim:candidate revision:[future[@"revision"] longLongValue] at:[hold[@"hold_until"] doubleValue]+0.01 error:nil]!=nil);
     ck_req(![store hldOcc:id mode:@"snooze" error:nil]);
-    ck_req([store chkOcc:id method:@"image" image:image error:nil]);
+    ck_req([store chkOcc:id attachments:@[@{@"method":@"image",@"image":image}] error:nil]);
     ck_req([[store rdChk:id image:YES error:nil][@"image"] isEqual:image]);
     ck_req([[reopened rdChk:id image:NO error:nil][@"method"] isEqual:@"image"]);
     ck_req([[store rdTsk:alert[@"task_id"] error:nil][@"status"] isEqual:@"completed"]);
-    ck_req(![store chkOcc:id method:@"image" image:image error:nil]);
+    ck_req(![store chkOcc:id attachments:@[@{@"method":@"image",@"image":image}] error:nil]);
 
     NSDictionary *screen=ck_clm(store,YES); NSString *sid=screen[@"occurrence_id"];
     NSDictionary *shot=[store hldOcc:sid mode:@"screenshot" error:nil];
@@ -156,25 +156,25 @@ static void ck_run(NSString *root) {
     ck_req([store hldOcc:sid mode:@"screenshot" error:nil]!=nil);
     ck_req([store rsmOcc:sid error:nil]);
     ck_req([store hldOcc:sid mode:@"screenshot" error:nil]!=nil);
-    ck_req([store rsmOcc:sid error:nil] && [store chkOcc:sid method:@"screenshot" image:image error:nil]);
+    ck_req([store rsmOcc:sid error:nil] && [store chkOcc:sid attachments:@[@{@"method":@"screenshot",@"image":image}] error:nil]);
     ck_req([[store rdTsk:screen[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"]);
     ck_req([[store rdTsk:screen[@"task_id"] error:nil][@"due_at"] isEqual:screen[@"cycle_at"]]);
 
     NSDictionary *bad=ck_clm(store,NO); NSString *bid=bad[@"occurrence_id"];
     revision=[store revision:nil];
     for (NSData *bytes in @[[NSData data], [@"not an image" dataUsingEncoding:NSUTF8StringEncoding]])
-        ck_req(![store chkOcc:bid method:@"camera" image:bytes error:nil]);
-    ck_req(![store chkOcc:bid method:@"unknown" image:image error:nil]);
+        ck_req(![store chkOcc:bid attachments:@[@{@"method":@"camera",@"image":bytes}] error:nil]);
+    ck_req(![store chkOcc:bid attachments:@[@{@"method":@"unknown",@"image":image}] error:nil]);
     ck_req([store revision:nil]==revision && [[store lsOcc:bad[@"task_id"] error:nil].firstObject[@"status"] isEqual:@"presented"]);
     ck_sql(path,@"CREATE TRIGGER proof_failure BEFORE INSERT ON reminder_checkins BEGIN SELECT RAISE(ABORT,'test'); END;");
-    ck_req(![store chkOcc:bid method:@"camera" image:image error:nil]);
+    ck_req(![store chkOcc:bid attachments:@[@{@"method":@"camera",@"image":image}] error:nil]);
     ck_req([[store rdTsk:bad[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"] && [store revision:nil]==revision);
     ck_req([[store lsOcc:bad[@"task_id"] error:nil].firstObject[@"status"] isEqual:@"presented"] && ![store rdChk:bid image:NO error:nil]);
     ck_sql(path,@"DROP TRIGGER proof_failure;");
-    ck_req([store chkOcc:bid method:@"camera" image:image error:nil]);
+    ck_req([store chkOcc:bid attachments:@[@{@"method":@"camera",@"image":image}] error:nil]);
     NSDictionary *stale=ck_clm(store,NO);
     ck_req([store updTsk:stale[@"task_id"] fields:@{@"due_at":@(NSDate.date.timeIntervalSince1970+600)} error:nil]);
-    ck_req(![store chkOcc:stale[@"occurrence_id"] method:@"image" image:image error:nil]);
+    ck_req(![store chkOcc:stale[@"occurrence_id"] attachments:@[@{@"method":@"image",@"image":image}] error:nil]);
     ck_req(![store hldOcc:stale[@"occurrence_id"] mode:@"screenshot" error:nil]);
     ck_req(![store hldOcc:@"invalid" mode:@"snooze" error:nil]);
 
@@ -221,7 +221,7 @@ static void ck_run(NSString *root) {
     for (NSNumber *fail in @[@NO,@YES]) {
         NSString *legacy=[root stringByAppendingPathComponent:fail.boolValue?@"v5-failed.sqlite3":@"v5.sqlite3"];
         __block NSDictionary *oldAlert;
-        @autoreleasepool { TaskStore *old=[[TaskStore alloc] initAt:legacy error:nil];oldAlert=ck_clm(old,NO);ck_req([old chkOcc:oldAlert[@"occurrence_id"] method:@"camera" image:image error:nil]); }
+        @autoreleasepool { TaskStore *old=[[TaskStore alloc] initAt:legacy error:nil];oldAlert=ck_clm(old,NO);ck_req([old chkOcc:oldAlert[@"occurrence_id"] attachments:@[@{@"method":@"camera",@"image":image}] error:nil]); }
         ck_old(legacy);ck_sql(legacy,@"CREATE TABLE checkins_v5(occurrence_id TEXT PRIMARY KEY NOT NULL REFERENCES reminder_occurrences(occurrence_id) ON DELETE CASCADE,method TEXT NOT NULL CHECK(method IN ('camera','screenshot','image')),image BLOB NOT NULL CHECK(length(image)>0),created_at REAL NOT NULL);INSERT INTO checkins_v5 SELECT occurrence_id,method,image,created_at FROM reminder_checkins WHERE position=0;DROP TABLE capture_request; DROP TABLE reminder_checkins;ALTER TABLE checkins_v5 RENAME TO reminder_checkins;UPDATE store_meta SET schema_version=5;");
         if (fail.boolValue) ck_sql(legacy,@"CREATE TRIGGER v6_failure BEFORE UPDATE ON store_meta WHEN NEW.schema_version=6 BEGIN SELECT RAISE(ABORT,'test'); END;");
         TaskStore *migrated=[[TaskStore alloc] initAt:legacy error:&error];ck_req((migrated!=nil)!=fail.boolValue);
@@ -236,7 +236,7 @@ static void ck_run(NSString *root) {
     // 第六版迁移失败时原打卡图片保留，临时表不残留。
     for (NSNumber *fail in @[@NO,@YES]) {
         NSString *legacy=[root stringByAppendingPathComponent:fail.boolValue?@"v7failed.sqlite3":@"v6.sqlite3"];
-        @autoreleasepool { TaskStore *old=[[TaskStore alloc] initAt:legacy error:nil];NSDictionary *a=ck_clm(old,NO);ck_req([old chkOcc:a[@"occurrence_id"] method:@"image" image:image error:nil]); }
+        @autoreleasepool { TaskStore *old=[[TaskStore alloc] initAt:legacy error:nil];NSDictionary *a=ck_clm(old,NO);ck_req([old chkOcc:a[@"occurrence_id"] attachments:@[@{@"method":@"image",@"image":image}] error:nil]); }
         ck_old(legacy);ck_sql(legacy,@"DROP TABLE capture_request;UPDATE store_meta SET schema_version=6;");
         if (fail.boolValue) ck_sql(legacy,@"CREATE TRIGGER v7_failure BEFORE UPDATE ON store_meta WHEN NEW.schema_version=7 BEGIN SELECT RAISE(ABORT,'test');END;");
         TaskStore *migrated=[[TaskStore alloc] initAt:legacy error:nil];ck_req((migrated!=nil)!=fail.boolValue);

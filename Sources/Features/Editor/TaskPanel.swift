@@ -295,7 +295,7 @@ private final class TaskRaw: TaskScreen {
         remove = tu_ibtn("close", "移除时间", "calendar.removeTime", self, #selector(rmTime)); remove.widthAnchor.constraint(equalToConstant: 44).isActive = true
         clockRow = tu_stk([timeBtn, remove]); clockRow.axis = .horizontal; clockRow.accessibilityIdentifier = "calendar.clockRow"
         let done = tu_btn("完成", nil, self, #selector(sv)); done.accessibilityIdentifier = "calendar.done"; var config = done.configuration; config?.baseForegroundColor = lb_acnt(); done.configuration = config
-        repeatBtn = tu_btn(repeatName ?? "不重复", "repeat", self, #selector(rpt)); repeatBtn.isHidden = deadline || requiresTime; repeatBtn.isEnabled = action != nil; repeatBtn.accessibilityIdentifier = "calendar.repeat"; var repeatStyle = repeatBtn.configuration; repeatStyle?.contentInsets.trailing = 44; repeatBtn.configuration = repeatStyle
+        repeatBtn = tu_btn(repeatName ?? "不重复", "repeat", self, #selector(rpt)); repeatBtn.isHidden = deadline || requiresTime || action == nil; repeatBtn.isEnabled = action != nil; repeatBtn.accessibilityIdentifier = "calendar.repeat"; var repeatStyle = repeatBtn.configuration; repeatStyle?.contentInsets.trailing = 44; repeatBtn.configuration = repeatStyle
         let label=tu_lbl(deadline ? "选择截止日期":requiresTime ? "开始时间":"日期和时间"),header=hdr(label,nil,done)
         tp_arr(repeatBtn)
         tu_form(self, tu_stk([dayBtn, calendar, clockRow, time, repeatBtn]), "calendar.form",top:header); mode()
@@ -324,7 +324,7 @@ private final class TaskRaw: TaskScreen {
     @objc private func clkChg() { mode() }
     // 保持原版日期与时间两个互斥面板。
     private func mode() {
-        calendar.isHidden = clockMode; dayBtn.isHidden = !clockMode; time.isHidden = !clockMode || deadline; clockRow.isHidden = deadline; remove.isHidden = !timed || requiresTime
+        calendar.isHidden = clockMode; dayBtn.isHidden = !clockMode; time.isHidden = !clockMode; clockRow.isHidden = false; remove.isHidden = !timed || requiresTime
         let format = DateFormatter(); format.locale = Locale(identifier: "zh_CN"); format.timeZone = zone; format.dateFormat = "M月d日 EEEE"
         dayBtn.setTitle(format.string(from: date), for: .normal)
         format.dateFormat = "HH:mm"; timeBtn.setTitle(timed ? format.string(from: time.date) : "设置时间", for: .normal)

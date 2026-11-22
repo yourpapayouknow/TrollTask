@@ -74,8 +74,6 @@
     @objc(hold:occID:) func hld(_ mode: String, occID: String) { scheduler?.hld(mode, occID: occID) }
     // 提交边栏主动展开请求。
     @objc(resumeOcc:) func rsm(_ id: String) { scheduler?.rsm(id) }
-    // 转交有效图片提交到同一串行调度器。
-    @objc(check:method:image:) func chk(_ occID: String, method: String, image: Data) { chk(occID, attachments: [["method": method, "image": image]]) }
     // 提交同一提醒的全部附件。
     @objc(check:attachments:) func chk(_ occID: String, attachments: [TaskFields]) { scheduler?.chk(occID, attachments: attachments) }
     // 显式解除计时、数据库、窗口和锁，重复停止保持幂等。

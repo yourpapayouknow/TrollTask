@@ -1123,12 +1123,6 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
     return success ? result : nil;
 }
 
-// 保留单图入口并复用同一批次提交事务。
-- (BOOL)chkOcc:(NSString *)occID method:(NSString *)method image:(NSData *)image error:(NSError **)error {
-    if (!method || !image) return [self dbErr:SQLITE_MISMATCH message:@"打卡图片或方式无效" error:error];
-    return [self chkOcc:occID attachments:@[@{@"method":method,@"image":image}] error:error];
-}
-
 // 核对全部图片后在同一事务保存附件并完成提醒。
 - (BOOL)chkOcc:(NSString *)occID attachments:(NSArray<NSDictionary *> *)attachments error:(NSError **)error {
     return [self wrTxn:^BOOL(NSError **failure) {
@@ -1420,7 +1414,7 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
     parent[@"task_id"] = parentID; parent[@"parent_id"] = NSNull.null; parent[@"status"] = @"needsAction"; parent[@"deleted"] = @0;
     parent[@"planned_duration"] = @(total); parent[@"recurrence"] = @[]; parent[@"planning_mode"] = @"window";
     parent[@"schedule_kind"] = fields[@"schedule_kind"] ?: @"timed"; parent[@"deadline_kind"] = fields[@"deadline_kind"] ?: @"timed";
-    parent[@"density"] = @1; parent[@"rush"] = fields[@"rush"] ?: @0; parent[@"urgency"] = fields[@"urgency"] ?: @0;
+    if (!fields[@"density"]) parent[@"density"] = @1; parent[@"rush"] = fields[@"rush"] ?: @0; parent[@"urgency"] = fields[@"urgency"] ?: @0;
     parent[@"difficulty"] = fields[@"difficulty"] ?: @0; parent[@"created_at"] = @(now); parent[@"updated_at"] = @(now);
     [tasks addObject:parent];
     NSUInteger index = 0;
@@ -1481,7 +1475,7 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
     task[@"task_id"] = taskID; task[@"parent_id"] = NSNull.null; task[@"status"] = @"needsAction"; task[@"deleted"] = @0;
     task[@"planned_duration"] = @(effort); task[@"recurrence"] = @[]; task[@"planning_mode"] = @"window";
     task[@"schedule_kind"] = fields[@"schedule_kind"] ?: @"timed"; task[@"deadline_kind"] = fields[@"deadline_kind"] ?: @"timed";
-    task[@"density"] = @1; task[@"rush"] = fields[@"rush"] ?: @0; task[@"urgency"] = fields[@"urgency"] ?: @0; task[@"difficulty"] = fields[@"difficulty"] ?: @0;
+    if (!fields[@"density"]) task[@"density"] = @1; task[@"rush"] = fields[@"rush"] ?: @0; task[@"urgency"] = fields[@"urgency"] ?: @0; task[@"difficulty"] = fields[@"difficulty"] ?: @0;
     task[@"created_at"] = @(now); task[@"updated_at"] = @(now);
     [tasks addObject:task];
     NSMutableDictionary *snapshot = [base mutableCopy]; snapshot[@"tasks"] = tasks;
@@ -1503,7 +1497,7 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
 }
 
 // 共用原文导入事务，正式常律仅首次写入，后续保留用户编辑。
-- (NSDictionary *)rtnDoc:(NSDictionary *)document active:(BOOL)active error:(NSError **)error {
+- (NSDictionary *)rtnDoc:(NSDictionary *)document error:(NSError **)error {
     __block NSUInteger added = 0, skipped = 0, archived = 0;
     BOOL success = [self wrTxn:^BOOL(NSError **failure) {
         if (![document isKindOfClass:NSDictionary.class] || !ts_txt(document[@"source"],255)
@@ -1511,14 +1505,12 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
             || [document[@"tasks"] count]>1000) return [self dbErr:SQLITE_CONSTRAINT message:@"时间表格式无效" error:failure];
         NSArray *existing = [self qry:"SELECT content FROM routine_documents WHERE name=?" values:@[document[@"source"]] error:failure]; if (!existing) return NO;
         if (existing.count && ![existing.firstObject[@"content"] isEqual:document[@"text"]]) return [self dbErr:SQLITE_CONSTRAINT message:@"同名时间表已导入" error:failure];
-        if (active && existing.count) { skipped = [document[@"tasks"] count]; return YES; }
-        if (active) {
-            NSString *prefix = document[@"replaces"];
-            if (!ts_txt(prefix,1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"原时间表来源无效" error:failure];
-            NSArray *drafts = [self qry:"SELECT task_id FROM tasks WHERE deleted=0 AND routine_enabled=0 AND substr(routine_source,1,?)=?"
-                values:@[@(prefix.length),prefix] error:failure]; if (!drafts) return NO;
-            for (NSDictionary *draft in drafts) { if (![self delTsk:draft[@"task_id"] error:failure]) return NO; archived++; }
-        }
+        if (existing.count) { skipped = [document[@"tasks"] count]; return YES; }
+        NSString *prefix = document[@"replaces"];
+        if (!ts_txt(prefix,1024)) return [self dbErr:SQLITE_CONSTRAINT message:@"原时间表来源无效" error:failure];
+        NSArray *drafts = [self qry:"SELECT task_id FROM tasks WHERE deleted=0 AND routine_enabled=0 AND substr(routine_source,1,?)=?"
+            values:@[@(prefix.length),prefix] error:failure]; if (!drafts) return NO;
+        for (NSDictionary *draft in drafts) { if (![self delTsk:draft[@"task_id"] error:failure]) return NO; archived++; }
         NSMutableArray *normalized = [NSMutableArray array];
         NSMutableSet *sources = [NSMutableSet set];
         for (id task in document[@"tasks"]) {
@@ -1541,13 +1533,11 @@ static BOOL ts_stale(NSDictionary *alert, NSArray *slots, double cutoff) {
         return [self qry:"INSERT INTO routine_documents(name,content,created_at) VALUES(?,?,?) ON CONFLICT(name) DO NOTHING"
             values:@[document[@"source"],document[@"text"],@(NSDate.date.timeIntervalSince1970)] error:failure]!=nil;
     } error:error];
-    return success ? (active ? @{@"added":@(added),@"skipped":@(skipped),@"archived":@(archived)} : @{@"added":@(added),@"skipped":@(skipped)}) : nil;
+    return success ? @{@"added":@(added),@"skipped":@(skipped),@"archived":@(archived)} : nil;
 }
 
 // 通用Markdown整批验证并创建正式常律。
-- (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:YES error:error]; }
-// 已核验的常律使用同一导入实现与唯一数据库。
-- (NSDictionary *)applyRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document active:YES error:error]; }
+- (NSDictionary *)importRtns:(NSDictionary *)document error:(NSError **)error { return [self rtnDoc:document error:error]; }
 
 // 只在存在启用的一般任务时段时自动安排，重复读取不写入相同结果。
 - (BOOL)arrangeAt:(NSTimeInterval)stamp zone:(NSString *)zone error:(NSError **)error {

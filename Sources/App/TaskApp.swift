@@ -137,7 +137,7 @@
         preview = tu_btn("测试全屏提醒","list",self,#selector(tst));preview.accessibilityIdentifier="settings.preview"
         recovery = tu_btn("恢复提醒","repeat",self,#selector(rstr));recovery.accessibilityIdentifier="settings.recovery"
         let assistant=tu_btn("助手设置","subtask",self,#selector(aiCfg));assistant.accessibilityIdentifier="settings.assistant"
-        let routineImport=tu_btn("导入常律","file",self,#selector(rtnImp));routineImport.accessibilityIdentifier="settings.routineImport"
+        let routineImport=tu_btn("导入常律","folder",self,#selector(rtnImp));routineImport.accessibilityIdentifier="settings.routineImport"
         let archive=tu_btn("归档","list",self,#selector(archivePage));archive.accessibilityIdentifier="settings.archive"
         let cloud=tu_btn("云端存储","upload",self,#selector(cloudPage));cloud.accessibilityIdentifier="settings.cloud"
         timezone=tu_btn("任务时区","time",self,#selector(zonePage));timezone.accessibilityIdentifier="settings.timezone"

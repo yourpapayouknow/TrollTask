@@ -22,7 +22,7 @@ static void ut_rtn(void) {
     });ut_tap(@"edit.more");
     ut_ui(^{
         ut_req(ut_find(ut_surface(),@"routine.kind") && ut_find(ut_surface(),@"routine.end") && ut_find(ut_surface(),@"routine.enabled"),@"常律共用编辑器并提供类型结束及启用");
-        ut_req((!ut_find(ut_surface(),@"edit.clearDate") || ut_find(ut_surface(),@"edit.clearDate").hidden) && (!ut_find(ut_surface(),@"edit.subtask") || ut_find(ut_surface(),@"edit.subtask").hidden),@"常律不提供破坏时间或子任务入口");
+        ut_req(!ut_find(ut_surface(),@"edit.clearDate") && !ut_find(ut_surface(),@"edit.subtask"),@"常律不提供破坏时间或子任务入口");
         UIDatePicker *end=(UIDatePicker *)ut_find(ut_surface(),@"routine.end");end.date=[NSCalendar.currentCalendar dateBySettingHour:9 minute:30 second:0 ofDate:end.date options:0];[end sendActionsForControlEvents:UIControlEventValueChanged];
         ut_req(ut_top().preferredContentSize.height>200,@"展开后修改结束时刻不收缩卡片");
     });ut_tap(@"routine.work");ut_tap(@"edit.repeat");
@@ -47,11 +47,7 @@ static void ut_rtn(void) {
     ut_ui(^{[ut_top() dismissViewControllerAnimated:NO completion:nil];});
     ut_req([ut_store delTsk:imported[@"task_id"] error:nil],@"清理界面导入夹具");
     NSDictionary *unknown=[ut_store crtTsk:@{@"title":@"结束待确认",@"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_enabled":@0,@"due_at":routine[@"due_at"],@"recurrence_type":@"daily"} error:nil];ut_req(unknown!=nil,@"建立未知结束草稿");
-    ut_tap(@"home.more");ut_tap(@"agenda.issues");
-    ut_wait(^BOOL{return ut_find(ut_surface(),@"agenda.problem.0") && !ut_nav.transitionCoordinator;},@"未确认时段从常律选项可达");
-    ut_tap(@"agenda.problem.0");
-    ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_nav.transitionCoordinator;},@"待处理行可进入原编辑器");
-    ut_ui(^{ut_req(ut_find(ut_surface(),@"edit.complete").hidden,@"已停用草稿不显示无效完成按钮");});
+    ut_rte(unknown);
     ut_ui(^{UISwitch *enabled=(UISwitch *)ut_find(ut_surface(),@"routine.enabled");enabled.on=YES;[enabled sendActionsForControlEvents:UIControlEventValueChanged];});ut_save();
     ut_wait(^BOOL{return [ut_top() isKindOfClass:UIAlertController.class];},@"缺失结束时间不能仅开开关启用");
     ut_req([ut_store rdTsk:unknown[@"task_id"] error:nil][@"routine_end"]==NSNull.null,@"无效启用保持草稿原值");
@@ -64,7 +60,7 @@ static void ut_rtn(void) {
     for(NSDictionary *item in snapshot[@"alerts"])if([item[@"task_id"] isEqual:task[@"task_id"]])candidate=item;
     NSDictionary *occ=[ut_store claim:candidate revision:[snapshot[@"revision"] longLongValue] at:NSDate.date.timeIntervalSince1970 error:nil];
     ut_req([ut_store chkOcc:occ[@"occurrence_id"] attachments:@[@{@"method":@"file",@"name":@"验收.txt",@"content_type":@"public.plain-text",@"image":[@"归档原始文件" dataUsingEncoding:NSUTF8StringEncoding]}] error:nil],@"原子保存归档凭证");
-    ut_edt([ut_store rdTsk:task[@"task_id"] error:nil]);ut_tap(@"edit.more");ut_tap(@"edit.history");ut_tap(occ[@"occurrence_id"]);
+    ut_edt([ut_store rdTsk:task[@"task_id"] error:nil]);ut_tap(@"detail.history");ut_tap(occ[@"occurrence_id"]);
     ut_wait(^BOOL{return ut_find(ut_surface(),@"proof.table")!=nil && !ut_nav.transitionCoordinator;},@"完成记录进入可用归档页");
     ut_tap(@"proof.item.0");ut_wait(^BOOL{return [NSStringFromClass(ut_top().class) containsString:@"QLPreviewController"] && !ut_nav.transitionCoordinator;},@"点击附件进入系统QuickLook");
     ut_ui(^{[ut_nav popToRootViewControllerAnimated:NO];});ut_home();

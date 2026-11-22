@@ -92,13 +92,11 @@ def network(root):
    result=call(query);req(result['model']==model,'默认、复杂、DDL分别使用真实指定模型');req(result['ddl_verified']==ddl,'只有最高档DDL响应持有确认凭据')
   for variant in ['range','sum','negative','tool','model']:
    server.variant=variant;before=tstcmd(db,'snapshot');failure=call(base,False);req(failure['code']!=2,'无效结果和静默模型替换不能伪装离线');req(tstcmd(db,'snapshot')==before,'无效AI响应不修改数据库')
-  server.variant='';query={'mode':'order','difficulty':3,'tasks':[{'task_id':'a','notes':'日内备注'},{'task_id':'b'}]};req(call(query)['order']==['b','a'],'日内AI排序返回完整原ID集合')
+  server.variant=''
   call({'mode':'split','title':'拆分请求','notes':'本机拆分备注'})
   records=[jld(record) for record in server.log.read_text().splitlines()]
   req(records[-1]['has_notes'],'拆分请求携带用户备注以贴合任务')
-  req(all(not record['has_notes'] for record in records[:-1]),'评估和排序请求仍不携带用户备注')
-  for variant in ['duplicate','foreign']:
-   server.variant=variant;call(query,False);req(True,'重复或外来任务不能进入日内排序')
+  req(all(not record['has_notes'] for record in records[:-1]),'评估请求仍不携带用户备注')
  finally:server.shutdown();worker.join();server.server_close()
 
 # 容量足够也必须按顺序排得下；失败事务不留父子或评估残片。
@@ -120,11 +118,7 @@ def boundaries(root):
  actual=[e['task_id'] for e in entries];expected=[part(10,45)['task_id'],part(11,45)['task_id']]
  req(actual==expected,'次序不足时不能把后一步提前塞回前面空档 actual=%r expected=%r'%(actual,expected))
  req(entries[0]['end_at']<=entries[1]['start_at'],'子任务按依赖顺序执行')
- # 日内排序必须是原候选的置换，旧排序不能重复应用。
- context=tstcmd(db,'day-order',str(at));order=[r['task_id'] for r in context['tasks']]
- tstcmd(db,'apply-order',jdmp(context),jdmp({'order':order+order}),str(at),success=False);req(True,'日内重复ID被拒绝')
- tstcmd(db,'apply-order',jdmp(context),jdmp({'order':order}),str(at));tstcmd(db,'apply-order',jdmp(context),jdmp({'order':order}),str(at),success=False);req(True,'日内排序一次生效后拒绝旧结果')
- # 完成既有步骤后，重评只统计剩余工时并保留完成内容。
+  # 完成既有步骤后，重评只统计剩余工时并保留完成内容。
  tstcmd(db,'complete',part(10,45)['task_id']);f=dict(fields,task_id=parent['task_id']);c=tstcmd(db,'intake',jdmp(f),jdmp(rows),str(at))
  req(c['completed_effort']==2700,'已完成子任务从剩余工作量中扣除')
  e={'minimum_minutes':60,'recommended_minutes':75,'maximum_minutes':90};req(tstcmd(db,'verdict',jdmp(c),jdmp(e),'4500','false')['state']=='ready','重评剩余步骤不把完成工时重复占用')

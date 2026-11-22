@@ -24,9 +24,3 @@
 + (NSArray *)rows:(TaskStore *)store at:(double)at zone:(NSString *)zone error:(NSError **)error;
 + (NSInteger)focus:(NSArray *)pending at:(double)at;
 @end
-
-// 当日AI排序仍由本地调度器落实时间。
-@interface TaskDayOrder : NSObject
-+ (NSDictionary *)context:(TaskStore *)store at:(double)at error:(NSError **)error;
-+ (NSDictionary *)apply:(TaskStore *)store context:(NSDictionary *)context result:(NSDictionary *)result at:(double)at error:(NSError **)error;
-@end

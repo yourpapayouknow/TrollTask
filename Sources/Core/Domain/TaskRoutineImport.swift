@@ -204,7 +204,7 @@ private func tr_role(_ text: String, parallel: Bool) -> String {
                 "recurrence_type":"custom","recurrence":["RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY="+days.sorted().map{codes[$0-1]}.joined(separator:",")]])
         }
         guard Set(entries.flatMap{ $0["days"] as? [Int] ?? [] }).count==7 else { throw issue }
-        return try store.applyRtns(["source":source,"text":text,"replaces":replaces,"tasks":tasks]) as NSDictionary
+        return try store.importRtns(["source":source,"text":text,"replaces":replaces,"tasks":tasks]) as NSDictionary
     }
 
 }
