@@ -548,7 +548,7 @@ static void ut_sttng(void) {
     ut_tap(@"settings.about");ut_wait(^BOOL{return ut_find(ut_surface(),@"about.version")!=nil && !ut_nav.transitionCoordinator;},@"关于页就绪");
     ut_ui(^{
         ut_req([[(UILabel *)ut_find(ut_surface(),@"about.version") text] isEqual:version],@"关于页显示当前版本");
-        ut_req([ut_find(ut_surface(),@"about.author").accessibilityValue isEqual:@"iwmei"] && [ut_find(ut_surface(),@"about.github").accessibilityValue containsString:@"TrollTask"] && [ut_find(ut_surface(),@"about.credits").accessibilityValue containsString:@"MingCute"],@"关于页保留作者、仓库与开源说明");
+        ut_req([ut_find(ut_surface(),@"about.author").accessibilityValue isEqual:@"yourpapayouknow"] && [ut_find(ut_surface(),@"about.github").accessibilityValue containsString:@"TrollTask"] && [ut_find(ut_surface(),@"about.mingcute") isKindOfClass:UIButton.class] && [ut_find(ut_surface(),@"about.libical") isKindOfClass:UIButton.class] && ut_find(ut_surface(),@"about.credits")==nil,@"关于页保留作者、仓库与可跳转鸣谢");
     });
     ut_tap(@"about.back");ut_wait(^BOOL{return ut_find(ut_surface(),@"settings.close")!=nil;},@"关于返回设置");
     ut_shot(@"settings-dark-320.png",320,693,NO);

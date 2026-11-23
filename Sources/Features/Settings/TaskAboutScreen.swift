@@ -1,6 +1,5 @@
-// 关于页：版本、作者、仓库与开源说明。
+// 关于页：版本、作者、仓库与鸣谢。
 @objc(TaskAboutScreen) final class TaskAboutScreen: TaskScreen {
-    private let repo = "https://github.com/yourpapayouknow/TrollTask"
     // 建立应用标识、版本信息与来源说明。
     override func viewDidLoad() {
         super.viewDidLoad(); title = "关于"
@@ -19,14 +18,15 @@
         for label in [name, number] { label.textAlignment = .center }
         marks += [name, number]
         let head = tu_stk(marks); head.alignment = .center; head.spacing = 8
-        let author = row("作者", "iwmei", "about.author")
+        let author = row("作者", "yourpapayouknow", "about.author")
         let github = row("GitHub", "yourpapayouknow/TrollTask", "about.github", #selector(open))
-        let credits = row("开源组件", "MingCute 图标 Apache-2.0\nlibical LGPL-2.1 / MPL-2.0", "about.credits")
-        for button in [author, credits] { button.isUserInteractionEnabled = false }
-        let card = tu_card([author, github, credits])
-        let note = tu_lbl("数据仅保存在本机。"); note.font = lb_fnt(.subheadline, nil); note.textColor = TaskTheme.muted; note.textAlignment = .center
-        let copyright = tu_lbl("© 2026 iwmei"); copyright.font = lb_fnt(.footnote, nil); copyright.textColor = TaskTheme.muted; copyright.textAlignment = .center
-        let fields = tu_stk([head, card, note, copyright]); fields.spacing = TaskTheme.section
+        let thanks = row("MingCute", "图标 · Apache-2.0", "about.mingcute", #selector(open))
+        let libical = row("Libical", "重复规则 · LGPL-2.1 / MPL-2.0", "about.libical", #selector(open))
+        author.isUserInteractionEnabled = false
+        let card = tu_card([author, github])
+        let creditCard = tu_card([thanks, libical])
+        let copyright = tu_lbl("© 2026 yourpapayouknow"); copyright.font = lb_fnt(.footnote, nil); copyright.textColor = TaskTheme.muted; copyright.textAlignment = .center
+        let fields = tu_stk([head, card, tu_header("鸣谢"), creditCard, copyright]); fields.spacing = TaskTheme.section
         _ = tu_form(self, fields, "about.content", top: header)
     }
     // 构建一行只读信息，可选的链接行保留原生按压反馈。
@@ -48,6 +48,11 @@
            let names = icons["CFBundleIconFiles"] as? [String], let last = names.last, let image = UIImage(named: last) { return image }
         return UIImage(named: "AppIcon")
     }
-    // 在系统浏览器打开项目主页。
-    @objc private func open() { if let url = URL(string: repo) { UIApplication.shared.open(url) } }
+    // 按行标识打开对应项目主页。
+    @objc private func open(_ sender: UIButton) {
+        let links = ["about.github": "https://github.com/yourpapayouknow/TrollTask",
+                     "about.mingcute": "https://github.com/mingcute-design/mingcute-icons",
+                     "about.libical": "https://github.com/libical/libical"]
+        if let link = links[sender.accessibilityIdentifier ?? ""], let url = URL(string: link) { UIApplication.shared.open(url) }
+    }
 }
