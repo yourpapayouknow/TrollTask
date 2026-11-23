@@ -321,6 +321,7 @@ func tu_wdth(_ content: UIView, _ parent: UIView, inset: CGFloat = TaskTheme.edg
 // 保留数据库错误分类并显示简短提示。
 func tu_err(_ parent: UIViewController, _ error: Error) {
     NSLog("待办界面操作失败：%@", error as NSError)
+    TaskLog.write("界面错误：" + error.localizedDescription)
     let names = ["invalid_fields":"请检查输入", "not_found":"任务已删除", "database_busy":"数据库忙碌", "duplicate_uuid":"任务编号重复"]
     if let conflicts = (error as NSError).userInfo["routine_conflicts"] as? [TaskFields] {
         let format = DateFormatter(); format.dateFormat = "MM-dd HH:mm"

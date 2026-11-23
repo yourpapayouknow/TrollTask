@@ -14,7 +14,7 @@ final class TaskArchiveScreen: TaskScreen, UITableViewDataSource, UITableViewDel
     // 设置平面归档列表与重试入口。
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "归档"
+        title = "归档内容"
         let back = tu_ibtn("back", "返回设置", "archive.back", self, #selector(bck))
         let sync = tu_ibtn("repeat", "同步归档", "archive.sync", self, #selector(retry))
         let header = hdr(tu_lbl(title), back, sync)

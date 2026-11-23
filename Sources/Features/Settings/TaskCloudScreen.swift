@@ -13,7 +13,7 @@ final class TaskCloudScreen: TaskScreen, UITableViewDataSource, UITableViewDeleg
     // 保持原生设置布局、字号和返回方式。
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "云端存储"
+        title = "归档设置"
         let header = hdr(tu_lbl(title), tu_ibtn("back", "返回设置", "cloud.back", self, #selector(bck)), nil)
         table.dataSource = self
         table.delegate = self

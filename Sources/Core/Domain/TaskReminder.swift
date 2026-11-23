@@ -49,7 +49,7 @@
                 source.setEventHandler { [weak self] in self?.halt() }; signals.append(source); source.resume()
             }
             return true
-        } catch let issue { lb_svstat(stage, nil); stp(); error?.pointee = issue as NSError; return false }
+        } catch let issue { lb_svstat(stage, nil); stp(); TaskLog.write("服务启动失败：" + issue.localizedDescription); error?.pointee = issue as NSError; return false }
     }
     // 启动唯一调度核心并在窗口可用后确认就绪。
     @objc(start:) func strt(_ error: AutoreleasingUnsafeMutablePointer<NSError?>?) -> Bool {
@@ -61,7 +61,7 @@
             lb_svstat(error == nil ? (active ? "正在提醒" : "正在运行") : "调度读取失败", next.map { NSNumber(value: $0.timeIntervalSince1970) })
         }
         guard scheduler.strt(error) else { lb_svstat("调度启动失败", nil); stp(); return false }
-        self.scheduler = scheduler; running = true; notify_post(LB_READY_NOTE); return true
+        self.scheduler = scheduler; running = true; notify_post(LB_READY_NOTE); TaskLog.write("服务已启动"); return true
     }
     // 转交当前提醒动作并复用事务后重排。
     @objc(act:until:occID:) func act(_ action: String, until: NSNumber?, occID: String) { scheduler?.act(action, until: until, occID: occID) }
@@ -85,7 +85,7 @@
         tokens.forEach { notify_cancel($0) }; tokens.removeAll()
         signals.forEach { $0.cancel() }; signals.removeAll()
         if lock >= 0 { cleanup(); close(lock); lock = -1 }
-        restores.forEach { $0() }; restores.removeAll()
+        restores.forEach { $0() }; restores.removeAll(); TaskLog.write("服务已停止")
     }
     // 配置停用后复核最新启用意图，显式停止不自动恢复。
     private func halt(_ reenable: Bool = false) {

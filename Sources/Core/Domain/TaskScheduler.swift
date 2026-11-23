@@ -104,7 +104,7 @@
     }
     // 故障时清除既有提醒并采用独立有界退避恢复。
     private func err(_ error: NSError) {
-        onPlan?(nil, false, error)
+        onPlan?(nil, false, error); TaskLog.write("调度失败：" + error.localizedDescription)
         reminders.clr(); faults += 1; pub(nil, error)
         arm(Date(timeIntervalSinceNow: min(30, pow(2, Double(min(faults-1, 5))))))
     }

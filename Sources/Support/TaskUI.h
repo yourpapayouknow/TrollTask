@@ -3,6 +3,13 @@
 
 // 为原生Objective-C验收入口声明Swift界面类型。
 
+// 保留、读取并在设置页清空最近运行日志。
+@interface TaskLog : NSObject
++ (void)write:(NSString *)text;
++ (void)clear;
++ (NSArray<NSString *> *)lines;
+@end
+
 // 编辑完整重复属性，保留未修改的例外和日期集合。
 @interface TaskRepeat : UIViewController <UIPickerViewDataSource, UIPickerViewDelegate>
 - (instancetype)initWithFields:(NSDictionary *)fields reply:(void (^)(NSDictionary *))reply;

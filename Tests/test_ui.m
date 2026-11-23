@@ -477,54 +477,80 @@ static void ut_sttng(void) {
     ut_ui(^{UIView *entry=ut_find(ut_surface(),@"home.settings");settingsEntry=[entry convertRect:entry.bounds toView:ut_window];});
     ut_ui(^{
         UIViewController *controller = [NSClassFromString(@"LBSetCtl") new];
+        [controller setValue:ut_store forKey:@"taskStore"];
         ut_req(controller != nil, @"Swift后台设置运行类型存在");
         [ut_nav setNavigationBarHidden:NO animated:NO]; [ut_nav pushViewController:controller animated:NO];
         [ut_surface()layoutIfNeeded];UIView *closeButton=ut_find(controller.view,@"settings.close");CGRect frame=[closeButton convertRect:closeButton.bounds toView:ut_window];
         ut_req(fabs(CGRectGetMidX(frame)-CGRectGetMidX(settingsEntry))<1 && fabs(CGRectGetMidY(frame)-CGRectGetMidY(settingsEntry))<1 && frame.size.width==56 && frame.size.height==56,@"设置关闭与首页设置触摸位置完全一致");
-        for(NSString *key in @[@"settings.status",@"settings.next",@"settings.preview",@"settings.recovery",@"settings.assistant"]){UIButton *row=(UIButton *)ut_find(controller.view,key);ut_req(row.contentHorizontalAlignment==UIControlContentHorizontalAlignmentLeading && row.bounds.size.height>=56 && (!row.configuration.background.backgroundColor || CGColorGetAlpha(row.configuration.background.backgroundColor.CGColor)<0.01),@"设置功能统一平面对齐且不铺强调底色");}
+        for(NSString *key in @[@"settings.assistant",@"settings.routineImport",@"settings.archive",@"settings.cloud",@"settings.timezone",@"settings.appearance",@"settings.recovery",@"settings.draft",@"settings.log",@"settings.about"]){UIButton *row=(UIButton *)ut_find(controller.view,key);ut_req(row!=nil && row.contentHorizontalAlignment==UIControlContentHorizontalAlignmentLeading && row.bounds.size.height>=56 && (!row.configuration.background.backgroundColor || CGColorGetAlpha(row.configuration.background.backgroundColor.CGColor)<0.01),@"设置功能统一平面对齐且不铺强调底色");}
         UISwitch *monitor = (UISwitch *)ut_find(controller.view, @"settings.enabled");
-        UIButton *preview = (UIButton *)ut_find(controller.view, @"settings.preview");
         UIButton *recovery = (UIButton *)ut_find(controller.view, @"settings.recovery");
+        UILabel *state = (UILabel *)ut_find(controller.view, @"settings.serviceState");
+        UIButton *archive = (UIButton *)ut_find(controller.view, @"settings.archive");
+        UIButton *cloud = (UIButton *)ut_find(controller.view, @"settings.cloud");
+        ut_req([[archive.configuration.title description] isEqual:@"归档内容"] && [[cloud.configuration.title description] isEqual:@"归档设置"],@"归档入口标题区分内容与设置");
         ut_req([recovery.configuration.title isEqual:@"恢复提醒"] && [recovery.accessibilityHint containsString:@"需打开一次App恢复提醒服务"] && recovery.menu.children.count==1,@"恢复入口简短且完整条件移入悬浮说明");
+        ut_req(state.text.length>0,@"服务行显示当前状态");
         monitor.on = NO; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
-        ut_req(![lb_ldcfg()[@"enabled"] boolValue] && !preview.enabled, @"关闭服务保存并禁用预览");
+        ut_req(![lb_ldcfg()[@"enabled"] boolValue], @"关闭服务保存");
         [recovery sendActionsForControlEvents:UIControlEventTouchUpInside];ut_req(![lb_ldcfg()[@"enabled"] boolValue] && [controller.presentedViewController isKindOfClass:UIAlertController.class] && [((UIAlertController *)controller.presentedViewController).title isEqual:@"先开启后台服务"],@"关闭服务时恢复只说明条件而不擅自开启");[controller dismissViewControllerAnimated:NO completion:nil];
         ut_spawn = NO; monitor.on = YES; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
-        ut_req(!monitor.on && ![lb_ldcfg()[@"enabled"] boolValue], @"启动失败恢复关闭状态");
+        ut_req(!monitor.on && ![lb_ldcfg()[@"enabled"] boolValue] && [state.text containsString:@"启动失败"], @"启动失败恢复关闭状态并在服务行可见");
         ut_spawn = YES; monitor.on = YES; [monitor sendActionsForControlEvents:UIControlEventValueChanged];
-        ut_req(monitor.on && [lb_ldcfg()[@"enabled"] boolValue] && preview.enabled, @"开启服务保存并启用预览");
+        ut_req(monitor.on && [lb_ldcfg()[@"enabled"] boolValue], @"开启服务保存意图");
         [recovery sendActionsForControlEvents:UIControlEventTouchUpInside];
         ut_req([lb_ldcfg()[@"enabled"] boolValue] && recovery.enabled,@"恢复入口保持已启用意图");
-        [preview sendActionsForControlEvents:UIControlEventTouchUpInside];
-        ut_req(!preview.enabled, @"等待HUD就绪禁用重复预览");
-        notify_post(LB_READY_NOTE);
         int handle = lb_lckhud(); ut_req(handle>=0,@"设置诊断使用真实隔离服务锁");
         NSNumber *stamp = @(NSDate.date.timeIntervalSince1970+120);
         lb_svstat(@"正在运行",stamp);
-        UIButton *status = (UIButton *)ut_find(controller.view,@"settings.status");
-        UIButton *next = (UIButton *)ut_find(controller.view,@"settings.next");
-        [status sendActionsForControlEvents:UIControlEventTouchUpInside];
-        ut_req([status.configuration.title isEqual:@"正在运行"] && next.configuration.subtitle.length>0,@"实际PID状态和下一提醒显示");
-        close(handle); [status sendActionsForControlEvents:UIControlEventTouchUpInside];
-        ut_req(![status.configuration.title isEqual:@"正在运行"] && next.configuration.subtitle==nil,@"服务死亡立即撤销正常状态和旧下一时间");
+        ((void(*)(id,SEL))objc_msgSend)(controller,NSSelectorFromString(@"rfrsh"));
+        ut_req([state.text containsString:@"正在运行"] && [state.text containsString:@"下一提醒"],@"服务行副标题显示状态和下一提醒");
+        close(handle); ((void(*)(id,SEL))objc_msgSend)(controller,NSSelectorFromString(@"rfrsh"));
+        ut_req(![state.text containsString:@"下一提醒"],@"服务死亡立即撤销旧下一时间");
         for (NSString *issue in @[@"数据库不可用",@"HUD启动失败",@"私有组件加载失败",@"窗口注册失败"]) {
-            lb_svstat(issue,nil); [status sendActionsForControlEvents:UIControlEventTouchUpInside];
-            ut_req([status.configuration.title isEqual:issue],[@"用户可见错误：" stringByAppendingString:issue]);
+            lb_svstat(issue,nil); ((void(*)(id,SEL))objc_msgSend)(controller,NSSelectorFromString(@"rfrsh"));
+            ut_req([state.text containsString:issue],[@"用户可见错误：" stringByAppendingString:issue]);
         }
-        lb_svstat(@"服务已关闭",nil); [status sendActionsForControlEvents:UIControlEventTouchUpInside];
-        [controller setValue:@YES forKey:@"storeFailed"]; [status sendActionsForControlEvents:UIControlEventTouchUpInside];
-        ut_req([status.configuration.title isEqual:@"数据库不可用"],@"App自身数据库失败不会被健康HUD状态掩盖");
-        [controller setValue:@NO forKey:@"storeFailed"]; [status sendActionsForControlEvents:UIControlEventTouchUpInside];
+        lb_svstat(@"服务已关闭",nil); ((void(*)(id,SEL))objc_msgSend)(controller,NSSelectorFromString(@"rfrsh"));
+        [controller setValue:@YES forKey:@"storeFailed"]; ((void(*)(id,SEL))objc_msgSend)(controller,NSSelectorFromString(@"rfrsh"));
+        ut_req([state.text isEqual:@"数据库不可用"],@"App自身数据库失败不会被健康HUD状态掩盖");
+        [controller setValue:@NO forKey:@"storeFailed"]; ((void(*)(id,SEL))objc_msgSend)(controller,NSSelectorFromString(@"rfrsh"));
     });
-    ut_wait(^BOOL { return [(UIButton *)ut_find(ut_top().view, @"settings.preview") isEnabled]; }, @"Darwin就绪恢复预览入口");
-    ut_ui(^{
-        UISwitch *monitor=(UISwitch *)ut_find(ut_top().view,@"settings.enabled"); UIButton *status=(UIButton *)ut_find(ut_top().view,@"settings.status");
-        ut_req(lb_svcfg(@{@"enabled":@NO}),@"外部提交关闭配置");[status sendActionsForControlEvents:UIControlEventTouchUpInside];
-        ut_req(!monitor.on && ![(UIButton *)ut_find(ut_top().view,@"settings.preview") isEnabled],@"状态刷新同步关闭意图和操作可用性");
-        ut_req(lb_svcfg(@{@"enabled":@YES}),@"外部提交启用配置");[status sendActionsForControlEvents:UIControlEventTouchUpInside];
-        ut_req(monitor.on && [(UIButton *)ut_find(ut_top().view,@"settings.preview") isEnabled],@"状态刷新同步启用意图，开关不保留旧值");
-    });
+    ut_wait(^BOOL{ UIViewController *top=ut_nav.topViewController; if([top.presentedViewController isKindOfClass:UIAlertController.class]) { [top dismissViewControllerAnimated:NO completion:nil]; return NO; } return top.presentedViewController==nil; },@"等待设置提示关闭");
+    ut_ui(^{ ut_req(lb_svcfg(@{@"enabled":@NO}),@"外部提交关闭配置"); ((void(*)(id,SEL))objc_msgSend)(ut_nav.topViewController,NSSelectorFromString(@"rfrsh")); });
+    ut_ui(^{ ut_req(![(UISwitch *)ut_find(ut_nav.topViewController.view,@"settings.enabled") isOn],@"状态刷新同步关闭意图"); });
+    ut_ui(^{ ut_req(lb_svcfg(@{@"enabled":@YES}),@"外部提交启用配置"); ((void(*)(id,SEL))objc_msgSend)(ut_nav.topViewController,NSSelectorFromString(@"rfrsh")); });
+    ut_ui(^{ ut_req([(UISwitch *)ut_find(ut_nav.topViewController.view,@"settings.enabled") isOn],@"状态刷新同步启用意图，开关不保留旧值"); });
     ut_tap(@"settings.recovery.help");ut_ui(^{UIAlertController *help=(UIAlertController *)ut_top();ut_req([help isKindOfClass:UIAlertController.class] && [help.title isEqual:@"重启后打开App恢复"] && help.title.length<=13,@"长按说明可查看且不超过13字");[help dismissViewControllerAnimated:NO completion:nil];});
+    ut_wait(^BOOL{ UIViewController *top=ut_nav.topViewController; if([top.presentedViewController isKindOfClass:UIAlertController.class]) { [top dismissViewControllerAnimated:NO completion:nil]; return NO; } return top.presentedViewController==nil; },@"等待帮助提示关闭");
+    ut_req([ut_store svDrft:@{@"fields":@{@"title":@"草稿验收"}} error:nil],@"播种编辑草稿");
+    ut_req([ut_store rdDrft:nil].count>0,@"草稿已写入存储");
+    ut_ui(^{ [ut_top() viewWillAppear:NO]; });
+    ut_ui(^{ UIButton *row=(UIButton *)ut_find(ut_surface(),@"settings.draft"); ut_req(row.isEnabled && [row.configuration.subtitle isEqual:@"存在未完成草稿"],[NSString stringWithFormat:@"存在草稿时可清除[%@|%@]",row?@"found":@"nil",row.configuration.subtitle]); [row sendActionsForControlEvents:UIControlEventTouchUpInside]; });
+    ut_wait(^BOOL{ return [ut_top() isKindOfClass:UIAlertController.class] && [((UIAlertController *)ut_top()).title isEqual:@"清除未完成的编辑草稿"]; },@"清除草稿需要确认");
+    ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil]; });
+    ut_wait(^BOOL{ return ![ut_top() isKindOfClass:UIAlertController.class]; },@"等待草稿提示关闭");
+    ut_req([ut_store clrDrft:nil],@"清理草稿夹具");
+    ut_ui(^{ [ut_top() viewWillAppear:NO]; });
+    ut_ui(^{ UIButton *row=(UIButton *)ut_find(ut_surface(),@"settings.draft"); ut_req(!row.isEnabled && [row.configuration.subtitle isEqual:@"无未完成草稿"],@"无草稿时禁用清除"); });
+    [TaskLog clear];
+    ut_tap(@"settings.log");ut_wait(^BOOL{return ut_find(ut_surface(),@"log.text")!=nil && !ut_nav.transitionCoordinator;},@"运行日志页就绪");
+    ut_ui(^{ UITextView *text=(UITextView *)ut_find(ut_surface(),@"log.text"); ut_req([text.text isEqual:@"暂无日志"],@"空日志显示空态"); ut_req(ut_find(ut_surface(),@"log.copy")!=nil && ut_find(ut_surface(),@"log.clear")!=nil,@"日志提供复制与清空"); });
+    [TaskLog write:@"验收日志"];
+    ut_tap(@"log.back");ut_wait(^BOOL{return ut_find(ut_surface(),@"settings.close")!=nil;},@"日志返回设置");
+    ut_tap(@"settings.log");ut_wait(^BOOL{return [((UITextView *)ut_find(ut_surface(),@"log.text")).text containsString:@"验收日志"];},@"日志显示最新记录");
+    ut_tap(@"log.clear");ut_wait(^BOOL{return [ut_top() isKindOfClass:UIAlertController.class];},@"清空日志需要确认");
+    ut_ui(^{ [ut_top() dismissViewControllerAnimated:NO completion:nil]; });
+    ut_wait(^BOOL{return ![ut_top() isKindOfClass:UIAlertController.class];},@"等待清空提示关闭");
+    ut_tap(@"log.back");ut_wait(^BOOL{return ut_find(ut_surface(),@"settings.close")!=nil;},@"日志再次返回设置");
+    NSDictionary *info=NSBundle.mainBundle.infoDictionary;
+    NSString *version=[NSString stringWithFormat:@"版本 %@（%@）",info[@"CFBundleShortVersionString"] ?: @"-",info[@"CFBundleVersion"] ?: @"-"];
+    ut_tap(@"settings.about");ut_wait(^BOOL{return ut_find(ut_surface(),@"about.version")!=nil && !ut_nav.transitionCoordinator;},@"关于页就绪");
+    ut_ui(^{
+        ut_req([[(UILabel *)ut_find(ut_surface(),@"about.version") text] isEqual:version],@"关于页显示当前版本");
+        ut_req([ut_find(ut_surface(),@"about.author").accessibilityValue isEqual:@"iwmei"] && [ut_find(ut_surface(),@"about.github").accessibilityValue containsString:@"TrollTask"] && [ut_find(ut_surface(),@"about.credits").accessibilityValue containsString:@"MingCute"],@"关于页保留作者、仓库与开源说明");
+    });
+    ut_tap(@"about.back");ut_wait(^BOOL{return ut_find(ut_surface(),@"settings.close")!=nil;},@"关于返回设置");
     ut_shot(@"settings-dark-320.png",320,693,NO);
     ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleLight;});ut_shot(@"settings-light-375.png",375,850,NO);ut_ui(^{ut_nav.overrideUserInterfaceStyle=UIUserInterfaceStyleDark;});
     ut_shot(@"settings-large-320.png", 320, 850, YES);
@@ -621,11 +647,14 @@ static void ut_clsr(void) {
     ut_tap(@"home.empty");
     ut_wait(^BOOL { return loaded==ut_store && [[(UIButton *)ut_find(probe.view,@"home.empty") configuration].title isEqual:@"暂无待办"]; },@"重试恢复连接并通知采集与服务共用同一库");
     ut_ui(^{ method_setImplementation(method,original); [ut_nav setViewControllers:controllers animated:NO]; }); imp_removeBlock(replacement);
-    // 设置状态实时读取故障标志，不能保留首次启动的失败快照。
+    // 服务行实时读取故障标志，不能保留首次启动的失败快照。
     __block UIViewController *settings; __block BOOL unavailable=YES;
     ut_ui(^{ settings=[objc_getClass("LBSetCtl") new]; [settings setValue:[^BOOL{return unavailable;} copy] forKey:@"storeIssue"]; [ut_nav pushViewController:settings animated:NO]; });
-    ut_tap(@"settings.status"); ut_ui(^{ ut_req([[(UIButton *)ut_find(settings.view,@"settings.status") configuration].title isEqual:@"数据库不可用"],@"设置显示当前数据库故障"); unavailable=NO; });
-    ut_tap(@"settings.status"); ut_ui(^{ ut_req(![[(UIButton *)ut_find(settings.view,@"settings.status") configuration].title isEqual:@"数据库不可用"],@"数据库恢复后设置撤销旧故障"); [ut_nav popViewControllerAnimated:NO]; });
+    ut_wait(^BOOL{return ut_find(settings.view,@"settings.serviceState")!=nil;},@"设置服务行就绪");
+    ut_ui(^{ ((void(*)(id,SEL))objc_msgSend)(settings,NSSelectorFromString(@"rfrsh")); });
+    ut_ui(^{ ut_req([((UILabel *)ut_find(settings.view,@"settings.serviceState")).text isEqual:@"数据库不可用"],@"设置显示当前数据库故障"); unavailable=NO; });
+    ut_ui(^{ ((void(*)(id,SEL))objc_msgSend)(settings,NSSelectorFromString(@"rfrsh")); });
+    ut_ui(^{ ut_req(![((UILabel *)ut_find(settings.view,@"settings.serviceState")).text isEqual:@"数据库不可用"],@"数据库恢复后设置撤销旧故障"); [ut_nav popViewControllerAnimated:NO]; });
     // 冷启动必须读取先前已保存的排序，不能重新退回日期排序。
     NSDictionary *first=[ut_store crtTsk:@{@"title":@"顺序甲",@"urgency":@3,@"due_at":@(NSDate.date.timeIntervalSince1970+7200)} error:nil];
     NSDictionary *second=[ut_store crtTsk:@{@"title":@"顺序乙",@"urgency":@1,@"due_at":@(NSDate.date.timeIntervalSince1970+3600)} error:nil];
