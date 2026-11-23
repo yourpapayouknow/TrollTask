@@ -1,0 +1,211 @@
+{
+  "source": "示例周表",
+  "replaces": "md:legacy-weekly.md:",
+  "text": "示例周表",
+  "entries": [
+    {
+      "key": "rest-start",
+      "title": "起始休息",
+      "role": "rest",
+      "start": 0,
+      "end": 390,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "work-morning",
+      "title": "上午一般任务",
+      "role": "work",
+      "start": 390,
+      "end": 450,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "breakfast",
+      "title": "早餐",
+      "role": "fixed",
+      "start": 450,
+      "end": 465,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "work-midmorning",
+      "title": "上午一般任务二",
+      "role": "work",
+      "start": 465,
+      "end": 720,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "lunch",
+      "title": "午餐",
+      "role": "fixed",
+      "start": 720,
+      "end": 750,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "work-afternoon",
+      "title": "下午一般任务",
+      "role": "work",
+      "start": 750,
+      "end": 1080,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "dinner",
+      "title": "晚餐",
+      "role": "fixed",
+      "start": 1080,
+      "end": 1110,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "work-evening",
+      "title": "傍晚一般任务",
+      "role": "work",
+      "start": 1110,
+      "end": 1200,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "tidy",
+      "title": "整理",
+      "role": "fixed",
+      "start": 1200,
+      "end": 1230,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "work-night",
+      "title": "晚间一般任务",
+      "role": "work",
+      "start": 1230,
+      "end": 1320,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "wash",
+      "title": "洗漱",
+      "role": "fixed",
+      "start": 1320,
+      "end": 1350,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    },
+    {
+      "key": "rest-end",
+      "title": "收尾休息",
+      "role": "rest",
+      "start": 1350,
+      "end": 0,
+      "days": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "示例条目"
+    }
+  ]
+}

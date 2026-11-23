@@ -20,7 +20,7 @@ def apply(db, path, now, zone='Asia/Shanghai', success=True):
 
 # 验证数据源与事务、时间轴、提醒链路共用实现。
 def run(root):
-    path = ROOT / 'Resources/WeeklyRoutine.json'
+    path = ROOT / 'Tests/Fixtures/WeeklyRoutine.json'
     document = jld(path.read_text())
     count = len(document['entries'])
     db = root / 'weekly.db'
@@ -78,7 +78,7 @@ def run(root):
         lambda d: d['entries'][0].update(end=d['entries'][0]['start']),
         lambda d: d['entries'][0].update(days=[8]),
         lambda d: d['entries'][0].update(title=''),
-        lambda d: [e.update(role='background') for e in d['entries']],
+        lambda d: d['entries'][1].update(key=d['entries'][0]['key']),
     ]):
         bad = jld(path.read_text()); mutate(bad)
         badpath = root / f'bad-{index}.json'; badpath.write_text(jdmp(bad))
@@ -92,13 +92,13 @@ def run(root):
     tstcmd(fault, 'schema')
     before = tstcmd(fault, 'snapshot')
     with connect(fault) as sql:
-        sql.execute("CREATE TRIGGER reject_formal BEFORE INSERT ON tasks WHEN NEW.routine_source LIKE 'formal:%item-002' BEGIN SELECT RAISE(ABORT,'test fault'); END")
+        sql.execute("CREATE TRIGGER reject_formal BEFORE INSERT ON tasks WHEN NEW.routine_source LIKE 'formal:%:lunch' BEGIN SELECT RAISE(ABORT,'test fault'); END")
     apply(fault, path, start, success=False)
     req(tstcmd(fault, 'snapshot') == before, '数据库中途失败不留半套常律或归档')
     with connect(fault) as sql:
         sql.execute('DROP TRIGGER reject_formal')
     req(apply(fault, path, start)['added'] == count, '失败后可完整重试')
-    expected = []
+    expected = [e['title'] for e in document['entries']]
     visible = ''.join(t['title']+t['notes'] for t in official)
     for item in expected:
         req(item in visible, '保留原活动：'+item)

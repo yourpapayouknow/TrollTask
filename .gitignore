@@ -6,8 +6,6 @@
 *.tipa
 history/
 .codegraph/
-# 本地启动脚本
-/launchlocal*.command
 # 仅本地维护
 /DESIGN.md
 /notes/
@@ -15,3 +13,7 @@ history/
 
 # 本机真机调试镜像
 /devimages/
+
+# Python 缓存
+__pycache__/
+*.pyc

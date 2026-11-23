@@ -28,9 +28,9 @@
     // 正式常律进入唯一数据库，幂等标记保留后续用户编辑。
     @discardableResult private func seed() -> Bool {
         guard let store, seededPath != store.path else { return false }
+        guard let url=Bundle.main.url(forResource:"WeeklyRoutine",withExtension:"json") else { seededPath = store.path; return false }
         do {
-            guard let url=Bundle.main.url(forResource:"WeeklyRoutine",withExtension:"json"),
-                let document=try JSONSerialization.jsonObject(with:Data(contentsOf:url)) as? NSDictionary else {
+            guard let document=try JSONSerialization.jsonObject(with:Data(contentsOf:url)) as? NSDictionary else {
                 throw NSError(domain:"routine",code:1,userInfo:[NSLocalizedDescriptionKey:"时间表资源缺失"])
             }
             let result = try TaskRoutineImport.formal(store,document:document,anchor:Date(),zone:TimeZone.current.identifier)

@@ -70,12 +70,12 @@ $(APP_DIR)/Assets.car: $(ASSET_FILES)
 $(BUILD)/AppInfo.plist: Resources/Info.plist scripts/cloud_plist.py scripts/head.py cloud-info | $(BUILD)
 	python3 -B scripts/cloud_plist.py "$<" "$@" "$(CLOUD_CLIENTS)"
 
-$(APP_DIR)/$(APP): $(OBJECTS) $(BUILD)/AppInfo.plist Resources/entitlements.plist Resources/Reminder.wav Resources/WeeklyRoutine.json $(MING_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a
+$(APP_DIR)/$(APP): $(OBJECTS) $(BUILD)/AppInfo.plist Resources/entitlements.plist Resources/Reminder.wav $(MING_FILES) $(APP_DIR)/Assets.car $(BUILD)/ical-ios.a
 	mkdir -p $(APP_DIR)
 	xcrun --sdk iphoneos swiftc -target arm64-apple-ios15.0 -sdk $(SDK) $(OBJECTS) -Xlinker -dead_strip -framework Foundation -framework ImageIO -framework IOKit -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-ios.a -o $@
 	cp $(BUILD)/AppInfo.plist $(APP_DIR)/Info.plist
 	cp -R Resources/MingCute $(APP_DIR)/
-	cp Resources/Reminder.wav Resources/WeeklyRoutine.json $(APP_DIR)/
+	cp Resources/Reminder.wav $(APP_DIR)/
 	/usr/libexec/PlistBuddy -c "Merge $(BUILD)/asset-info.plist" $(APP_DIR)/Info.plist 2>/dev/null || true
 	ldid -SResources/entitlements.plist $@
 
@@ -237,11 +237,12 @@ $(BUILD)/ui/TaskSwift.o: $(SWIFT_SOURCES) $(HEADERS) $(ICAL_HEADERS) Makefile
 	mkdir -p $(dir $@)
 	xcrun --sdk iphonesimulator swiftc $(SWIFT_FLAGS) -target arm64-apple-ios15.0-simulator -sdk $(SIM_SDK) -D LB_UI_TEST -Xcc -DLB_HOST_TEST -Xcc -DLB_UI_TEST -O -emit-object $(SWIFT_SOURCES) -o $@
 
-$(BUILD)/MobileUI.app/UItest: $(UI_OBJECTS) Tests/UIInfo.plist Resources/Reminder.wav Resources/WeeklyRoutine.json $(MING_FILES) $(BUILD)/ical-sim.a
+$(BUILD)/MobileUI.app/UItest: $(UI_OBJECTS) Tests/UIInfo.plist Resources/Reminder.wav Tests/Fixtures/WeeklyRoutine.json $(MING_FILES) $(BUILD)/ical-sim.a
 	mkdir -p $(dir $@)
 	xcrun --sdk iphonesimulator swiftc -target arm64-apple-ios15.0-simulator -sdk $(SIM_SDK) $(UI_OBJECTS) -framework Foundation -framework ImageIO -framework IOKit -framework UIKit -framework CoreGraphics -framework QuartzCore -lsqlite3 $(BUILD)/ical-sim.a -o $@
 	cp Tests/UIInfo.plist $(dir $@)/Info.plist
-	cp Resources/Reminder.wav Resources/WeeklyRoutine.json $(dir $@)/
+	cp Resources/Reminder.wav $(dir $@)/
+	cp Tests/Fixtures/WeeklyRoutine.json $(dir $@)/WeeklyRoutine.json
 	cp -R Resources/MingCute $(dir $@)/
 	codesign --force --sign - $(dir $@)
 

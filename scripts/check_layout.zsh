@@ -1,5 +1,5 @@
 #!/bin/zsh
-# 检查源码分层、根目录文件与 Apple Design skill 是否就位。
+# 检查源码分层、根目录文件与图标资源是否就位。
 set -euo pipefail
 cd "${0:A:h:h}"
 
@@ -39,11 +39,6 @@ fi
 
 if [[ -d Vendor ]]; then
     print -u2 -- "Vendor 目录应归入 Sources/Support"
-    exit 1
-fi
-
-if [[ ! -f "$HOME/.local/skills/apple-design/SKILL.md" ]]; then
-    print -u2 -- "apple-design skill 未安装：~/.local/skills/apple-design/SKILL.md"
     exit 1
 fi
 
