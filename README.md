@@ -1,5 +1,11 @@
 # TrollTask
 
+[![Platform](https://img.shields.io/badge/platform-iOS%2015%2B-black)](https://www.apple.com/ios/)
+[![License](https://img.shields.io/github/license/yourpapayouknow/TrollTask)](LICENSE)
+[![Language](https://img.shields.io/badge/language-Swift%20%7C%20Objective--C-orange)](Sources)
+[![Build](https://img.shields.io/badge/build-make-2ea44f)](Makefile)
+[![Install](https://img.shields.io/badge/install-TrollStore-ff6b35)](https://github.com/opa334/TrollStore)
+
 ![TrollTask](assets/readme-badge.png)
 
 TrollTask 是运行于 iOS 15+ 的本地优先待办与常律应用，通过 TrollStore 安装。任务、常律、归档与提醒保存在设备本机 SQLite 数据库，提醒由独立 HUD 进程按绝对时刻调度。
