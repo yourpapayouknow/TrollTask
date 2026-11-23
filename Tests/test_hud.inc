@@ -32,6 +32,7 @@ static void ut_hsame(NSDictionary *before,NSDictionary *after,NSArray<NSString *
 // 在隔离库缩短真实轮次的等待时间。
 static void ut_hdue(NSString *path, NSString *id) {
     sqlite3 *db=NULL; ut_req(sqlite3_open(path.fileSystemRepresentation,&db)==SQLITE_OK,@"打开收起验证库");
+    sqlite3_busy_timeout(db,5000);
     sqlite3_stmt *stmt=NULL;
     ut_req(sqlite3_prepare_v2(db,"UPDATE reminder_occurrences SET hold_until=?,next_fire_at=? WHERE occurrence_id=?",-1,&stmt,NULL)==SQLITE_OK,@"准备收起截止更新");
     double end=NSDate.date.timeIntervalSince1970+0.5; sqlite3_bind_double(stmt,1,end);sqlite3_bind_double(stmt,2,end);sqlite3_bind_text(stmt,3,id.UTF8String,-1,SQLITE_TRANSIENT);
@@ -392,7 +393,7 @@ static void ut_hud(void) {
         ut_hsame(geometry[@"choosing"],geometry[@"attached"],stable,@"添加附件");
         UIButton *attachment=(UIButton *)ut_find(hud.view,@"hud.attachment.0"),*confirm=(UIButton *)ut_find(hud.view,@"hud.back");
         ut_req(ut_find(hud.view,@"hud.proof")==nil && !attachment.hidden && attachment.configuration.title.length==0 && attachment.configuration.image!=nil,@"附件仅显示可删除图标且无内容预览");
-        ut_req(!ut_find(hud.view,@"hud.choices").hidden && ut_find(hud.view,@"hud.complete").superview.hidden && [confirm.accessibilityLabel isEqual:@"正式完成任务"] && [[writer rdTsk:task[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"] && [writer rdChk:id image:NO error:nil]==nil,@"有附件才把返回原位换成对勾且未提前完成");
+        ut_req(!ut_find(hud.view,@"hud.choices").hidden && ut_find(hud.view,@"hud.complete").superview.hidden && [confirm.accessibilityLabel isEqual:@"提交并完成当前任务"] && [[writer rdTsk:task[@"task_id"] error:nil][@"status"] isEqual:@"needsAction"] && [writer rdChk:id image:NO error:nil]==nil,@"有附件才把返回原位换成对勾且未提前完成");
         UIGraphicsImageRenderer *screen=[[UIGraphicsImageRenderer alloc] initWithSize:hud.view.bounds.size];
         [[screen PNGDataWithActions:^(UIGraphicsImageRendererContext *c){[hud.view.layer renderInContext:c.CGContext];}] writeToFile:[ut_docs stringByAppendingPathComponent:@"screens/hud-attachment.png"] atomically:YES];
         [attachment sendActionsForControlEvents:UIControlEventTouchUpInside];[hud.view layoutIfNeeded];
@@ -404,12 +405,12 @@ static void ut_hud(void) {
         [hud acceptImage:image method:@"screenshot" occID:id];[hud.view layoutIfNeeded];
         [hud display:nil error:[NSError errorWithDomain:@"test" code:SQLITE_BUSY userInfo:nil]];[hud.view layoutIfNeeded];
         geometry[@"retry"]=ut_hgeo(hud);ut_hsame(geometry[@"choosing"],geometry[@"retry"],stable,@"失败重试");
-        ut_req(!attachment.hidden && confirm.enabled && [confirm.accessibilityLabel isEqual:@"正式完成任务"] && [confirm.accessibilityValue isEqual:@"重试打卡"],@"提交失败保留附件与可重试对勾");
+        ut_req(!attachment.hidden && confirm.enabled && [confirm.accessibilityLabel isEqual:@"提交并完成当前任务"] && [confirm.accessibilityValue isEqual:@"重试打卡"],@"提交失败保留附件与可重试对勾");
         for (NSUInteger index=1;index<TS_ATT_MAX;index++) [hud acceptImage:image method:@"screenshot" occID:id];
         [hud.view layoutIfNeeded];geometry[@"six"]=ut_hgeo(hud);ut_hsame(geometry[@"choosing"],geometry[@"six"],stable,@"六附件确认");
         ut_req(ut_hcnt(hud)==TS_ATT_MAX,@"提交前保留六个附件");
         [(UIButton *)ut_find(hud.view,@"hud.attachment.2") sendActionsForControlEvents:UIControlEventTouchUpInside];
-        ut_req(ut_hcnt(hud)==5 && [confirm.accessibilityLabel isEqual:@"正式完成任务"] && [(UIButton *)ut_find(hud.view,@"hud.image") isEnabled],@"删除中间附件保留对勾并释放名额");
+        ut_req(ut_hcnt(hud)==5 && [confirm.accessibilityLabel isEqual:@"提交并完成当前任务"] && [(UIButton *)ut_find(hud.view,@"hud.image") isEnabled],@"删除中间附件保留对勾并释放名额");
         [hud acceptImage:image method:@"camera" occID:id];[hud.view layoutIfNeeded];ut_req(ut_hcnt(hud)==TS_ATT_MAX,@"补充附件后恢复六个");
         [[screen PNGDataWithActions:^(UIGraphicsImageRendererContext *c){[hud.view.layer renderInContext:c.CGContext];}] writeToFile:[ut_docs stringByAppendingPathComponent:@"screens/hud-six-attachments.png"] atomically:YES];
         ut_layout[@"proof-flow"]=geometry;

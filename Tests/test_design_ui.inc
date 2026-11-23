@@ -67,7 +67,7 @@ static void ut_dflds(void) {
         ut_tap(@"home.create");ut_title(@"新任务时区");ut_tap(@"edit.date");ut_win_done();
         ut_ui(^{ut_req(!ut_find(ut_surface(),@"edit.timezone") && [[(UIDatePicker *)ut_find(ut_surface(),@"window.picker") timeZone].name isEqual:@"America/New_York"],@"新任务窗口使用默认时区，无须输入");});
         ut_tap(@"edit.save");ut_wait(^BOOL{return [[(UIDatePicker *)ut_find(ut_surface(),@"intake.start") timeZone].name isEqual:@"America/New_York"];},@"创建评估沿用新任务时区");
-        ut_ui(^{[ut_top().navigationController popViewControllerAnimated:NO];});ut_tap(@"edit.cancel");ut_home();
+        ut_ui(^{[ut_top().navigationController popViewControllerAnimated:NO];});ut_cncl();
 
         NSDateFormatter *fmt=[NSDateFormatter new];fmt.timeZone=[NSTimeZone timeZoneWithName:@"Asia/Shanghai"];fmt.dateFormat=@"yyyy-MM-dd HH:mm";
         NSDictionary *task=[ut_store crtTsk:@{@"title":@"原任务时区",@"due_at":@([fmt dateFromString:@"2026-11-01 00:00"].timeIntervalSince1970),@"schedule_kind":@"date",@"timezone_id":@"Asia/Shanghai",@"planned_duration":@1800} error:nil];

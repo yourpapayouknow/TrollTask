@@ -250,7 +250,7 @@
         var config = done.configuration; config?.title = text; done.configuration = config
         let back = choiceButtons.last!
         back.accessibilityValue = text == "提交" ? nil : text
-        var feedback = back.configuration; feedback?.title = text == "提交" ? "返回" : "重试打卡"; feedback?.image = lb_icon(text == "提交" ? "back" : "upload"); back.configuration = feedback
+        var feedback = back.configuration; feedback?.title = nil; feedback?.image = lb_icon(text == "提交" ? "back" : "upload"); back.configuration = feedback
         tu_fill(back, primary: text == "提交")
         if text != "提交" && !proofs.isEmpty { UIAccessibility.post(notification: .announcement, argument: text) }
         if selecting && text != "提交" && proofs.isEmpty { selecting = false; lay() }

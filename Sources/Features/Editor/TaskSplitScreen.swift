@@ -120,7 +120,7 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
     private func addPart() {
         view.endEditing(true)
         let row: TaskFields = ["task_id": UUID().uuidString.lowercased(), "title": "", "notes": ""]
-        navigationController?.pushViewController(TaskStepEdit(row) { [weak self] updated in
+        navigationController?.pushViewController(TaskStepEditScreen(row) { [weak self] updated in
             guard let self, let updated else { return }
             self.parts.append(updated); self.phase = .offline; self.manual = true; self.buildList(); self.render(); self.gaugeDebounced()
         }, animated: true)
@@ -130,7 +130,7 @@ final class TaskSplitScreen: TaskScreen, UITextViewDelegate {
         let index = sender.tag
         guard parts.indices.contains(index) else { return }
         view.endEditing(true)
-        navigationController?.pushViewController(TaskStepEdit(parts[index]) { [weak self] updated in
+        navigationController?.pushViewController(TaskStepEditScreen(parts[index]) { [weak self] updated in
             guard let self, let updated else { return }
             self.parts[index] = updated; self.buildList(); self.render(); self.gaugeDebounced()
         }, animated: true)

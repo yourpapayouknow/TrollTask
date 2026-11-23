@@ -3,9 +3,10 @@ static void ut_pdate(void) API_AVAILABLE(ios(16.0));
 static void ut_pdate(void) {
     // 常律模板复用系统月历与重复页。
     NSTimeInterval base=NSDate.date.timeIntervalSince1970;
+    NSError *draftError=nil;
     NSDictionary *draft=[ut_store crtTsk:@{@"title":@"日期接续验收",@"list_id":TS_RTN_LST,@"routine_kind":@"fixed",@"routine_enabled":@1,
-        @"routine_end":@570,@"due_at":@(base),@"timezone_id":@"UTC",@"recurrence_type":@"daily",@"recurrence":@[@"RRULE:FREQ=DAILY;INTERVAL=1"]} error:nil];
-    ut_req(draft!=nil,@"常律日期夹具");
+        @"routine_end":@570,@"due_at":@(base),@"timezone_id":@"UTC",@"recurrence_type":@"daily",@"recurrence":@[@"RRULE:FREQ=DAILY;INTERVAL=1"]} error:&draftError];
+    ut_req(draft!=nil,[NSString stringWithFormat:@"常律日期夹具[%@]",draftError.localizedDescription]);
     ut_rte(draft);ut_tap(@"edit.date");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskCalendar.class];},@"日期抽屉就绪");
     ut_ui(^{ut_req(!ut_find(ut_surface(),@"calendar.month").hidden && [ut_find(ut_surface(),@"calendar.timed") isKindOfClass:UIButton.class],@"日期默认显示月历和设置时间按钮");});
@@ -16,13 +17,14 @@ static void ut_pdate(void) {
     ut_wait(^BOOL{return ut_find(ut_surface(),@"repeat.picker")!=nil;},@"自定义使用独立滚轮页");
     ut_ui(^{UIPickerView *picker=(UIPickerView *)ut_find(ut_surface(),@"repeat.picker");[picker selectRow:1 inComponent:0 animated:NO];[picker.delegate pickerView:picker didSelectRow:1 inComponent:0];[picker selectRow:1 inComponent:1 animated:NO];[picker.delegate pickerView:picker didSelectRow:1 inComponent:1];});
     ut_tap(@"repeat.end");ut_tap(@"repeat.end.count");
-    ut_wait(^BOOL{UIView *row=ut_find(ut_surface(),@"repeat.end.count");UITextField *field=(UITextField *)ut_find(ut_surface(),@"repeat.count");return row.hidden && !field.superview.superview.hidden && ![field.superview.superview isKindOfClass:UIButton.class] && field.isAccessibilityElement;},@"次数输入独占当前选项行且可独立访问");
+    ut_wait(^BOOL{UIView *row=ut_find(ut_surface(),@"repeat.end.count");UITextField *field=(UITextField *)ut_find(ut_surface(),@"repeat.count");return row.hidden && !field.superview.superview.hidden && ![field.superview.superview isKindOfClass:UIButton.class] && field.accessibilityLabel.length>0;},@"次数输入独占当前选项行且可独立访问");
     ut_ui(^{UITextField *count=(UITextField *)ut_find(ut_surface(),@"repeat.count");count.text=@"7";});ut_tap(@"repeat.end.done");
     ut_wait(^BOOL{return ut_find(ut_surface(),@"repeat.picker")!=nil;},@"结束次数只交回自定义草稿");
     ut_tap(@"repeat.done");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskCalendar.class];},@"重复完成回到同一日期面板");ut_tap(@"calendar.done");
     ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController;},@"日期完成回到同一任务草稿");
-    ut_save();ut_home();
+    ut_save();
+    ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskHome.class] && !ut_top().presentedViewController && !ut_nav.transitionCoordinator;},@"常律保存返回首页");
     NSDictionary *task=[ut_store rdTsk:draft[@"task_id"] error:nil];
     NSString *rule=[task[@"recurrence"] firstObject];
     ut_req([task[@"schedule_kind"] isEqual:@"timed"] && [task[@"recurrence_interval"] isEqual:@2] && [rule containsString:@"COUNT=7"] && [rule containsString:@"FREQ=WEEKLY"],@"逐层完成只保存最终日期和完整重复条件");
@@ -32,15 +34,26 @@ static void ut_pdate(void) {
             @"routine_end":@570,@"due_at":@(base),@"timezone_id":@"UTC",@"recurrence_type":@"daily",@"recurrence":@[@"RRULE:FREQ=DAILY;INTERVAL=1"]} error:nil];
         ut_req(row!=nil,@"预设规则夹具");
         ut_rte(row);ut_tap(@"edit.repeat");ut_tap([@"repeat.type." stringByAppendingString:key]);
-        ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController;},@"预设选择后立即回到草稿");ut_save();ut_home();
+        ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController;},@"预设选择后立即回到草稿");
+        if([key isEqual:@"ordinal"]){ ut_tap(@"edit.repeat");ut_tap(@"repeat.type.custom");
+            ut_wait(^BOOL{return ut_find(ut_surface(),@"repeat.picker")!=nil;},@"自定义规则可补结束");
+            ut_tap(@"repeat.end");ut_tap(@"repeat.end.count");ut_tap(@"repeat.end.done");
+            ut_wait(^BOOL{return ut_find(ut_surface(),@"repeat.picker")!=nil;},@"结束次数返回自定义页");
+            ut_tap(@"repeat.done");ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskEdit.class] && !ut_top().presentedViewController;},@"补结束返回草稿"); }
+        ut_save();
+        ut_wait(^BOOL{return [ut_top() isKindOfClass:TaskHome.class] && !ut_top().presentedViewController && !ut_nav.transitionCoordinator;},@"预设规则保存返回首页");
         NSDictionary *saved=[ut_store rdTsk:row[@"task_id"] error:nil];
-        NSString *line=[saved[@"recurrence"] firstObject];ut_req([saved[@"recurrence_type"] isEqual:@"custom"] && [line containsString:[key isEqual:@"ordinal"]?@"FREQ=MONTHLY":@"BYDAY=MO,TU,WE,TH,FR"],@"新增预设交给既有完整规则引擎");
+        NSString *line=[saved[@"recurrence"] firstObject];NSString *expectedType=[key isEqual:@"ordinal"]?@"monthly":@"custom";
+        ut_req([saved[@"recurrence_type"] isEqual:expectedType] && [line containsString:[key isEqual:@"ordinal"]?@"FREQ=MONTHLY":@"BYDAY=MO,TU,WE,TH,FR"],[NSString stringWithFormat:@"新增预设交给既有完整规则引擎[%@|%@]",saved[@"recurrence_type"],line]);
         ut_req([ut_store delTsk:row[@"task_id"] error:nil],@"清理重复预设夹具");
     }
 }
 
 // 核对实际抽屉、输入页与返回路径，所有数据只写入模拟器夹具。
 static void ut_prty(void) {
+    ut_ui(^{ UIViewController *top=ut_top();
+        if (top.presentingViewController) [top.presentingViewController dismissViewControllerAnimated:NO completion:nil];
+        [ut_nav popToRootViewControllerAnimated:NO]; });
     ut_home();
     NSDictionary *listing=[ut_store crtLst:@"页面对齐" error:nil]; NSString *listID=listing[@"list_id"];
     ut_wait(^BOOL{return ut_find(ut_window,[@"list." stringByAppendingString:listID])!=nil;},@"清单夹具出现在真实页签");
