@@ -1,12 +1,14 @@
+![TrollTask](assets/readme-badge.png)
+
 # TrollTask
 
-[![Platform](https://img.shields.io/badge/platform-iOS%2015%2B-black)](https://www.apple.com/ios/)
-[![License](https://img.shields.io/github/license/yourpapayouknow/TrollTask)](LICENSE)
-[![Language](https://img.shields.io/badge/language-Swift%20%7C%20Objective--C-orange)](Sources)
-[![Build](https://img.shields.io/badge/build-make-2ea44f)](Makefile)
-[![Install](https://img.shields.io/badge/install-TrollStore-ff6b35)](https://github.com/opa334/TrollStore)
-
-![TrollTask](assets/readme-badge.png)
+<div align="center">
+  <img alt="平台-iOS15" src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-iOS%2015-111111?logo=apple&logoColor=white">
+  <img alt="界面-UIKit" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-UIKit-2396F3">
+  <img alt="语言-Swift" src="https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-Swift-F05138?logo=swift&logoColor=white">
+  <img alt="存储-SQLite" src="https://img.shields.io/badge/%E5%AD%98%E5%82%A8-SQLite-003B57?logo=sqlite&logoColor=white">
+  <img alt="安装-TrollStore" src="https://img.shields.io/badge/%E5%AE%89%E8%A3%85-TrollStore-FF6B35">
+</div>
 
 TrollTask 是运行于 iOS 15+ 的本地优先待办与常律应用，通过 TrollStore 安装。任务、常律、归档与提醒保存在设备本机 SQLite 数据库，提醒由独立 HUD 进程按绝对时刻调度。
 
@@ -27,9 +29,12 @@ TrollTask 是运行于 iOS 15+ 的本地优先待办与常律应用，通过 Tro
 
 ## 快速开始
 
-可以直接交给代理完成：
+将以下内容发送给AI编程助手。
 
-> 帮我安装这个仓库并构建 TrollStore 安装包，然后在已连接的真机上完成安装与启动验证。
+```text
+帮我安装这个仓库并打开TrollTask
+https://github.com/yourpapayouknow/TrollTask
+```
 
 ## 传统开始
 
